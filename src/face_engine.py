@@ -268,18 +268,15 @@ def _clasificar_por_asimetria(cara128):
     rh = float(np.mean(_buf_ratio_h))
     rv = float(np.mean(_buf_ratio_v))
 
-    # Umbrales calibrados a partir de datos reales de la RPi
-    # Frontal llega hasta +-0.09, perfiles empiezan desde +-0.11
-    UMBRAL_YAW_DER  =  0.14   # para PERFIL_DER
-    UMBRAL_YAW_IZQ  = -0.11   # para PERFIL_IZQ
-    UMBRAL_ABAJO    =  0.14   # para ABAJO (ratio_v positivo o negativo)
+    # Umbrales calibrados — subidos a 0.18 para que movimientos leves
+    # no cambien el frontal a perfil accidentalmente
+    UMBRAL_YAW_DER  =  0.18
+    UMBRAL_YAW_IZQ  = -0.18
 
     if rh > UMBRAL_YAW_DER:
         return TIPO_PERFIL_D
     elif rh < UMBRAL_YAW_IZQ:
         return TIPO_PERFIL_I
-    elif abs(rv) > UMBRAL_ABAJO:
-        return TIPO_ABAJO
     else:
         return TIPO_FRONTAL
 

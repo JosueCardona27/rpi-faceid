@@ -32,7 +32,7 @@ except Exception:
 
 from face_engine  import (extraer_caracteristicas, dibujar_overlay,
                            N_ZONAS, ZONAS,
-                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I, TIPO_ABAJO)
+                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
 from database     import (registrar_persona, guardar_vectores_por_angulo,
                           guardar_vector_unico, reconocer_persona)
 
@@ -76,16 +76,12 @@ PASOS_REGISTRO = [
      "IZQUIERDA",    5.0, "perfil",
      TIPO_PERFIL_I, "Gira mas a la izquierda"),
 
-    (3, "▼", "Inclina la cabeza hacia abajo",
-     "ABAJO",        5.0, "abajo",
-     TIPO_ABAJO,    "Inclina mas la cabeza hacia abajo"),
-
-    (4, "●", "Vuelve al frente — ultimo paso",
+    (3, "●", "Vuelve al frente — ultimo paso",
      "FRENTE FINAL", 5.0, "frontal",
      TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS        = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 25s total
+TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 20s total
 
 NOMBRES_ZONA = ["Frente", "Ojo izq", "Ojo der",
                 "Nariz", "Mejilla izq", "Mejilla der", "Boca/menton"]
