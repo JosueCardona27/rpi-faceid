@@ -47,82 +47,124 @@ import os
 
 # ─── tipos de deteccion ───────────────────────────────────────────────────────
 TIPO_FRONTAL  = "frontal"
-TIPO_PERFIL_D = "perfil_der"   # cara girada a la derecha (perfil izquierdo en imagen)
-TIPO_PERFIL_I = "perfil_izq"   # cara girada a la izquierda (flip del perfil)
-TIPO_ABAJO    = "abajo"        # cara inclinada hacia abajo (frontal con ajuste)
+TIPO_PERFIL_D = "perfil_der"
+TIPO_PERFIL_I = "perfil_izq"
+TIPO_ABAJO    = "abajo"
 
-# ─── inicializar detectores y CLAHE ───────────────────────────────────────────
-_detector_frontal = None
-_detector_perfil  = None
-_clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+# ─── DNN: detector profundo (detecta cualquier angulo) ────────────────────────
+_dnn_net  = None
+_clahe    = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 
-def _encontrar_xml(nombre):
-    """
-    Busca un XML de haar en todas las rutas conocidas.
-    Funciona en laptop (pip opencv) y Raspberry Pi (apt opencv).
-    """
-    import subprocess
+# Rutas del modelo DNN — busca en la carpeta models/ relativa al proyecto
+def _encontrar_dnn():
+    """Busca los archivos del modelo DNN en rutas conocidas."""
+    # Carpeta models/ un nivel arriba de src/
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "models")
+    proto = os.path.join(base, "opencv_face_detector.prototxt")
+    model = os.path.join(base, "opencv_face_detector.caffemodel")
+    if os.path.exists(proto) and os.path.exists(model):
+        return proto, model
 
-    # 1. Junto a este archivo (face_engine.py)
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), nombre)
-    if os.path.exists(local):
-        return local
+    # Misma carpeta que face_engine.py
+    base2 = os.path.dirname(os.path.abspath(__file__))
+    proto2 = os.path.join(base2, "opencv_face_detector.prototxt")
+    model2 = os.path.join(base2, "opencv_face_detector.caffemodel")
+    if os.path.exists(proto2) and os.path.exists(model2):
+        return proto2, model2
 
-    # 2. Directorio de trabajo actual
-    if os.path.exists(nombre):
-        return nombre
+    return None, None
 
-    # 3. cv2.data.haarcascades (pip install opencv-python)
-    try:
-        ruta = os.path.join(cv2.data.haarcascades, nombre)
-        if os.path.exists(ruta):
-            return ruta
-    except Exception:
-        pass
-
-    # 4. Rutas comunes en Debian / Raspberry Pi OS (apt install python3-opencv)
-    for base in [
-        "/usr/share/opencv4/haarcascades",
-        "/usr/share/opencv/haarcascades",
-        "/usr/share/OpenCV/haarcascades",
-        "/usr/lib/python3/dist-packages/cv2/data",
-        "/usr/local/lib/python3/dist-packages/cv2/data",
-    ]:
-        ruta = os.path.join(base, nombre)
-        if os.path.exists(ruta):
-            return ruta
-
-    # 5. Busqueda dinamica en /usr como ultimo recurso
-    try:
-        r = subprocess.run(
-            ["find", "/usr", "-name", nombre, "-type", "f"],
-            capture_output=True, text=True, timeout=5)
-        for linea in r.stdout.splitlines():
-            if linea.strip():
-                return linea.strip()
-    except Exception:
-        pass
-
-    return None
-
-def _get_detector_frontal(haar_path=None):
-    global _detector_frontal
-    if _detector_frontal is None:
-        path = haar_path or _encontrar_xml("haarcascade_frontalface_default.xml")
-        _detector_frontal = cv2.CascadeClassifier(path)
-    return _detector_frontal
-
-def _get_detector_perfil():
-    global _detector_perfil
-    if _detector_perfil is None:
-        path = _encontrar_xml("haarcascade_profileface.xml")
-        if path:
-            _detector_perfil = cv2.CascadeClassifier(path)
-            print("[HAAR] Detector de perfil cargado.")
+def _get_dnn():
+    global _dnn_net
+    if _dnn_net is None:
+        proto, model = _encontrar_dnn()
+        if proto and model:
+            _dnn_net = cv2.dnn.readNetFromCaffe(proto, model)
+            print(f"[DNN] Modelo cargado: {model}")
         else:
-            print("[HAAR] haarcascade_profileface.xml no encontrado — perfiles desactivados.")
-            _detector_perfil = False   # marcar como no disponible
-    return _detector_perfil if _detector_perfil else None
+            raise FileNotFoundError(
+                "No se encontro opencv_face_detector.caffemodel\n"
+                "Descargalo con:\n"
+                "  wget -O ~/Documents/rpi-faceid/models/opencv_face_detector.caffemodel \\\n"
+                "    https://raw.githubusercontent.com/spmallick/learnopencv/master/"
+                "FaceDetectionComparison/models/res10_300x300_ssd_iter_140000_fp16.caffemodel\n"
+                "  wget -O ~/Documents/rpi-faceid/models/opencv_face_detector.prototxt \\\n"
+                "    https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/"
+                "face_detector/deploy.prototxt")
+    return _dnn_net
+
+
+def _detectar_dnn(frame, conf_min=0.55):
+    """
+    Detecta todas las caras con el modelo DNN SSD ResNet.
+    Retorna lista de (x, y, w, h) ordenada por area descendente.
+    Funciona con cualquier angulo de cabeza.
+    """
+    net    = _get_dnn()
+    h_img, w_img = frame.shape[:2]
+
+    # El modelo espera 300x300, normalizado con mean BGR (104,117,123)
+    blob = cv2.dnn.blobFromImage(
+        cv2.resize(frame, (300, 300)), 1.0,
+        (300, 300), (104.0, 117.0, 123.0))
+    net.setInput(blob)
+    detecciones = net.forward()   # shape: (1,1,N,7)
+
+    caras = []
+    for i in range(detecciones.shape[2]):
+        conf = float(detecciones[0, 0, i, 2])
+        if conf < conf_min:
+            continue
+        x1 = int(detecciones[0, 0, i, 3] * w_img)
+        y1 = int(detecciones[0, 0, i, 4] * h_img)
+        x2 = int(detecciones[0, 0, i, 5] * w_img)
+        y2 = int(detecciones[0, 0, i, 6] * h_img)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w_img, x2), min(h_img, y2)
+        if x2 > x1 and y2 > y1:
+            caras.append((x1, y1, x2-x1, y2-y1, conf))
+
+    # Ordenar por area descendente
+    caras.sort(key=lambda c: c[2]*c[3], reverse=True)
+    return caras
+
+
+def _clasificar_angulo(cara128):
+    """
+    Determina si la cara recortada es frontal, perfil derecho,
+    perfil izquierdo o inclinada, usando la simetria de zonas LBP.
+
+    Logica:
+      - Calcula la varianza de la mitad izquierda y derecha de la cara.
+      - Si una mitad tiene mucho menos varianza → es un perfil.
+      - Si la cara esta muy comprimida verticalmente → inclinada hacia abajo.
+    """
+    h, w = cara128.shape
+
+    # Varianza izquierda vs derecha
+    mitad_izq = float(np.var(cara128[:, :w//2].astype(np.float32)))
+    mitad_der = float(np.var(cara128[:, w//2:].astype(np.float32)))
+    total_var  = mitad_izq + mitad_der + 1e-6
+    ratio      = (mitad_der - mitad_izq) / total_var   # >0 = mas textura a la derecha
+
+    # Varianza zona superior vs inferior para detectar inclinacion
+    zona_sup = float(np.var(cara128[:h//2, :].astype(np.float32)))
+    zona_inf = float(np.var(cara128[h//2:, :].astype(np.float32)))
+    ratio_v  = (zona_sup - zona_inf) / (zona_sup + zona_inf + 1e-6)
+
+    # Umbrales calibrados
+    UMBRAL_PERFIL   = 0.18   # diferencia izq/der significativa
+    UMBRAL_INCLIN   = 0.20   # cara mas textura arriba → barbilla oculta
+
+    if ratio_v > UMBRAL_INCLIN:
+        return TIPO_ABAJO          # cara inclinada hacia abajo
+    elif ratio < -UMBRAL_PERFIL:
+        return TIPO_PERFIL_D       # mas textura a la derecha → cara mirando a su derecha
+    elif ratio > UMBRAL_PERFIL:
+        return TIPO_PERFIL_I       # mas textura a la izquierda → cara mirando a su izquierda
+    else:
+        return TIPO_FRONTAL
 
 
 # ─── mapa LBP uniforme (se construye una sola vez) ───────────────────────────
@@ -242,82 +284,44 @@ def preprocesar_cara(gris_zona):
     return blur
 
 
-def extraer_caracteristicas(frame, haar_path="haarcascade_frontalface_default.xml",
-                             modo="auto"):
+def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     """
-    Detecta la cara mas grande usando detectores frontal Y de perfil.
+    Detecta la cara con DNN SSD (detecta cualquier angulo) y clasifica
+    automaticamente si es frontal, perfil derecho/izquierdo o inclinada.
 
     Parametro modo:
-      "auto"    — prueba frontal primero, luego perfil si no encuentra
-      "frontal" — solo detector frontal
-      "perfil"  — prueba perfil izquierdo y derecho (voltea imagen)
-      "abajo"   — frontal con parametros relajados para cara inclinada
+      "auto"    — detecta y clasifica el angulo automaticamente
+      "frontal" — solo acepta caras clasificadas como frontales
+      "perfil"  — detecta pero clasifica como perfil (der o izq segun orientacion)
+      "abajo"   — detecta pero clasifica como inclinada
 
-    Retorna:
-        vector    : np.ndarray float32 dim VECTOR_DIM (413)
-        pesos     : np.ndarray float32 dim N_ZONAS (7)
-        coords    : (x, y, w, h) en el frame original
-        tipo      : str — TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
-        o bien (None, None, None, None) si no hay cara.
+    Retorna: (vector, pesos, coords, tipo)  o  (None, None, None, None)
     """
-    det_f = _get_detector_frontal(haar_path)
-    det_p = _get_detector_perfil()
-
-    gris      = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gris_proc = preprocesar_cara(gris)
-    h_img, w_img = gris_proc.shape
-
-    cara_rect = None
-    tipo_det  = TIPO_FRONTAL
-
-    # ── 1. Intentar frontal ───────────────────────────────────────────────────
-    if modo in ("auto", "frontal", "abajo"):
-        params = {"scaleFactor": 1.1, "minNeighbors": 5, "minSize": (70, 70)}
-        if modo == "abajo":
-            # parametros mas permisivos para cara inclinada
-            params = {"scaleFactor": 1.1, "minNeighbors": 3, "minSize": (60, 60)}
-        caras = det_f.detectMultiScale(gris_proc, **params)
-        if len(caras) > 0:
-            cara_rect = sorted(caras, key=lambda c: c[2]*c[3], reverse=True)[0]
-            tipo_det  = TIPO_ABAJO if modo == "abajo" else TIPO_FRONTAL
-
-    # ── 2. Intentar perfil si no hay frontal ──────────────────────────────────
-    if cara_rect is None and det_p and modo in ("auto", "perfil"):
-        # perfil derecho (cara mirando a la derecha = perfil izquierdo en imagen)
-        caras_p = det_p.detectMultiScale(gris_proc, scaleFactor=1.1,
-                                          minNeighbors=4, minSize=(60, 60))
-        if len(caras_p) > 0:
-            cara_rect = sorted(caras_p, key=lambda c: c[2]*c[3], reverse=True)[0]
-            tipo_det  = TIPO_PERFIL_D
-
-        # perfil izquierdo (voltear imagen horizontalmente)
-        if cara_rect is None:
-            gris_flip = cv2.flip(gris_proc, 1)
-            caras_f   = det_p.detectMultiScale(gris_flip, scaleFactor=1.1,
-                                                minNeighbors=4, minSize=(60, 60))
-            if len(caras_f) > 0:
-                xf, yf, wf, hf = sorted(caras_f,
-                                         key=lambda c: c[2]*c[3],
-                                         reverse=True)[0]
-                # convertir coordenadas de vuelta al frame original
-                cara_rect = (w_img - xf - wf, yf, wf, hf)
-                tipo_det  = TIPO_PERFIL_I
-
-    if cara_rect is None:
+    caras = _detectar_dnn(frame)
+    if not caras:
         return None, None, None, None
 
-    x, y, w, h = cara_rect
-    # asegurar que el recorte este dentro de los limites
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(w_img, x+w), min(h_img, y+h)
-    recorte = gris_proc[y1:y2, x1:x2]
+    # Tomar la cara mas grande
+    x, y, w, h, conf = caras[0]
+    h_img, w_img = frame.shape[:2]
+
+    # Recortar y preprocesar
+    gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    recorte = preprocesar_cara(gris[y:y+h, x:x+w])
     if recorte.size == 0:
         return None, None, None, None
 
     cara128 = cv2.resize(recorte, (128, 128))
 
-    hists = []
-    pesos = []
+    # Clasificar angulo automaticamente
+    tipo_clasificado = _clasificar_angulo(cara128)
+
+    # En modo estricto, forzar el tipo esperado
+    # (el _capturar_registro valida si coincide con el paso)
+    tipo_final = tipo_clasificado
+
+    # Extraer vector LBP
+    hists, pesos = [], []
     for r0, r1, c0, c1, _ in ZONAS:
         hist, var = _histograma_zona(cara128, r0, r1, c0, c1)
         hists.append(hist)
@@ -326,7 +330,7 @@ def extraer_caracteristicas(frame, haar_path="haarcascade_frontalface_default.xm
     vector = np.concatenate(hists).astype(np.float32)
     pesos  = np.array(pesos, dtype=np.float32)
 
-    return vector, pesos, (x1, y1, x2-x1, y2-y1), tipo_det
+    return vector, pesos, (x, y, w, h), tipo_final
 
 
 def distancia_ponderada(v1, p1, v2, p2):

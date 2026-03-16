@@ -55,66 +55,10 @@ PANEL_W = 300
 CAM_W   = W - PANEL_W   # 724
 
 # ─── CONFIGURACION ESCANEO ────────────────────────────────────────────────────
-def _encontrar_haar():
-    """
-    Busca haarcascade_frontalface_default.xml en todas las rutas conocidas.
-    Funciona en laptop (pip opencv) y Raspberry Pi (apt opencv).
-    """
-    import os, subprocess
-    nombre = "haarcascade_frontalface_default.xml"
-
-    # 1. Junto a interfaz.py
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), nombre)
-    if os.path.exists(local):
-        return local
-
-    # 2. Directorio de trabajo actual
-    if os.path.exists(nombre):
-        return nombre
-
-    # 3. cv2.data.haarcascades (pip install opencv-python)
-    try:
-        ruta = os.path.join(cv2.data.haarcascades, nombre)
-        if os.path.exists(ruta):
-            print(f"[HAAR] {ruta}")
-            return ruta
-    except Exception:
-        pass
-
-    # 4. Rutas Debian / Raspberry Pi OS (apt install python3-opencv)
-    for base in [
-        "/usr/share/opencv4/haarcascades",
-        "/usr/share/opencv/haarcascades",
-        "/usr/share/OpenCV/haarcascades",
-        "/usr/lib/python3/dist-packages/cv2/data",
-        "/usr/local/lib/python3/dist-packages/cv2/data",
-    ]:
-        ruta = os.path.join(base, nombre)
-        if os.path.exists(ruta):
-            print(f"[HAAR] {ruta}")
-            return ruta
-
-    # 5. Busqueda dinamica en /usr como ultimo recurso
-    try:
-        r = subprocess.run(
-            ["find", "/usr", "-name", nombre, "-type", "f"],
-            capture_output=True, text=True, timeout=5)
-        for linea in r.stdout.splitlines():
-            if linea.strip():
-                print(f"[HAAR] {linea.strip()}")
-                return linea.strip()
-    except Exception:
-        pass
-
-    raise FileNotFoundError(
-        f"No se encontro {nombre}.\n"
-        "Soluciones:\n"
-        "  RPi:    sudo apt install python3-opencv\n"
-        "  Laptop: pip install opencv-python\n"
-        "  Manual: copia el XML a la carpeta src/")
-
-HAAR_PATH    = _encontrar_haar()
-MUESTRAS_MIN = 3   # muestras minimas por paso para aceptarlo
+# El detector DNN no necesita archivo XML — usa opencv_face_detector.caffemodel
+# que se busca automaticamente en ../models/ relativo a este archivo.
+HAAR_PATH    = None   # no se usa con DNN, se mantiene por compatibilidad
+MUESTRAS_MIN = 3      # muestras minimas por paso para aceptarlo
 
 # ─── Pasos de registro multi-angulo ───────────────────────────────────────────
 # Cada paso: (id, icono, instruccion_camara, etiqueta_panel, segundos,
