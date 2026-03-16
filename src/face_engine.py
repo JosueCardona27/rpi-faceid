@@ -102,181 +102,170 @@ def _detectar_dnn(frame, conf_min=0.45):
     return caras
 
 
-# ─── Clasificacion de angulo con solvePnP ────────────────────────────────────
-# Puntos 3D canonicos de una cara promedio (en mm, origen en nariz)
-# Basados en el modelo de cara estandar de OpenCV head-pose estimation
-_PUNTOS_3D = np.array([
-    [ 0.0,    0.0,    0.0  ],   # Punta de la nariz
-    [ 0.0,   -63.6,  -12.5],   # Menton
-    [-43.3,   32.7,  -26.0],   # Comisura ojo izquierdo
-    [ 43.3,   32.7,  -26.0],   # Comisura ojo derecho
-    [-28.9,  -28.9,  -24.1],   # Comisura boca izquierda
-    [ 28.9,  -28.9,  -24.1],   # Comisura boca derecha
-], dtype=np.float64)
-
-# Detector de landmarks faciales de OpenCV (5 puntos: ojos, nariz, boca)
+# ─── Landmarks faciales con cv2.face LBF (68 puntos) ─────────────────────────
 _lm_detector = None
 
 def _get_lm_detector():
-    """Carga el detector de landmarks de OpenCV."""
+    """Carga el modelo LBF de landmarks. Se inicializa una sola vez."""
     global _lm_detector
-    if _lm_detector is None:
-        # Buscar el modelo de landmarks en rutas conocidas
-        nombres = [
-            "face_landmark_model.dat",
-            "lbfmodel.yaml",
-        ]
-        rutas_base = [
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models"),
-            os.path.dirname(os.path.abspath(__file__)),
-            "/usr/share/opencv4",
-            "/usr/local/share/opencv4",
-        ]
-        for base in rutas_base:
-            for nombre in nombres:
-                ruta = os.path.join(base, nombre)
-                if os.path.exists(ruta):
-                    try:
-                        det = cv2.face.createFacemarkLBF()
-                        det.loadModel(ruta)
-                        _lm_detector = det
-                        print(f"[LM] Landmarks cargados: {ruta}")
-                        return _lm_detector
-                    except Exception:
-                        pass
-        _lm_detector = False
-        print("[LM] Landmarks no disponibles — usando clasificacion por asimetria")
-    return _lm_detector if _lm_detector else None
+    if _lm_detector is not None:
+        return _lm_detector if _lm_detector is not False else None
+
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "models", "lbfmodel.yaml")
+    if os.path.exists(ruta):
+        try:
+            det = cv2.face.createFacemarkLBF()
+            det.loadModel(ruta)
+            _lm_detector = det
+            print(f"[LM] cv2.face LBF cargado: {ruta}")
+            return _lm_detector
+        except Exception as e:
+            print(f"[LM] Error cargando LBF: {e}")
+
+    _lm_detector = False
+    print("[LM] lbfmodel.yaml no disponible — usando asimetria de bordes")
+    return None
 
 
-def _clasificar_con_solvepnp(cara_recortada_gris, bbox, frame_shape):
+# ─── Puntos 3D modelo de cara estandar (para solvePnP) ───────────────────────
+# Indices en landmarks de 68 puntos:
+#   30 = punta nariz, 8 = menton, 36 = ojo izq ext,
+#   45 = ojo der ext, 48 = boca izq, 54 = boca der
+_PTS_3D = np.array([
+    [ 0.0,    0.0,    0.0   ],   # 30 punta nariz
+    [ 0.0,  -63.6,  -12.5  ],   # 8  menton
+    [-43.3,  32.7,  -26.0  ],   # 36 ojo izq ext
+    [ 43.3,  32.7,  -26.0  ],   # 45 ojo der ext
+    [-28.9, -28.9,  -24.1  ],   # 48 boca izq
+    [ 28.9, -28.9,  -24.1  ],   # 54 boca der
+], dtype=np.float64)
+
+_IDX_LM = [30, 8, 36, 45, 48, 54]   # indices en el array de 68 landmarks
+
+# Buffer de suavizado para estabilizar angulos entre frames
+_BUFFER_N    = 4
+_buf_yaw     = []
+_buf_pitch   = []
+
+
+def _clasificar_angulo(frame_gris, bbox, frame_shape):
     """
-    Intenta calcular yaw/pitch con solvePnP si hay landmarks disponibles.
-    Si no, usa clasificacion por asimetria de bordes (metodo robusto).
-    Retorna tipo: TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
+    Calcula yaw y pitch con cv2.face LBF + solvePnP.
+    Si LBF no esta disponible, cae a asimetria de bordes.
+    Retorna: TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
     """
+    global _buf_yaw, _buf_pitch
+
     lm_det = _get_lm_detector()
     x, y, w, h = bbox
-    fw, fh = frame_shape[1], frame_shape[0]
+    fw = frame_shape[1]
+    fh = frame_shape[0]
 
     if lm_det is not None:
-        # ── Metodo solvePnP con landmarks ─────────────────────────────────────
         try:
+            # LBF necesita imagen completa + rect en formato (x,y,w,h)
             rect = np.array([[x, y, w, h]], dtype=np.int32)
-            ok, landmarks = lm_det.fit(cara_recortada_gris, rect)
-            if ok and len(landmarks) > 0:
-                lm = landmarks[0][0]   # shape (5,2) o (68,2)
-                # Usar los 5 puntos basicos si estan disponibles
-                if len(lm) >= 6:
-                    pts_2d = lm[:6].astype(np.float64)
-                elif len(lm) >= 5:
-                    # 5 puntos: ojo_izq, ojo_der, nariz, boca_izq, boca_der
-                    nariz   = lm[2]
-                    ojo_izq = lm[0]
-                    ojo_der = lm[1]
-                    boca_izq = lm[3]
-                    boca_der = lm[4]
-                    # Estimar menton y nariz punta para completar 6 puntos
-                    menton = nariz + (nariz - (ojo_izq + ojo_der) / 2) * 1.5
-                    pts_2d = np.array([nariz, menton, ojo_izq, ojo_der,
-                                       boca_izq, boca_der], dtype=np.float64)
-                else:
-                    raise ValueError("Pocos landmarks")
+            ok, landmarks = lm_det.fit(frame_gris, rect)
 
-                focal = fw
-                centro = (fw / 2, fh / 2)
+            if ok and len(landmarks) > 0:
+                lm = landmarks[0][0]   # shape: (68, 2)
+
+                # Extraer los 6 puntos clave
+                pts_2d = np.array(
+                    [lm[i] for i in _IDX_LM], dtype=np.float64)
+
+                # Matriz de camara estimada
+                focal      = fw
                 cam_matrix = np.array([
-                    [focal, 0,     centro[0]],
-                    [0,     focal, centro[1]],
-                    [0,     0,     1        ]
+                    [focal, 0,     fw / 2],
+                    [0,     focal, fh / 2],
+                    [0,     0,     1     ]
                 ], dtype=np.float64)
-                dist_coefs = np.zeros((4, 1))
 
                 ok2, rvec, tvec = cv2.solvePnP(
-                    _PUNTOS_3D, pts_2d, cam_matrix, dist_coefs,
+                    _PTS_3D, pts_2d, cam_matrix,
+                    np.zeros((4, 1)),
                     flags=cv2.SOLVEPNP_ITERATIVE)
 
                 if ok2:
                     rmat, _ = cv2.Rodrigues(rvec)
-                    # Extraer yaw y pitch en grados
-                    pitch = float(np.degrees(np.arcsin(-rmat[2, 0])))
-                    yaw   = float(np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2])))
+                    yaw   = float(np.degrees(
+                        np.arctan2(rmat[1, 0], rmat[0, 0])))
+                    pitch = float(np.degrees(
+                        np.arctan2(-rmat[2, 0],
+                                   np.sqrt(rmat[2,1]**2 + rmat[2,2]**2))))
 
-                    # Umbrales en grados
-                    if yaw > 18:
+                    # Suavizar con buffer
+                    _buf_yaw.append(yaw)
+                    _buf_pitch.append(pitch)
+                    if len(_buf_yaw) > _BUFFER_N:
+                        _buf_yaw.pop(0)
+                        _buf_pitch.pop(0)
+
+                    yaw_s   = float(np.mean(_buf_yaw))
+                    pitch_s = float(np.mean(_buf_pitch))
+
+                    # Umbrales en grados — ajustados para uso normal
+                    if yaw_s > 20:
                         return TIPO_PERFIL_D
-                    elif yaw < -18:
+                    elif yaw_s < -20:
                         return TIPO_PERFIL_I
-                    elif pitch < -15:
+                    elif pitch_s < -18:
                         return TIPO_ABAJO
-                    elif pitch > 20:
+                    elif pitch_s > 18:
                         return TIPO_ABAJO
                     else:
                         return TIPO_FRONTAL
-        except Exception:
-            pass
+        except Exception as e:
+            pass   # fallback a asimetria
 
-    # ── Fallback: asimetria de bordes sobre la cara recortada ─────────────────
-    return _clasificar_por_asimetria(cara_recortada_gris)
+    # ── Fallback: asimetria de bordes ────────────────────────────────────────
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(frame_shape[1], x+w), min(frame_shape[0], y+h)
+    recorte = frame_gris[y1:y2, x1:x2]
+    if recorte.size == 0:
+        return TIPO_FRONTAL
+    cara128 = cv2.resize(recorte, (128, 128))
+    return _clasificar_por_asimetria(cara128)
 
 
-# Buffer de suavizado — promedia los ultimos N ratios para estabilizar
-# Esto elimina el ruido frame a frame que causa cambios erraticos de angulo
-_BUFFER_N   = 5
-_buf_ratio_h = []
-_buf_ratio_v = []
+# ─── Fallback: asimetria de bordes Sobel ─────────────────────────────────────
+_buf_rh = []
+_buf_rv = []
 
 def _clasificar_por_asimetria(cara128):
-    """
-    Clasificacion robusta usando asimetria de bordes Sobel + suavizado temporal.
-
-    Umbrales calibrados con datos reales de la RPi:
-      - Frontal:    ratio_h en [-0.09, +0.09]
-      - Perfil der: ratio_h > +0.14
-      - Perfil izq: ratio_h < -0.11
-      - Abajo:      |ratio_v| > 0.14
-
-    Se usa un buffer de los ultimos 5 frames para suavizar el ruido.
-    """
-    global _buf_ratio_h, _buf_ratio_v
+    global _buf_rh, _buf_rv
 
     gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
     bordes = np.abs(gx) + np.abs(gy)
+    h, w   = bordes.shape
 
-    h, w = bordes.shape
-
-    # YAW — asimetria horizontal, ignorando 15% central
     margen  = int(w * 0.15)
     izq     = float(np.mean(bordes[:, :w//2 - margen]))
     der     = float(np.mean(bordes[:, w//2 + margen:]))
     ratio_h = (izq - der) / (izq + der + 1e-6)
 
-    # PITCH — comparar tercio superior vs tercio inferior
-    t1      = float(np.mean(bordes[:h//3,    :]))
-    t3      = float(np.mean(bordes[2*h//3:,  :]))
+    t1      = float(np.mean(bordes[:h//3,   :]))
+    t3      = float(np.mean(bordes[2*h//3:, :]))
     ratio_v = (t1 - t3) / (t1 + t3 + 1e-6)
 
-    # Agregar al buffer y mantener solo los ultimos N
-    _buf_ratio_h.append(ratio_h)
-    _buf_ratio_v.append(ratio_v)
-    if len(_buf_ratio_h) > _BUFFER_N:
-        _buf_ratio_h.pop(0)
-        _buf_ratio_v.pop(0)
+    _buf_rh.append(ratio_h)
+    _buf_rv.append(ratio_v)
+    if len(_buf_rh) > 5:
+        _buf_rh.pop(0)
+        _buf_rv.pop(0)
 
-    # Usar promedio del buffer
-    rh = float(np.mean(_buf_ratio_h))
-    rv = float(np.mean(_buf_ratio_v))
+    rh = float(np.mean(_buf_rh))
+    rv = float(np.mean(_buf_rv))
 
-    # Umbrales calibrados — subidos a 0.18 para que movimientos leves
-    # no cambien el frontal a perfil accidentalmente
-    UMBRAL_YAW_DER  =  0.18
-    UMBRAL_YAW_IZQ  = -0.18
-
-    if rh > UMBRAL_YAW_DER:
+    if rh > 0.14:
         return TIPO_PERFIL_D
-    elif rh < UMBRAL_YAW_IZQ:
+    elif rh < -0.11:
         return TIPO_PERFIL_I
+    elif abs(rv) > 0.14:
+        return TIPO_ABAJO
     else:
         return TIPO_FRONTAL
 
@@ -416,14 +405,15 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x+w), min(h_img, y+h)
     gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    recorte = preprocesar_cara(gris[y1:y2, x1:x2])
+    recorte = preprocesar_cara(gris_full[y1:y2, x1:x2])
     if recorte.size == 0:
         return None, None, None, None
 
     cara128 = cv2.resize(recorte, (128, 128))
 
-    # Clasificar angulo
-    tipo = _clasificar_con_solvepnp(gris, (x1, y1, x2-x1, y2-y1), frame.shape)
+    # Clasificar angulo con LBF landmarks + solvePnP (o fallback asimetria)
+    gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    tipo = _clasificar_angulo(gris_full, (x1, y1, x2-x1, y2-y1), frame.shape)
 
     # Extraer vector LBP
     hists, pesos = [], []
