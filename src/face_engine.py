@@ -57,15 +57,52 @@ _detector_perfil  = None
 _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 
 def _encontrar_xml(nombre):
-    """Busca un XML de haar primero local, luego en cv2.data."""
+    """
+    Busca un XML de haar en todas las rutas conocidas.
+    Funciona en laptop (pip opencv) y Raspberry Pi (apt opencv).
+    """
+    import subprocess
+
+    # 1. Junto a este archivo (face_engine.py)
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), nombre)
+    if os.path.exists(local):
+        return local
+
+    # 2. Directorio de trabajo actual
     if os.path.exists(nombre):
         return nombre
+
+    # 3. cv2.data.haarcascades (pip install opencv-python)
     try:
         ruta = os.path.join(cv2.data.haarcascades, nombre)
         if os.path.exists(ruta):
             return ruta
     except Exception:
         pass
+
+    # 4. Rutas comunes en Debian / Raspberry Pi OS (apt install python3-opencv)
+    for base in [
+        "/usr/share/opencv4/haarcascades",
+        "/usr/share/opencv/haarcascades",
+        "/usr/share/OpenCV/haarcascades",
+        "/usr/lib/python3/dist-packages/cv2/data",
+        "/usr/local/lib/python3/dist-packages/cv2/data",
+    ]:
+        ruta = os.path.join(base, nombre)
+        if os.path.exists(ruta):
+            return ruta
+
+    # 5. Busqueda dinamica en /usr como ultimo recurso
+    try:
+        r = subprocess.run(
+            ["find", "/usr", "-name", nombre, "-type", "f"],
+            capture_output=True, text=True, timeout=5)
+        for linea in r.stdout.splitlines():
+            if linea.strip():
+                return linea.strip()
+    except Exception:
+        pass
+
     return None
 
 def _get_detector_frontal(haar_path=None):
