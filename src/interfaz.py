@@ -33,8 +33,8 @@ except Exception:
 from face_engine  import (extraer_caracteristicas, dibujar_overlay,
                            N_ZONAS, ZONAS,
                            TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I, TIPO_ABAJO)
-from database     import (registrar_persona, guardar_vector_unico,
-                          reconocer_persona)
+from database     import (registrar_persona, guardar_vectores_por_angulo,
+                          guardar_vector_unico, reconocer_persona)
 
 # ─── PALETA ───────────────────────────────────────────────────────────────────
 BG      = "#0D0F14"
@@ -650,9 +650,9 @@ class App(tk.Tk):
                 state="normal", bg=ACCENT, text="INICIAR ESCANEO"))
             return
 
-        # acumuladores globales (todos los pasos)
-        todos_vectores = []
-        todos_pesos    = []
+        # acumuladores: uno por angulo + global para barras
+        vectores_angulo = {}   # {tipo_esperado: {"vectores":[], "pesos":[]}}
+        todos_vectores  = []   # para contar total y barras de zonas
         self._zona_cap_acum = np.zeros(N_ZONAS, dtype=np.float32)
         self.after(0, self._reset_cap_bars)
 
@@ -726,10 +726,15 @@ class App(tk.Tk):
                     ultimo_analisis = frame_id
 
                     if angulo_ok and np.sum(p > 0.15) >= 2:
-                        # muestra VALIDA
+                        # muestra VALIDA — guardar por angulo
                         vectores_paso.append(v)
                         todos_vectores.append(v)
-                        todos_pesos.append(p)
+
+                        # acumular en dict por angulo
+                        if tipo_esperado not in vectores_angulo:
+                            vectores_angulo[tipo_esperado] = {"vectores": [], "pesos": []}
+                        vectores_angulo[tipo_esperado]["vectores"].append(v)
+                        vectores_angulo[tipo_esperado]["pesos"].append(p)
 
                         for iz in range(N_ZONAS):
                             if p[iz] > self._zona_cap_acum[iz]:
@@ -786,10 +791,11 @@ class App(tk.Tk):
         self.after(0, lambda: self.prog_bar.config(width=BAR_W))
 
         if len(todos_vectores) >= MUESTRAS_MIN * N_PASOS:
-            p_final = np.mean(todos_pesos, axis=0).astype(np.float32)
-            guardar_vector_unico(pid, todos_vectores, todos_pesos)
+            guardar_vectores_por_angulo(pid, vectores_angulo)
 
-            self.after(0, lambda pf=p_final: self._fijar_zonas(pf))
+            # congelar barras con el acumulado de zonas
+            self.after(0, lambda pf=self._zona_cap_acum.copy():
+                       self._fijar_zonas(pf))
             self.after(0, lambda: self.prog_bar.config(bg=SUCCESS))
             self.after(0, lambda: self.status_var.set(
                 f"Registro completo — {len(todos_vectores)} muestras en {N_PASOS} poses"))

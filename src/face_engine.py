@@ -51,28 +51,132 @@ TIPO_PERFIL_D = "perfil_der"
 TIPO_PERFIL_I = "perfil_izq"
 TIPO_ABAJO    = "abajo"
 
-# ─── DNN: detector profundo (detecta cualquier angulo) ────────────────────────
-_dnn_net  = None
+# ─── MediaPipe Face Mesh — deteccion + angulos 3D precisos ───────────────────
+_mp_face  = None
+_mp_mesh  = None
 _clahe    = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 
-# Rutas del modelo DNN — busca en la carpeta models/ relativa al proyecto
+def _get_mp():
+    """Inicializa MediaPipe Face Mesh una sola vez."""
+    global _mp_face, _mp_mesh
+    if _mp_mesh is None:
+        import mediapipe as mp
+        _mp_face = mp.solutions.face_mesh
+        _mp_mesh = _mp_face.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5)
+        print("[MP] MediaPipe Face Mesh iniciado.")
+    return _mp_mesh
+
+
+def _detectar_y_clasificar(frame):
+    """
+    Usa MediaPipe Face Mesh para:
+      1. Detectar la cara y obtener bounding box
+      2. Calcular angulos de cabeza con landmarks 3D reales
+
+    Angulos calculados (estimacion PnP simplificada):
+      - Yaw   (giro horizontal): positivo = cara girando a su izquierda
+      - Pitch (inclinacion):     positivo = cara mirando hacia arriba
+
+    Retorna: (bbox, tipo) donde bbox = (x,y,w,h) o None si no hay cara.
+    """
+    mesh = _get_mp()
+    h_img, w_img = frame.shape[:2]
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    resultado = mesh.process(rgb)
+
+    if not resultado.multi_face_landmarks:
+        return None, None
+
+    lm = resultado.multi_face_landmarks[0].landmark
+
+    # ── Bounding box a partir de landmarks ───────────────────────────────────
+    xs = [l.x * w_img for l in lm]
+    ys = [l.y * h_img for l in lm]
+    x1, y1 = int(min(xs)), int(min(ys))
+    x2, y2 = int(max(xs)), int(max(ys))
+    margen = int((x2 - x1) * 0.15)
+    x1 = max(0, x1 - margen)
+    y1 = max(0, y1 - margen)
+    x2 = min(w_img, x2 + margen)
+    y2 = min(h_img, y2 + margen)
+    bbox = (x1, y1, x2 - x1, y2 - y1)
+
+    # ── Calcular Yaw y Pitch con puntos clave ─────────────────────────────────
+    # Landmarks clave (indices MediaPipe 468-point mesh):
+    #   1  = punta nariz
+    #   33 = comisura ojo izquierdo (lado derecho en imagen espejada)
+    #   263 = comisura ojo derecho
+    #   152 = menton
+    #   10  = frente superior
+    #   234 = mejilla izquierda
+    #   454 = mejilla derecha
+
+    def pt(idx):
+        return np.array([lm[idx].x * w_img,
+                         lm[idx].y * h_img,
+                         lm[idx].z * w_img])
+
+    nariz    = pt(1)
+    ojo_izq  = pt(33)
+    ojo_der  = pt(263)
+    menton   = pt(152)
+    frente   = pt(10)
+    mejilla_izq = pt(234)
+    mejilla_der = pt(454)
+
+    # Centro de ojos
+    centro_ojos = (ojo_izq + ojo_der) / 2.0
+
+    # ── YAW: diferencia horizontal entre mejillas respecto a nariz ────────────
+    # Si cara gira a su derecha → mejilla_der queda mas cerca / mejilla_izq mas lejos
+    dist_izq = np.linalg.norm(nariz[:2] - mejilla_izq[:2])
+    dist_der = np.linalg.norm(nariz[:2] - mejilla_der[:2])
+    total_d  = dist_izq + dist_der + 1e-6
+    # yaw_ratio > 0 → mejilla izq mas lejos → cara girada a su derecha
+    # yaw_ratio < 0 → mejilla der mas lejos → cara girada a su izquierda
+    yaw_ratio = (dist_izq - dist_der) / total_d
+
+    # ── PITCH: posicion vertical de la nariz relativa a ojos y menton ─────────
+    # Normalizar por altura cara
+    altura_cara = abs(menton[1] - frente[1]) + 1e-6
+    # Posicion normalizada de nariz entre ojos(0) y menton(1)
+    pos_nariz_v = (nariz[1] - centro_ojos[1]) / altura_cara
+    # pos_nariz_v frontal ≈ 0.4
+    # cara hacia ABAJO → menton desaparece, nariz sube → pos < 0.35
+    # cara hacia ARRIBA → frente desaparece, nariz baja → pos > 0.50
+
+    # ── Clasificacion ─────────────────────────────────────────────────────────
+    UMBRAL_YAW   = 0.12   # >12% asimetria → perfil
+    UMBRAL_ABAJO = 0.34   # nariz muy alta en cara → mirando hacia abajo
+    UMBRAL_ARRIBA= 0.50   # nariz muy baja en cara → mirando hacia arriba
+
+    if yaw_ratio > UMBRAL_YAW:
+        return bbox, TIPO_PERFIL_D
+    elif yaw_ratio < -UMBRAL_YAW:
+        return bbox, TIPO_PERFIL_I
+    elif pos_nariz_v < UMBRAL_ABAJO:
+        return bbox, TIPO_ABAJO
+    elif pos_nariz_v > UMBRAL_ARRIBA:
+        return bbox, TIPO_ABAJO   # arriba extremo tb cuenta como ABAJO
+    else:
+        return bbox, TIPO_FRONTAL
+
+
+# ─── DNN fallback (si MediaPipe no esta disponible) ──────────────────────────
+_dnn_net = None
+
 def _encontrar_dnn():
-    """Busca los archivos del modelo DNN en rutas conocidas."""
-    # Carpeta models/ un nivel arriba de src/
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "..", "models")
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
     proto = os.path.join(base, "opencv_face_detector.prototxt")
     model = os.path.join(base, "opencv_face_detector.caffemodel")
     if os.path.exists(proto) and os.path.exists(model):
         return proto, model
-
-    # Misma carpeta que face_engine.py
-    base2 = os.path.dirname(os.path.abspath(__file__))
-    proto2 = os.path.join(base2, "opencv_face_detector.prototxt")
-    model2 = os.path.join(base2, "opencv_face_detector.caffemodel")
-    if os.path.exists(proto2) and os.path.exists(model2):
-        return proto2, model2
-
     return None, None
 
 def _get_dnn():
@@ -81,122 +185,30 @@ def _get_dnn():
         proto, model = _encontrar_dnn()
         if proto and model:
             _dnn_net = cv2.dnn.readNetFromCaffe(proto, model)
-            print(f"[DNN] Modelo cargado: {model}")
         else:
-            raise FileNotFoundError(
-                "No se encontro opencv_face_detector.caffemodel\n"
-                "Descargalo con:\n"
-                "  wget -O ~/Documents/rpi-faceid/models/opencv_face_detector.caffemodel \\\n"
-                "    https://raw.githubusercontent.com/spmallick/learnopencv/master/"
-                "FaceDetectionComparison/models/res10_300x300_ssd_iter_140000_fp16.caffemodel\n"
-                "  wget -O ~/Documents/rpi-faceid/models/opencv_face_detector.prototxt \\\n"
-                "    https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/"
-                "face_detector/deploy.prototxt")
-    return _dnn_net
+            _dnn_net = False
+    return _dnn_net if _dnn_net else None
 
-
-def _detectar_dnn(frame, conf_min=0.55):
-    """
-    Detecta todas las caras con el modelo DNN SSD ResNet.
-    Retorna lista de (x, y, w, h) ordenada por area descendente.
-    Funciona con cualquier angulo de cabeza.
-    """
-    net    = _get_dnn()
+def _detectar_dnn_fallback(frame, conf_min=0.55):
+    net = _get_dnn()
+    if net is None:
+        return None
     h_img, w_img = frame.shape[:2]
-
-    # El modelo espera 300x300, normalizado con mean BGR (104,117,123)
     blob = cv2.dnn.blobFromImage(
         cv2.resize(frame, (300, 300)), 1.0,
         (300, 300), (104.0, 117.0, 123.0))
     net.setInput(blob)
-    detecciones = net.forward()   # shape: (1,1,N,7)
-
-    caras = []
-    for i in range(detecciones.shape[2]):
-        conf = float(detecciones[0, 0, i, 2])
-        if conf < conf_min:
-            continue
-        x1 = int(detecciones[0, 0, i, 3] * w_img)
-        y1 = int(detecciones[0, 0, i, 4] * h_img)
-        x2 = int(detecciones[0, 0, i, 5] * w_img)
-        y2 = int(detecciones[0, 0, i, 6] * h_img)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w_img, x2), min(h_img, y2)
-        if x2 > x1 and y2 > y1:
-            caras.append((x1, y1, x2-x1, y2-y1, conf))
-
-    # Ordenar por area descendente
-    caras.sort(key=lambda c: c[2]*c[3], reverse=True)
-    return caras
-
-
-def _clasificar_angulo(cara128):
-    """
-    Clasifica el angulo de la cara usando:
-    - Simetria horizontal (izq vs der) → perfiles
-    - Densidad de bordes en zonas → arriba/abajo/frontal
-
-    La cara 128x128 se divide en:
-      - Zona OJOS   : filas 20-50  (siempre visible en frontal)
-      - Zona NARIZ  : filas 50-80
-      - Zona BOCA   : filas 80-110 (desaparece al inclinar hacia abajo)
-      - Mitad IZQ   : cols 0-64
-      - Mitad DER   : cols 64-128
-    """
-    h, w = cara128.shape
-    img  = cara128.astype(np.float32)
-
-    # ── Deteccion de bordes (Sobel) para medir "informacion facial" ───────────
-    # Usar bordes es mas robusto que varianza pura contra iluminacion no uniforme
-    gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
-    bordes = np.sqrt(gx**2 + gy**2)
-
-    # ── Simetria horizontal → perfiles ────────────────────────────────────────
-    mitad_izq = float(np.mean(bordes[:, :w//2]))
-    mitad_der = float(np.mean(bordes[:, w//2:]))
-    total_h   = mitad_izq + mitad_der + 1e-6
-    ratio_h   = (mitad_der - mitad_izq) / total_h
-    # ratio_h > 0 → mas bordes a la derecha → cara girada a su izquierda
-    # ratio_h < 0 → mas bordes a la izquierda → cara girada a su derecha
-
-    # ── Distribucion vertical → arriba/abajo ──────────────────────────────────
-    # Dividir en 4 bandas verticales
-    b1 = float(np.mean(bordes[0:32,  :]))    # frente/ojos
-    b2 = float(np.mean(bordes[32:64, :]))    # nariz
-    b3 = float(np.mean(bordes[64:96, :]))    # boca/mejillas
-    b4 = float(np.mean(bordes[96:128,:]))    # menton/cuello
-
-    total_v = b1 + b2 + b3 + b4 + 1e-6
-
-    # Centro de masa vertical (0=arriba, 1=abajo)
-    # Si la cara esta inclinada hacia ABAJO → barbilla oculta → b3,b4 bajan
-    # Si la cara esta inclinada hacia ARRIBA → frente oculta → b1,b2 bajan
-    centro_masa = (0.15*b1 + 0.38*b2 + 0.62*b3 + 0.85*b4) / total_v * 4
-
-    # Ratio superior vs inferior
-    sup = b1 + b2
-    inf = b3 + b4
-    ratio_v = (sup - inf) / (sup + inf + 1e-6)
-
-    # ── Umbrales ──────────────────────────────────────────────────────────────
-    UMBRAL_PERFIL = 0.15   # asimetria horizontal → perfil
-    UMBRAL_ABAJO  = 0.18   # mas info arriba → cara hacia abajo
-    UMBRAL_ARRIBA = -0.22  # mas info abajo → cara hacia arriba (contar como ABAJO tambien)
-
-    # Primero verificar perfiles (son mas faciles de detectar)
-    if ratio_h < -UMBRAL_PERFIL:
-        return TIPO_PERFIL_D    # mas bordes izquierda → cara a su derecha
-    elif ratio_h > UMBRAL_PERFIL:
-        return TIPO_PERFIL_I    # mas bordes derecha → cara a su izquierda
-
-    # Luego vertical
-    if ratio_v > UMBRAL_ABAJO:
-        return TIPO_ABAJO       # frente/ojos dominan → barbilla oculta = cara abajo
-    elif ratio_v < UMBRAL_ARRIBA:
-        return TIPO_ABAJO       # boca/cuello dominan = cara muy hacia arriba, tambien "abajo"
-
-    return TIPO_FRONTAL
+    dets = net.forward()
+    for i in range(dets.shape[2]):
+        conf = float(dets[0, 0, i, 2])
+        if conf >= conf_min:
+            x1 = max(0, int(dets[0,0,i,3]*w_img))
+            y1 = max(0, int(dets[0,0,i,4]*h_img))
+            x2 = min(w_img, int(dets[0,0,i,5]*w_img))
+            y2 = min(h_img, int(dets[0,0,i,6]*h_img))
+            if x2 > x1 and y2 > y1:
+                return (x1, y1, x2-x1, y2-y1)
+    return None
 
 
 # ─── mapa LBP uniforme (se construye una sola vez) ───────────────────────────
@@ -318,41 +330,35 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     """
-    Detecta la cara con DNN SSD (detecta cualquier angulo) y clasifica
-    automaticamente si es frontal, perfil derecho/izquierdo o inclinada.
-
-    Parametro modo:
-      "auto"    — detecta y clasifica el angulo automaticamente
-      "frontal" — solo acepta caras clasificadas como frontales
-      "perfil"  — detecta pero clasifica como perfil (der o izq segun orientacion)
-      "abajo"   — detecta pero clasifica como inclinada
+    Usa MediaPipe Face Mesh para detectar la cara y calcular angulos 3D reales.
+    Si MediaPipe falla usa DNN como fallback (sin clasificacion de angulo).
 
     Retorna: (vector, pesos, coords, tipo)  o  (None, None, None, None)
     """
-    caras = _detectar_dnn(frame)
-    if not caras:
+    # ── Intentar MediaPipe primero ────────────────────────────────────────────
+    try:
+        bbox, tipo = _detectar_y_clasificar(frame)
+    except Exception as e:
+        print(f"[MP] Error: {e} — usando DNN fallback")
+        bbox = _detectar_dnn_fallback(frame)
+        tipo = TIPO_FRONTAL if bbox else None
+
+    if bbox is None:
         return None, None, None, None
 
-    # Tomar la cara mas grande
-    x, y, w, h, conf = caras[0]
+    x, y, w, h = bbox
     h_img, w_img = frame.shape[:2]
 
-    # Recortar y preprocesar
+    # ── Recortar cara y extraer LBP ───────────────────────────────────────────
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(w_img, x+w), min(h_img, y+h)
     gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    recorte = preprocesar_cara(gris[y:y+h, x:x+w])
+    recorte = preprocesar_cara(gris[y1:y2, x1:x2])
     if recorte.size == 0:
         return None, None, None, None
 
     cara128 = cv2.resize(recorte, (128, 128))
 
-    # Clasificar angulo automaticamente
-    tipo_clasificado = _clasificar_angulo(cara128)
-
-    # En modo estricto, forzar el tipo esperado
-    # (el _capturar_registro valida si coincide con el paso)
-    tipo_final = tipo_clasificado
-
-    # Extraer vector LBP
     hists, pesos = [], []
     for r0, r1, c0, c1, _ in ZONAS:
         hist, var = _histograma_zona(cara128, r0, r1, c0, c1)
@@ -362,7 +368,7 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     vector = np.concatenate(hists).astype(np.float32)
     pesos  = np.array(pesos, dtype=np.float32)
 
-    return vector, pesos, (x, y, w, h), tipo_final
+    return vector, pesos, (x1, y1, x2-x1, y2-y1), tipo
 
 
 def distancia_ponderada(v1, p1, v2, p2):
