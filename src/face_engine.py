@@ -404,15 +404,14 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
 
     x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x+w), min(h_img, y+h)
-    gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    recorte = preprocesar_cara(gris_full[y1:y2, x1:x2])
+    gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    recorte   = preprocesar_cara(gris_full[y1:y2, x1:x2])
     if recorte.size == 0:
         return None, None, None, None
 
     cara128 = cv2.resize(recorte, (128, 128))
 
     # Clasificar angulo con LBF landmarks + solvePnP (o fallback asimetria)
-    gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     tipo = _clasificar_angulo(gris_full, (x1, y1, x2-x1, y2-y1), frame.shape)
 
     # Extraer vector LBP
