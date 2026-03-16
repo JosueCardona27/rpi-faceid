@@ -117,16 +117,31 @@ HAAR_PATH    = _encontrar_haar()
 MUESTRAS_MIN = 3   # muestras minimas por paso para aceptarlo
 
 # ─── Pasos de registro multi-angulo ───────────────────────────────────────────
-# Cada paso: (id, icono, instruccion_camara, etiqueta_panel, segundos, modo_deteccion)
+# Cada paso: (id, icono, instruccion_camara, etiqueta_panel, segundos,
+#             modo_deteccion, tipo_esperado, msg_correccion)
 PASOS_REGISTRO = [
-    (0, "●",  "Mira directo a la camara",        "FRENTE",       4.0, "frontal"),
-    (1, "◀",  "Gira la cabeza a la derecha",     "DERECHA",      4.0, "perfil"),
-    (2, "▶",  "Gira la cabeza a la izquierda",   "IZQUIERDA",    4.0, "perfil"),
-    (3, "▼",  "Inclina la cabeza hacia abajo",   "ABAJO",        4.0, "abajo"),
-    (4, "●",  "Vuelve al frente — ultimo paso",  "FRENTE FINAL", 4.0, "frontal"),
+    (0, "●", "Mira directo a la camara",
+     "FRENTE",       5.0, "frontal",
+     TIPO_FRONTAL,  "Mira directo a la camara"),
+
+    (1, "◀", "Gira la cabeza a la DERECHA",
+     "DERECHA",      5.0, "perfil",
+     TIPO_PERFIL_D, "Gira mas a la derecha"),
+
+    (2, "▶", "Gira la cabeza a la IZQUIERDA",
+     "IZQUIERDA",    5.0, "perfil",
+     TIPO_PERFIL_I, "Gira mas a la izquierda"),
+
+    (3, "▼", "Inclina la cabeza hacia abajo",
+     "ABAJO",        5.0, "abajo",
+     TIPO_ABAJO,    "Inclina mas la cabeza hacia abajo"),
+
+    (4, "●", "Vuelve al frente — ultimo paso",
+     "FRENTE FINAL", 5.0, "frontal",
+     TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS        = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 20s total
+TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 25s total
 
 NOMBRES_ZONA = ["Frente", "Ojo izq", "Ojo der",
                 "Nariz", "Mejilla izq", "Mejilla der", "Boca/menton"]
@@ -490,7 +505,7 @@ class App(tk.Tk):
 
         self._paso_frames = []  # (frame, lbl_num, lbl_etiq, barra_prog)
         paso_w = 46
-        for i, (_, icono, _, etiqueta, _, _) in enumerate(PASOS_REGISTRO):
+        for i, (_, icono, _, etiqueta, _, _, _, _) in enumerate(PASOS_REGISTRO):
             fx = 18 + i * (paso_w + 4)
             pf = tk.Frame(left, bg=BORDER, width=paso_w, height=56)
             pf.place(x=fx, y=172)
@@ -707,13 +722,15 @@ class App(tk.Tk):
         t_global_inicio = time.time()
         ultimo_analisis = -1
 
-        for paso_idx, (_, icono, instruccion, etiqueta, duracion, modo_det) in enumerate(PASOS_REGISTRO):
+        for paso_idx, (_, icono, instruccion, etiqueta,
+                       duracion, modo_det,
+                       tipo_esperado, msg_correccion) in enumerate(PASOS_REGISTRO):
             vectores_paso = []
             t_paso_inicio = time.time()
             t_paso_fin    = t_paso_inicio + duracion
             t_global_offset = t_offsets[paso_idx]
 
-            # cambiar modo de deteccion para este paso
+            # activar modo de deteccion para este paso
             self._modo_deteccion = modo_det
 
             desc_paso = f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}"
@@ -741,42 +758,58 @@ class App(tk.Tk):
                            self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
                            if hasattr(self, "paso_txt_var") else None)
 
-                # leer del buffer de analisis
+                # leer resultado del buffer de analisis
                 with self._analisis_lock:
                     frame_id = self._analisis["frame_id"]
                     v        = self._analisis["vector"]
                     p        = self._analisis["pesos"]
+                    tipo_det = self._analisis["tipo"]
 
-                if frame_id != ultimo_analisis and v is not None and \
-                        p is not None and np.sum(p > 0.15) >= 2:
+                if frame_id != ultimo_analisis:
                     ultimo_analisis = frame_id
-                    vectores_paso.append(v)
-                    todos_vectores.append(v)
-                    todos_pesos.append(p)
 
-                    for iz in range(N_ZONAS):
-                        if p[iz] > self._zona_cap_acum[iz]:
-                            self._zona_cap_acum[iz] = p[iz]
+                    if v is not None and p is not None:
+                        # ── validar que el angulo detectado es el correcto ────
+                        tipo_ok = (tipo_det == tipo_esperado)
 
-                    snap = self._zona_cap_acum.copy()
-                    self.after(0, lambda s=snap: self._update_cap_bars(s))
+                        if tipo_ok and np.sum(p > 0.15) >= 2:
+                            # muestra VALIDA para este paso
+                            vectores_paso.append(v)
+                            todos_vectores.append(v)
+                            todos_pesos.append(p)
 
-                    n_total = len(todos_vectores)
-                    zv = int(np.sum(p > 0.15))
-                    self._set_overlay((0, 255, 136),
-                                      f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
-                    self.after(0, lambda nt=n_total, zv=zv:
-                               self.progreso_var.set(
-                                   f"Total: {nt} muestras  |  {zv}/7 zonas"))
-                    self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
-                else:
-                    self._set_overlay((255,184,48),
-                                      f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
-                    self.after(0, lambda: self.prog_label.config(fg=WARNING))
+                            for iz in range(N_ZONAS):
+                                if p[iz] > self._zona_cap_acum[iz]:
+                                    self._zona_cap_acum[iz] = p[iz]
 
-                self.after(0, lambda pi=paso_idx, e=etiqueta:
-                           self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
-                           if hasattr(self, "paso_txt_var") else None)
+                            snap = self._zona_cap_acum.copy()
+                            self.after(0, lambda s=snap: self._update_cap_bars(s))
+
+                            n_total = len(todos_vectores)
+                            zv = int(np.sum(p > 0.15))
+                            self._set_overlay(
+                                (0, 255, 136),
+                                f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
+                            self.after(0, lambda nt=n_total, zv=zv:
+                                       self.progreso_var.set(
+                                           f"Total: {nt} muestras  |  {zv}/7 zonas"))
+                            self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
+
+                        else:
+                            # angulo incorrecto — guiar al usuario
+                            self._set_overlay(
+                                (255, 59, 92),
+                                f"{msg_correccion}")
+                            self.after(0, lambda mc=msg_correccion:
+                                       self.status_var.set(mc))
+                            self.after(0, lambda: self.prog_label.config(fg=DANGER))
+
+                    else:
+                        # no hay cara detectada
+                        self._set_overlay(
+                            (255, 184, 48),
+                            f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
+                        self.after(0, lambda: self.prog_label.config(fg=WARNING))
 
                 time.sleep(0.04)
 
@@ -1043,4 +1076,3 @@ if __name__ == "__main__":
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
-    
