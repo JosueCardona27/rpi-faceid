@@ -220,52 +220,65 @@ def _clasificar_con_solvepnp(cara_recortada_gris, bbox, frame_shape):
     return _clasificar_por_asimetria(cara_recortada_gris)
 
 
+# Buffer de suavizado — promedia los ultimos N ratios para estabilizar
+# Esto elimina el ruido frame a frame que causa cambios erraticos de angulo
+_BUFFER_N   = 5
+_buf_ratio_h = []
+_buf_ratio_v = []
+
 def _clasificar_por_asimetria(cara128):
     """
-    Clasificacion robusta usando asimetria de bordes Sobel.
-    Funciona sin landmarks — solo con la imagen de la cara 128x128.
+    Clasificacion robusta usando asimetria de bordes Sobel + suavizado temporal.
 
-    Logica:
-      YAW  : Si volteas a la derecha, la mejilla izquierda ocupa mas espacio
-             → mas bordes en la mitad izquierda de la imagen
-      PITCH: Si bajas la cabeza, los ojos/frente ocupan mas espacio
-             → mas bordes en la zona superior
+    Umbrales calibrados con datos reales de la RPi:
+      - Frontal:    ratio_h en [-0.09, +0.09]
+      - Perfil der: ratio_h > +0.14
+      - Perfil izq: ratio_h < -0.11
+      - Abajo:      |ratio_v| > 0.14
+
+    Se usa un buffer de los ultimos 5 frames para suavizar el ruido.
     """
-    # Calcular mapa de bordes
+    global _buf_ratio_h, _buf_ratio_v
+
     gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
     bordes = np.abs(gx) + np.abs(gy)
 
     h, w = bordes.shape
 
-    # Dividir en mitades izq/der con zona central ignorada (10% central)
-    margen = w // 10
-    izq = float(np.mean(bordes[:, :w//2 - margen]))
-    der = float(np.mean(bordes[:, w//2 + margen:]))
-    total_h = izq + der + 1e-6
-    # ratio > 0: mas bordes izquierda → cara girada a su DERECHA
-    # ratio < 0: mas bordes derecha  → cara girada a su IZQUIERDA
-    ratio_h = (izq - der) / total_h
+    # YAW — asimetria horizontal, ignorando 15% central
+    margen  = int(w * 0.15)
+    izq     = float(np.mean(bordes[:, :w//2 - margen]))
+    der     = float(np.mean(bordes[:, w//2 + margen:]))
+    ratio_h = (izq - der) / (izq + der + 1e-6)
 
-    # Dividir en 3 bandas verticales (ignorar zona media)
-    t1 = float(np.mean(bordes[:h//3,    :]))   # frente/ojos
-    t2 = float(np.mean(bordes[h//3:2*h//3, :]))  # nariz/mejillas
-    t3 = float(np.mean(bordes[2*h//3:,  :]))   # boca/menton/cuello
-    total_v = t1 + t2 + t3 + 1e-6
-    # ratio_v > 0: mas info arriba → cara inclinada hacia ABAJO
-    ratio_v = (t1 - t3) / total_v
+    # PITCH — comparar tercio superior vs tercio inferior
+    t1      = float(np.mean(bordes[:h//3,    :]))
+    t3      = float(np.mean(bordes[2*h//3:,  :]))
+    ratio_v = (t1 - t3) / (t1 + t3 + 1e-6)
 
-    # Umbrales — mas permisivos que antes
-    UMBRAL_YAW   = 0.10
-    UMBRAL_ABAJO = 0.12
+    # Agregar al buffer y mantener solo los ultimos N
+    _buf_ratio_h.append(ratio_h)
+    _buf_ratio_v.append(ratio_v)
+    if len(_buf_ratio_h) > _BUFFER_N:
+        _buf_ratio_h.pop(0)
+        _buf_ratio_v.pop(0)
 
-    if ratio_h > UMBRAL_YAW:
+    # Usar promedio del buffer
+    rh = float(np.mean(_buf_ratio_h))
+    rv = float(np.mean(_buf_ratio_v))
+
+    # Umbrales calibrados a partir de datos reales de la RPi
+    # Frontal llega hasta +-0.09, perfiles empiezan desde +-0.11
+    UMBRAL_YAW_DER  =  0.13   # para PERFIL_DER (ratio_h positivo)
+    UMBRAL_YAW_IZQ  = -0.11   # para PERFIL_IZQ (ratio_h negativo)
+    UMBRAL_ABAJO    =  0.14   # para ABAJO (ratio_v positivo o negativo)
+
+    if rh > UMBRAL_YAW_DER:
         return TIPO_PERFIL_D
-    elif ratio_h < -UMBRAL_YAW:
+    elif rh < UMBRAL_YAW_IZQ:
         return TIPO_PERFIL_I
-    elif ratio_v > UMBRAL_ABAJO:
-        return TIPO_ABAJO
-    elif ratio_v < -UMBRAL_ABAJO:
+    elif abs(rv) > UMBRAL_ABAJO:
         return TIPO_ABAJO
     else:
         return TIPO_FRONTAL
