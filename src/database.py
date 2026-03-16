@@ -14,10 +14,17 @@ lo que permite comparar caras parcialmente cubiertas.
 
 import sqlite3
 import json
+import os
 import numpy as np
 from face_engine import distancia_ponderada, N_ZONAS, VECTOR_DIM
 
-DB_PATH = "reconocimiento_facial.db"
+# ─── ruta de la base de datos ─────────────────────────────────────────────────
+# Siempre apunta a  <raiz_proyecto>/database/reconocimiento_facial.db
+# sin importar desde donde se ejecute el script
+_DIR_ESTE_ARCHIVO = os.path.dirname(os.path.abspath(__file__))
+_DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
+os.makedirs(_DIR_DB, exist_ok=True)   # crea la carpeta si no existe
+DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
 # umbral de distancia chi² ponderada para dar acceso
 # valores tipicos: 0.05-0.15 = muy parecido | >0.30 = diferente
@@ -28,6 +35,32 @@ def conectar():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _crear_tablas():
+    """Crea las tablas si no existen (primera ejecucion o BD nueva)."""
+    conn = conectar()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS personas (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_cuenta   TEXT    UNIQUE NOT NULL,
+            nombre_completo TEXT    NOT NULL,
+            fecha_registro  TEXT    DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS vectores_faciales (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            persona_id  INTEGER UNIQUE NOT NULL,
+            vector      TEXT    NOT NULL,
+            dimensiones INTEGER NOT NULL,
+            pesos       TEXT    DEFAULT NULL,
+            FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE CASCADE
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+_crear_tablas()
 
 
 # ─── asegurar que la tabla tenga la columna pesos ─────────────────────────────

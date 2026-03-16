@@ -6,6 +6,7 @@ Optimizada para pantalla tactil 7" 1024x600.
 - Menu perfectamente centrado
 - Escaneo por tiempo (10s multi-angulo)
 - Barras de zonas permanentes: no se borran al retirar el rostro
+- Deteccion automatica de camara: Picamera2 (RPi) o webcam OpenCV (laptop)
 """
 
 import tkinter as tk
@@ -15,7 +16,19 @@ import numpy as np
 import threading
 import time
 from PIL import Image, ImageTk
-from picamera2 import Picamera2
+
+# ── deteccion automatica de camara ────────────────────────────────────────────
+# Intenta Picamera2 (Raspberry Pi). Si falla usa OpenCV (webcam de laptop).
+USAR_PICAM = False
+try:
+    from picamera2 import Picamera2
+    _test = Picamera2()
+    _test.close()
+    del _test
+    USAR_PICAM = True
+    print("[CAM] Picamera2 detectada — modo Raspberry Pi")
+except Exception:
+    print("[CAM] Picamera2 no disponible — modo webcam OpenCV")
 
 from face_engine  import (extraer_caracteristicas, dibujar_overlay,
                            N_ZONAS, ZONAS)
@@ -41,9 +54,27 @@ PANEL_W = 300
 CAM_W   = W - PANEL_W   # 724
 
 # ─── CONFIGURACION ESCANEO ────────────────────────────────────────────────────
-HAAR_PATH        = "haarcascade_frontalface_default.xml"
-TIEMPO_ESCANEO   = 10.0   # segundos de escaneo activo
-MUESTRAS_MIN     = 15     # minimo de muestras validas para aceptar el registro
+# Buscar haarcascade automaticamente: primero local, luego en OpenCV instalado
+def _encontrar_haar():
+    import os
+    local = "haarcascade_frontalface_default.xml"
+    if os.path.exists(local):
+        return local
+    try:
+        cv2_data = cv2.data.haarcascades
+        ruta = os.path.join(cv2_data, "haarcascade_frontalface_default.xml")
+        if os.path.exists(ruta):
+            print(f"[HAAR] Usando: {ruta}")
+            return ruta
+    except Exception:
+        pass
+    raise FileNotFoundError(
+        "No se encontro haarcascade_frontalface_default.xml.\n"
+        "Copia el archivo a la carpeta src/ o instala opencv-python.")
+
+HAAR_PATH      = _encontrar_haar()
+TIEMPO_ESCANEO = 10.0   # segundos de escaneo activo
+MUESTRAS_MIN   = 5      # minimo de muestras validas para aceptar el registro
 
 # Instrucciones guiadas por tiempo (segundos)
 GUIA_TIEMPO = [
@@ -82,18 +113,21 @@ class App(tk.Tk):
         self.f_status = tkfont.Font(family="Courier New", size=8,  weight="bold")
         self.f_zona   = tkfont.Font(family="Courier New", size=7)
 
-        self.picam2      = None
+        # handles de camara (solo uno estara activo segun USAR_PICAM)
+        self.picam2  = None   # Picamera2 en RPi
+        self._cap    = None   # cv2.VideoCapture en laptop
+
         self.cam_running = False
         self.verificando = False
 
-        # buffer compartido: el hilo de captura escribe, el loop visual lee
-        self._frame_actual  = None
-        self._frame_lock    = threading.Lock()
-        self._escaneando    = False   # True mientras _capturar_registro corre
+        # buffer compartido: _loop_camara escribe, los hilos de analisis leen
+        self._frame_actual = None
+        self._frame_lock   = threading.Lock()
 
-        # barras de zonas: congeladas permanentemente tras cada escaneo
+        # barras de zonas
         self._zonas_congeladas  = False
         self._zonas_permanentes = np.zeros(N_ZONAS, dtype=np.float32)
+        self._zona_bars         = []
         self._zona_cap_bars     = []
         self._zona_cap_acum     = np.zeros(N_ZONAS, dtype=np.float32)
 
@@ -124,12 +158,20 @@ class App(tk.Tk):
     def _stop_cam(self):
         self.cam_running = False
         time.sleep(0.25)
-        if hasattr(self, "picam2") and self.picam2:
-            try:
-                self.picam2.close()
-            except Exception:
-                pass
-            self.picam2 = None
+        if USAR_PICAM:
+            if self.picam2:
+                try:
+                    self.picam2.close()
+                except Exception:
+                    pass
+                self.picam2 = None
+        else:
+            if self._cap:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
 
     def _volver(self):
         self._stop_cam()
@@ -140,36 +182,52 @@ class App(tk.Tk):
             self._ov_color = color
             self._ov_texto = texto
 
-    def _start_picam(self):
-        self.picam2 = Picamera2()
-        cfg = self.picam2.create_preview_configuration(
-            main={"size": (640, 480), "format": "BGR888"})
-        self.picam2.configure(cfg)
-        self.picam2.start()
-        time.sleep(0.3)
+    def _start_cam(self):
+        """Abre la camara correcta segun el sistema detectado al inicio."""
+        if USAR_PICAM:
+            self.picam2 = Picamera2()
+            cfg = self.picam2.create_preview_configuration(
+                main={"size": (640, 480), "format": "BGR888"})
+            self.picam2.configure(cfg)
+            self.picam2.start()
+            time.sleep(0.3)
+        else:
+            self._cap = cv2.VideoCapture(0)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            if not self._cap.isOpened():
+                raise RuntimeError("No se pudo abrir ninguna camara.")
+            # calentar la camara con algunos frames descartados
+            for _ in range(5):
+                self._cap.read()
 
-    # ── loop de camara ────────────────────────────────────────────────────────
+    def _leer_frame(self):
+        """Lee un frame crudo de la camara activa. Retorna None si falla."""
+        try:
+            if USAR_PICAM:
+                return self.picam2.capture_array()
+            else:
+                ret, raw = self._cap.read()
+                return raw if ret else None
+        except Exception:
+            return None
+
+    # ── loop de camara (unico hilo que accede a la camara) ────────────────────
     def _loop_camara(self, max_w, max_h):
-        """
-        Unico hilo que llama capture_array().
-        Escribe en _frame_actual para que _capturar_registro lo lea.
-        """
         while self.cam_running:
-            try:
-                raw = self.picam2.capture_array()
-            except Exception:
+            raw = self._leer_frame()
+            if raw is None:
                 time.sleep(0.05)
                 continue
 
             frame = cv2.flip(raw, 1)
 
-            # compartir frame con hilo de escaneo
+            # publicar frame para hilos de analisis
             with self._frame_lock:
                 self._frame_actual = frame.copy()
 
             vector, pesos, coords = extraer_caracteristicas(frame, HAAR_PATH)
 
-            # actualizar zonas vivas solo si NO estan congeladas
             if pesos is not None and not self._zonas_congeladas:
                 with self._zonas_lock:
                     self._zonas_vivas = pesos.copy()
@@ -205,32 +263,24 @@ class App(tk.Tk):
                 break
             time.sleep(0.04)
 
-    # ── tick zonas: muestra vivas o permanentes segun estado ──────────────────
+    # ── tick zonas ────────────────────────────────────────────────────────────
     def _tick_zonas(self):
         if not self.cam_running:
             return
-        if hasattr(self, "_zona_bars"):
-            if self._zonas_congeladas:
-                # mostrar snapshot permanente
-                pesos = self._zonas_permanentes
-            else:
-                with self._zonas_lock:
-                    pesos = self._zonas_vivas.copy()
-
+        if hasattr(self, "_zona_bars") and self._zona_bars:
+            pesos = (self._zonas_permanentes if self._zonas_congeladas
+                     else self._zonas_vivas.copy())
             for iz, (bar, _) in enumerate(self._zona_bars):
                 p   = float(pesos[iz]) if iz < len(pesos) else 0.0
                 w   = int(p * 80)
-                if self._zonas_congeladas:
-                    col = SUCCESS if p > 0.3 else BORDER
-                else:
-                    col = (SUCCESS if p > 0.7 else
-                           WARNING if p > 0.3 else
-                           DANGER  if p > 0.1 else BORDER)
+                col = (SUCCESS if self._zonas_congeladas and p > 0.3 else
+                       SUCCESS if p > 0.7 else
+                       WARNING if p > 0.3 else
+                       DANGER  if p > 0.1 else BORDER)
                 bar.config(width=w, bg=col)
         self.after(120, self._tick_zonas)
 
     def _fijar_zonas(self, pesos):
-        """Congela las barras permanentemente con el promedio del escaneo."""
         self._zonas_permanentes = np.array(pesos, dtype=np.float32)
         self._zonas_congeladas  = True
 
@@ -238,7 +288,7 @@ class App(tk.Tk):
         self._zonas_congeladas = False
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  PANTALLA PRINCIPAL  (centrada perfectamente)
+    #  PANTALLA PRINCIPAL
     # ══════════════════════════════════════════════════════════════════════════
     def _build_main(self):
         self._clear()
@@ -247,39 +297,33 @@ class App(tk.Tk):
 
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
         cv.place(x=0, y=0)
-
-        # barra superior
         cv.create_rectangle(0, 0, W, 3, fill=ACCENT, outline="")
 
-        # icono centrado — posicion Y ajustada para centrar el bloque total
-        # bloque total: icono(54px) + gap(10) + titulo(22) + subtitulo(14)
-        #               + linea + tarjetas(176) + footer = ~360px
-        # offset Y para centrar en 600px: (600-360)/2 = 120 → inicio en 30
-        IY = 30   # inicio Y del icono
+        IY = 30
         cx = W // 2
         cv.create_oval(cx-20, IY,    cx+20, IY+44, outline=ACCENT,  width=2)
         cv.create_oval(cx-11, IY+9,  cx+11, IY+33, outline=ACCENT2, width=2)
         cv.create_line(cx,    IY+44, cx,    IY+62,  fill=ACCENT, width=2)
         cv.create_line(cx-20, IY+53, cx+20, IY+53,  fill=ACCENT, width=2)
 
-        TY = IY + 74   # titulo
+        TY = IY + 74
         tk.Label(self, text="SISTEMA DE ACCESO FACIAL",
                  font=self.f_title, fg=ACCENT, bg=BG
                  ).place(x=W//2, y=TY, anchor="center")
 
-        SY = TY + 22   # subtitulo
+        SY = TY + 22
+        modo_txt = "Raspberry Pi (Picamera2)" if USAR_PICAM else "Laptop (Webcam)"
         tk.Label(self,
-                 text="Reconocimiento LBP zonal  |  Multi-angulo  |  Robusto ante oclusiones",
+                 text=f"Reconocimiento LBP zonal  |  Multi-angulo  |  {modo_txt}",
                  font=self.f_sub, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=SY, anchor="center")
 
-        LY = SY + 16   # linea divisora
+        LY = SY + 16
         cv.create_line(W//2-280, LY, W//2+280, LY, fill=BORDER, width=1)
 
-        CY = LY + 16   # inicio tarjetas
-        CW, CH = 230, 180   # tamaño de cada tarjeta
-        GAP    = 40         # separacion entre tarjetas
-        # centrar las dos tarjetas en W
+        CY = LY + 16
+        CW, CH  = 230, 180
+        GAP     = 40
         total_w = CW*2 + GAP
         CX1 = W//2 - total_w//2
         CX2 = CX1 + CW + GAP
@@ -291,10 +335,9 @@ class App(tk.Tk):
                        "Verificar identidad\nmediante reconocimiento facial",
                        SUCCESS, self._show_acceso)
 
-        # barra inferior
         cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
         tk.Label(self,
-                 text=f"v5.0  |  LBP uniforme x7 zonas  |  Escaneo {int(TIEMPO_ESCANEO)}s multi-angulo  |  chi2 ponderada",
+                 text=f"v5.1  |  LBP x7 zonas  |  Escaneo {int(TIEMPO_ESCANEO)}s  |  {'RPi' if USAR_PICAM else 'Webcam'}",
                  font=self.f_zona, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=H-13, anchor="center")
 
@@ -361,14 +404,14 @@ class App(tk.Tk):
 
         tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=278)
 
-        # encabezados de las dos columnas de barras
-        tk.Label(left, text="EN VIVO", font=self.f_zona,
+        # encabezados doble columna de barras
+        tk.Label(left, text="EN VIVO",    font=self.f_zona,
                  fg=SUBTEXT, bg=PANEL).place(x=112, y=282)
         tk.Label(left, text="CAPTURADAS", font=self.f_zona,
-                 fg=SUCCESS, bg=PANEL).place(x=186, y=282)
+                 fg=SUCCESS,  bg=PANEL).place(x=186, y=282)
 
-        self._zona_bars     = []   # barras deteccion en vivo
-        self._zona_cap_bars = []   # barras capturadas con exito
+        self._zona_bars     = []
+        self._zona_cap_bars = []
         self._zona_cap_acum = np.zeros(N_ZONAS, dtype=np.float32)
 
         for iz, nombre in enumerate(NOMBRES_ZONA):
@@ -376,14 +419,12 @@ class App(tk.Tk):
             tk.Label(left, text=f"{nombre[:9]}", font=self.f_zona,
                      fg=SUBTEXT, bg=PANEL).place(x=18, y=yp)
 
-            # barra EN VIVO
             bg_vivo = tk.Frame(left, bg=BORDER, width=56, height=8)
             bg_vivo.place(x=110, y=yp+2)
             bar_vivo = tk.Frame(bg_vivo, bg=BORDER, width=0, height=8)
             bar_vivo.place(x=0, y=0)
             self._zona_bars.append((bar_vivo, None))
 
-            # barra CAPTURADAS
             bg_cap = tk.Frame(left, bg=BORDER, width=56, height=8)
             bg_cap.place(x=190, y=yp+2)
             bar_cap = tk.Frame(bg_cap, bg=BORDER, width=0, height=8)
@@ -396,19 +437,17 @@ class App(tk.Tk):
         self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
                                      font=self.f_status, fg=WARNING, bg=PANEL,
                                      justify="center", wraplength=264)
-        self.prog_label.place(x=18, y=430, width=264)
+        self.prog_label.place(x=18, y=424, width=264)
 
-        # contador de tiempo regresivo
         self.timer_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.timer_var,
                  font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=480, width=264, anchor="nw")
+                 ).place(x=18, y=468, width=264, anchor="nw")
 
         tk.Button(left, text="<  Volver", font=self.f_label,
                   fg=SUBTEXT, bg=PANEL, relief="flat",
                   cursor="hand2", command=self._volver).place(x=18, y=556)
 
-        # camara
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
         self.cam_label = tk.Label(right, bg="#080A0F")
@@ -422,7 +461,7 @@ class App(tk.Tk):
         self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=8)
         self.prog_bar.place(x=0, y=0)
 
-        self._start_picam()
+        self._start_cam()
         self.cam_running = True
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-46},
@@ -440,19 +479,16 @@ class App(tk.Tk):
                  ).place(x=18, y=y+15, width=264, height=26)
 
     def _reset_cap_bars(self):
-        """Resetea las barras de capturadas al inicio de un nuevo escaneo."""
         if hasattr(self, "_zona_cap_bars"):
             for bar in self._zona_cap_bars:
                 bar.config(width=0, bg=BORDER)
 
     def _update_cap_bars(self, pesos):
-        """Actualiza las barras de capturadas con el maximo acumulado."""
         if hasattr(self, "_zona_cap_bars"):
             for iz, bar in enumerate(self._zona_cap_bars):
                 p = float(pesos[iz]) if iz < len(pesos) else 0.0
                 w = int(p * 56)
                 if w > 0:
-                    # gradiente de color: amarillo -> verde segun cuanto se capturó
                     col = SUCCESS if p > 0.6 else WARNING if p > 0.3 else ACCENT
                     bar.config(width=w, bg=col)
 
@@ -474,7 +510,6 @@ class App(tk.Tk):
     def _capturar_registro(self, nombre, cuenta):
         BAR_W = CAM_W - 16
 
-        # registrar en DB
         pid = registrar_persona(cuenta, nombre)
         if pid == -1:
             self.after(0, lambda: self.progreso_var.set(
@@ -488,13 +523,12 @@ class App(tk.Tk):
         pesos_l  = []
         t_inicio = time.time()
         t_fin    = t_inicio + TIEMPO_ESCANEO
+        ultimo   = None
 
         self._zona_cap_acum = np.zeros(N_ZONAS, dtype=np.float32)
         self.after(0, self._reset_cap_bars)
         self.after(0, lambda: self.status_var.set(
             "Mira directo a la camara — escaneo iniciado"))
-
-        ultimo_frame_procesado = None   # evita procesar el mismo frame dos veces
 
         while time.time() < t_fin and self.cam_running:
             elapsed  = time.time() - t_inicio
@@ -512,16 +546,16 @@ class App(tk.Tk):
             self.after(0, lambda pw=int(progreso*BAR_W):
                        self.prog_bar.config(width=pw))
 
-            # leer frame del buffer compartido (no llamar capture_array aqui)
+            # leer del buffer compartido — NO llamar la camara directamente
             with self._frame_lock:
                 frame = self._frame_actual
+                frame_id = id(self._frame_actual)
 
-            if frame is None or (ultimo_frame_procesado is not None
-                                  and np.array_equal(frame, ultimo_frame_procesado)):
+            if frame is None or frame_id == ultimo:
                 time.sleep(0.04)
                 continue
 
-            ultimo_frame_procesado = frame
+            ultimo = frame_id
             v, p, coords = extraer_caracteristicas(frame, HAAR_PATH)
 
             if v is not None and p is not None and np.sum(p > 0.15) >= 2:
@@ -534,9 +568,8 @@ class App(tk.Tk):
                     if p[iz] > self._zona_cap_acum[iz]:
                         self._zona_cap_acum[iz] = p[iz]
 
-                self._set_overlay(
-                    (0, 255, 136),
-                    f"{instruccion}  [{n} muestras]")
+                self._set_overlay((0, 255, 136),
+                                  f"{instruccion}  [{n} muestras]")
                 self.after(0, lambda nv=n, zv=zonas_vis:
                            self.progreso_var.set(
                                f"{nv} muestras  |  {zv}/7 zonas"))
@@ -549,7 +582,7 @@ class App(tk.Tk):
                 self.after(0, lambda: self.prog_label.config(fg=WARNING))
 
             self.after(0, lambda i=instruccion: self.status_var.set(i))
-            time.sleep(0.04)   # cede el hilo sin bloquear la camara
+            time.sleep(0.04)
 
         # ── fin del tiempo ────────────────────────────────────────────────────
         self._set_overlay(None, "")
@@ -583,7 +616,7 @@ class App(tk.Tk):
                 f"Solo {nv} muestras validas.\nIntentalo de nuevo."))
             self.after(0, lambda: self.prog_label.config(fg=DANGER))
             self.after(0, lambda: self.status_var.set(
-                "Escaneo insuficiente — acercate mas a la camara"))
+                "Acercate mas a la camara e intentalo de nuevo"))
             self.after(0, lambda: self.cap_btn.config(
                 state="normal", bg=ACCENT, text="CAPTURAR ROSTRO"))
 
@@ -667,7 +700,7 @@ class App(tk.Tk):
         self.cam_label = tk.Label(right, bg="#080A0F")
         self.cam_label.place(x=8, y=5, width=CAM_W-16, height=H-10)
 
-        self._start_picam()
+        self._start_cam()
         self.cam_running = True
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
@@ -707,14 +740,14 @@ class App(tk.Tk):
             intentos += 1
 
             with self._frame_lock:
-                frame = self._frame_actual
+                frame    = self._frame_actual
+                frame_id = id(self._frame_actual)
 
-            if frame is None or (ultimo is not None
-                                  and np.array_equal(frame, ultimo)):
+            if frame is None or frame_id == ultimo:
                 time.sleep(0.04)
                 continue
 
-            ultimo = frame
+            ultimo = frame_id
             v, p, _ = extraer_caracteristicas(frame, HAAR_PATH)
             if v is not None and p is not None and np.sum(p > 0.15) >= 2:
                 vectores.append(v)
@@ -740,7 +773,6 @@ class App(tk.Tk):
         p_final = np.mean(pesos_l,  axis=0).astype(np.float32)
         zonas_v = int(np.sum(p_final > 0.15))
 
-        # congelar barras con este escaneo permanentemente
         self.after(0, lambda pf=p_final: self._fijar_zonas(pf))
 
         resultado = reconocer_persona(v_final, p_final)
