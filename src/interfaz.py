@@ -124,6 +124,11 @@ class App(tk.Tk):
         self._frame_actual = None
         self._frame_lock   = threading.Lock()
 
+        # resultado del analisis facial (hilo _loop_analisis lo actualiza)
+        self._analisis      = {"vector": None, "pesos": None,
+                               "coords": None, "frame_id": -1}
+        self._analisis_lock = threading.Lock()
+
         # barras de zonas
         self._zonas_congeladas  = False
         self._zonas_permanentes = np.zeros(N_ZONAS, dtype=np.float32)
@@ -212,36 +217,44 @@ class App(tk.Tk):
         except Exception:
             return None
 
-    # ── loop de camara (unico hilo que accede a la camara) ────────────────────
+    # ── loop de camara ────────────────────────────────────────────────────────
     def _loop_camara(self, max_w, max_h):
+        """
+        Hilo 1 — Solo captura frames y programa la actualizacion en el
+        hilo principal via after(). NUNCA toca Tkinter directamente.
+        """
+        self._cam_max_w = max_w
+        self._cam_max_h = max_h
         while self.cam_running:
             raw = self._leer_frame()
             if raw is None:
-                time.sleep(0.05)
+                time.sleep(0.03)
                 continue
 
             frame = cv2.flip(raw, 1)
 
-            # publicar frame para hilos de analisis
+            # publicar frame para hilo de analisis
             with self._frame_lock:
-                self._frame_actual = frame.copy()
+                self._frame_actual = frame
 
-            vector, pesos, coords = extraer_caracteristicas(frame, HAAR_PATH)
-
-            if pesos is not None and not self._zonas_congeladas:
-                with self._zonas_lock:
-                    self._zonas_vivas = pesos.copy()
+            # leer ultimo resultado de analisis (no bloquea)
+            with self._analisis_lock:
+                coords = self._analisis["coords"]
+                pesos  = self._analisis["pesos"]
+                vector = self._analisis["vector"]
 
             with self._ov_lock:
                 ov_color = self._ov_color
                 ov_texto = self._ov_texto
 
+            # dibujar overlay en copia del frame (cpu, no tkinter)
+            vis = frame.copy()
             if coords:
                 c = ov_color if ov_color else (
                     (0,212,255) if vector is not None else (80,80,80))
                 t = ov_texto if ov_texto else (
                     "Detectado" if vector is not None else "Buscando...")
-                frame = dibujar_overlay(frame, coords, c, t)
+                vis = dibujar_overlay(vis, coords, c, t)
 
                 if pesos is not None and vector is not None:
                     x0, y0, w0, h0 = coords
@@ -252,16 +265,55 @@ class App(tk.Tk):
                         zh = int((r1  - r0)  * h0 / 128)
                         if pesos[iz] > 0.1:
                             a = pesos[iz]
-                            cv2.rectangle(frame, (zx,zy),(zx+zw,zy+zh),
+                            cv2.rectangle(vis, (zx,zy),(zx+zw,zy+zh),
                                 (int(255*(1-a)), int(200*a), int(255*a)), 1)
 
-            imgtk = _imgtk(frame, max_w, max_h)
-            try:
-                self.cam_label.imgtk = imgtk
-                self.cam_label.configure(image=imgtk)
-            except Exception:
-                break
-            time.sleep(0.04)
+            # convertir a ImageTk en el hilo (cpu, no tkinter)
+            imgtk = _imgtk(vis, max_w, max_h)
+
+            # UNICA llamada a tkinter: programada en el hilo principal
+            self.after(0, self._mostrar_frame, imgtk)
+
+            time.sleep(0.033)   # ~30 fps
+
+    def _mostrar_frame(self, imgtk):
+        """Ejecuta en el hilo principal de Tkinter — sin parpadeo."""
+        if not self.cam_running:
+            return
+        try:
+            self.cam_label.imgtk = imgtk
+            self.cam_label.configure(image=imgtk)
+        except Exception:
+            pass
+
+    # ── loop de analisis facial (hilo separado, no bloquea el display) ────────
+    def _loop_analisis(self):
+        """
+        Hilo 2 — Detector Haar + LBP en segundo plano.
+        Escribe en _analisis para que _loop_camara dibuje el resultado.
+        """
+        ultimo_id = -1
+        while self.cam_running:
+            with self._frame_lock:
+                frame    = self._frame_actual
+                frame_id = id(frame) if frame is not None else -1
+
+            if frame is None or frame_id == ultimo_id:
+                time.sleep(0.02)
+                continue
+
+            ultimo_id = frame_id
+            vector, pesos, coords = extraer_caracteristicas(frame, HAAR_PATH)
+
+            with self._analisis_lock:
+                self._analisis["vector"]   = vector
+                self._analisis["pesos"]    = pesos
+                self._analisis["coords"]   = coords
+                self._analisis["frame_id"] = frame_id
+
+            if pesos is not None and not self._zonas_congeladas:
+                with self._zonas_lock:
+                    self._zonas_vivas = pesos.copy()
 
     # ── tick zonas ────────────────────────────────────────────────────────────
     def _tick_zonas(self):
@@ -466,6 +518,8 @@ class App(tk.Tk):
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-46},
                          daemon=True).start()
+        threading.Thread(target=self._loop_analisis,
+                         daemon=True).start()
         self.after(150, self._tick_zonas)
 
     def _field(self, parent, label, var, y):
@@ -546,17 +600,17 @@ class App(tk.Tk):
             self.after(0, lambda pw=int(progreso*BAR_W):
                        self.prog_bar.config(width=pw))
 
-            # leer del buffer compartido — NO llamar la camara directamente
-            with self._frame_lock:
-                frame = self._frame_actual
-                frame_id = id(self._frame_actual)
+            # leer del buffer de analisis — _loop_analisis ya hizo el trabajo
+            with self._analisis_lock:
+                frame_id = self._analisis["frame_id"]
+                v        = self._analisis["vector"]
+                p        = self._analisis["pesos"]
 
-            if frame is None or frame_id == ultimo:
+            if frame_id == ultimo:
                 time.sleep(0.04)
                 continue
 
             ultimo = frame_id
-            v, p, coords = extraer_caracteristicas(frame, HAAR_PATH)
 
             if v is not None and p is not None and np.sum(p > 0.15) >= 2:
                 vectores.append(v)
@@ -705,6 +759,8 @@ class App(tk.Tk):
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
+        threading.Thread(target=self._loop_analisis,
+                         daemon=True).start()
         self.after(150,  self._tick_zonas)
         self.after(1800, self._lanzar_verificacion)
 
@@ -734,21 +790,21 @@ class App(tk.Tk):
         vectores = []
         pesos_l  = []
         intentos = 0
-        ultimo   = None
+        ultimo   = -1
 
         while len(vectores) < 8 and intentos < 120 and self.cam_running:
             intentos += 1
 
-            with self._frame_lock:
-                frame    = self._frame_actual
-                frame_id = id(self._frame_actual)
+            with self._analisis_lock:
+                frame_id = self._analisis["frame_id"]
+                v        = self._analisis["vector"]
+                p        = self._analisis["pesos"]
 
-            if frame is None or frame_id == ultimo:
+            if frame_id == ultimo:
                 time.sleep(0.04)
                 continue
 
             ultimo = frame_id
-            v, p, _ = extraer_caracteristicas(frame, HAAR_PATH)
             if v is not None and p is not None and np.sum(p > 0.15) >= 2:
                 vectores.append(v)
                 pesos_l.append(p)
