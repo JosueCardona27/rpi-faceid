@@ -31,7 +31,8 @@ except Exception:
     print("[CAM] Picamera2 no disponible — modo webcam OpenCV")
 
 from face_engine  import (extraer_caracteristicas, dibujar_overlay,
-                           N_ZONAS, ZONAS)
+                           N_ZONAS, ZONAS,
+                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I, TIPO_ABAJO)
 from database     import (registrar_persona, guardar_vector_unico,
                           reconocer_persona)
 
@@ -72,17 +73,20 @@ def _encontrar_haar():
         "No se encontro haarcascade_frontalface_default.xml.\n"
         "Copia el archivo a la carpeta src/ o instala opencv-python.")
 
-HAAR_PATH      = _encontrar_haar()
-TIEMPO_ESCANEO = 10.0   # segundos de escaneo activo
-MUESTRAS_MIN   = 5      # minimo de muestras validas para aceptar el registro
+HAAR_PATH    = _encontrar_haar()
+MUESTRAS_MIN = 3   # muestras minimas por paso para aceptarlo
 
-# Instrucciones guiadas por tiempo (segundos)
-GUIA_TIEMPO = [
-    (0.0,  2.5,  "Mira directo a la camara"),
-    (2.5,  5.0,  "Gira levemente a la derecha"),
-    (5.0,  7.5,  "Gira levemente a la izquierda"),
-    (7.5, 10.0,  "Vuelve al frente — casi listo"),
+# ─── Pasos de registro multi-angulo ───────────────────────────────────────────
+# Cada paso: (id, icono, instruccion_camara, etiqueta_panel, segundos, modo_deteccion)
+PASOS_REGISTRO = [
+    (0, "●",  "Mira directo a la camara",        "FRENTE",       4.0, "frontal"),
+    (1, "◀",  "Gira la cabeza a la derecha",     "DERECHA",      4.0, "perfil"),
+    (2, "▶",  "Gira la cabeza a la izquierda",   "IZQUIERDA",    4.0, "perfil"),
+    (3, "▼",  "Inclina la cabeza hacia abajo",   "ABAJO",        4.0, "abajo"),
+    (4, "●",  "Vuelve al frente — ultimo paso",  "FRENTE FINAL", 4.0, "frontal"),
 ]
+N_PASOS        = len(PASOS_REGISTRO)
+TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 20s total
 
 NOMBRES_ZONA = ["Frente", "Ojo izq", "Ojo der",
                 "Nariz", "Mejilla izq", "Mejilla der", "Boca/menton"]
@@ -126,8 +130,10 @@ class App(tk.Tk):
 
         # resultado del analisis facial (hilo _loop_analisis lo actualiza)
         self._analisis      = {"vector": None, "pesos": None,
-                               "coords": None, "frame_id": -1}
+                               "coords": None, "frame_id": -1,
+                               "tipo": None}
         self._analisis_lock = threading.Lock()
+        self._modo_deteccion = "auto"   # cambia segun el paso activo
 
         # barras de zonas
         self._zonas_congeladas  = False
@@ -242,6 +248,7 @@ class App(tk.Tk):
                 coords = self._analisis["coords"]
                 pesos  = self._analisis["pesos"]
                 vector = self._analisis["vector"]
+                tipo   = self._analisis["tipo"]
 
             with self._ov_lock:
                 ov_color = self._ov_color
@@ -254,7 +261,7 @@ class App(tk.Tk):
                     (0,212,255) if vector is not None else (80,80,80))
                 t = ov_texto if ov_texto else (
                     "Detectado" if vector is not None else "Buscando...")
-                vis = dibujar_overlay(vis, coords, c, t)
+                vis = dibujar_overlay(vis, coords, c, t, tipo=tipo)
 
                 if pesos is not None and vector is not None:
                     x0, y0, w0, h0 = coords
@@ -290,7 +297,7 @@ class App(tk.Tk):
     def _loop_analisis(self):
         """
         Hilo 2 — Detector Haar + LBP en segundo plano.
-        Escribe en _analisis para que _loop_camara dibuje el resultado.
+        Usa self._modo_deteccion para saber que angulo buscar.
         """
         ultimo_id = -1
         while self.cam_running:
@@ -303,13 +310,16 @@ class App(tk.Tk):
                 continue
 
             ultimo_id = frame_id
-            vector, pesos, coords = extraer_caracteristicas(frame, HAAR_PATH)
+            modo = self._modo_deteccion
+            resultado = extraer_caracteristicas(frame, HAAR_PATH, modo=modo)
+            vector, pesos, coords, tipo = resultado
 
             with self._analisis_lock:
                 self._analisis["vector"]   = vector
                 self._analisis["pesos"]    = pesos
                 self._analisis["coords"]   = coords
                 self._analisis["frame_id"] = frame_id
+                self._analisis["tipo"]     = tipo
 
             if pesos is not None and not self._zonas_congeladas:
                 with self._zonas_lock:
@@ -432,74 +442,102 @@ class App(tk.Tk):
         self._field(left, "Nombre completo",  self.nombre_var, 60)
         self._field(left, "Numero de cuenta", self.cuenta_var, 108)
 
-        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=154)
+        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=152)
 
-        tk.Label(left,
-                 text=(f"Llena los campos y presiona\n"
-                       f"CAPTURAR. El escaneo dura\n"
-                       f"{int(TIEMPO_ESCANEO)} segundos — sigue las\n"
-                       f"instrucciones en camara."),
-                 font=self.f_label, fg=SUBTEXT, bg=PANEL,
-                 justify="left").place(x=18, y=162)
+        # ── indicadores de pasos ──────────────────────────────────────────────
+        tk.Label(left, text="PASOS DE ESCANEO:", font=self.f_zona,
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=158)
 
-        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=226)
+        self._paso_frames = []  # (frame, lbl_num, lbl_etiq, barra_prog)
+        paso_w = 46
+        for i, (_, icono, _, etiqueta, _, _) in enumerate(PASOS_REGISTRO):
+            fx = 18 + i * (paso_w + 4)
+            pf = tk.Frame(left, bg=BORDER, width=paso_w, height=56)
+            pf.place(x=fx, y=172)
+            # numero del paso
+            li = tk.Label(pf, text=str(i+1), font=self.f_btn,
+                          fg=SUBTEXT, bg=BORDER)
+            li.place(relx=.5, y=10, anchor="center")
+            # icono/etiqueta
+            ln = tk.Label(pf, text=icono, font=self.f_label,
+                          fg=SUBTEXT, bg=BORDER)
+            ln.place(relx=.5, y=30, anchor="center")
+            # mini barra
+            bpf = tk.Frame(pf, bg="#111", width=paso_w-4, height=4)
+            bpf.place(x=2, y=50)
+            bp = tk.Frame(bpf, bg=SUBTEXT, width=0, height=4)
+            bp.place(x=0, y=0)
+            self._paso_frames.append((pf, li, ln, bp))
+
+        # descripcion del paso actual (texto largo)
+        self.paso_desc_var = tk.StringVar(value="Llena los campos e inicia el escaneo")
+        tk.Label(left, textvariable=self.paso_desc_var,
+                 font=self.f_label, fg=ACCENT, bg=PANEL,
+                 wraplength=264, justify="center"
+                 ).place(x=18, y=234, width=264)
+
+        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=254)
 
         self.cap_btn = tk.Button(
-            left, text="CAPTURAR ROSTRO", font=self.f_btn,
+            left, text="INICIAR ESCANEO", font=self.f_btn,
             fg=BG, bg=ACCENT, relief="flat", cursor="hand2",
             padx=8, pady=7, command=self._iniciar_registro)
-        self.cap_btn.place(x=18, y=234, width=264)
+        self.cap_btn.place(x=18, y=260, width=264)
         self.cap_btn.bind("<Enter>",
             lambda e: self.cap_btn.config(bg=self._lighten(ACCENT)))
         self.cap_btn.bind("<Leave>",
             lambda e: self.cap_btn.config(bg=ACCENT))
 
-        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=278)
+        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=304)
 
-        # encabezados doble columna de barras
+        # ── doble columna de barras de zonas ──────────────────────────────────
         tk.Label(left, text="EN VIVO",    font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=112, y=282)
+                 fg=SUBTEXT, bg=PANEL).place(x=112, y=308)
         tk.Label(left, text="CAPTURADAS", font=self.f_zona,
-                 fg=SUCCESS,  bg=PANEL).place(x=186, y=282)
+                 fg=SUCCESS,  bg=PANEL).place(x=186, y=308)
 
         self._zona_bars     = []
         self._zona_cap_bars = []
         self._zona_cap_acum = np.zeros(N_ZONAS, dtype=np.float32)
 
         for iz, nombre in enumerate(NOMBRES_ZONA):
-            yp = 294 + iz * 17
+            yp = 320 + iz * 16
             tk.Label(left, text=f"{nombre[:9]}", font=self.f_zona,
                      fg=SUBTEXT, bg=PANEL).place(x=18, y=yp)
-
             bg_vivo = tk.Frame(left, bg=BORDER, width=56, height=8)
             bg_vivo.place(x=110, y=yp+2)
             bar_vivo = tk.Frame(bg_vivo, bg=BORDER, width=0, height=8)
             bar_vivo.place(x=0, y=0)
             self._zona_bars.append((bar_vivo, None))
-
             bg_cap = tk.Frame(left, bg=BORDER, width=56, height=8)
             bg_cap.place(x=190, y=yp+2)
             bar_cap = tk.Frame(bg_cap, bg=BORDER, width=0, height=8)
             bar_cap.place(x=0, y=0)
             self._zona_cap_bars.append(bar_cap)
 
-        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=416)
+        tk.Frame(left, bg=BORDER, height=1, width=264).place(x=18, y=434)
 
         self.progreso_var = tk.StringVar(value="")
         self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
                                      font=self.f_status, fg=WARNING, bg=PANEL,
                                      justify="center", wraplength=264)
-        self.prog_label.place(x=18, y=424, width=264)
+        self.prog_label.place(x=18, y=440, width=264)
 
-        self.timer_var = tk.StringVar(value="")
+        # timer + paso actual
+        self.timer_var    = tk.StringVar(value="")
+        self.paso_txt_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.timer_var,
                  font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=468, width=264, anchor="nw")
+                 ).place(x=18, y=480, anchor="nw")
+        tk.Label(left, textvariable=self.paso_txt_var,
+                 font=self.f_zona, fg=SUBTEXT, bg=PANEL,
+                 wraplength=160).place(x=62, y=488, anchor="nw")
 
         tk.Button(left, text="<  Volver", font=self.f_label,
                   fg=SUBTEXT, bg=PANEL, relief="flat",
                   cursor="hand2", command=self._volver).place(x=18, y=556)
 
+        # ── camara ────────────────────────────────────────────────────────────
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
         self.cam_label = tk.Label(right, bg="#080A0F")
@@ -546,7 +584,46 @@ class App(tk.Tk):
                     col = SUCCESS if p > 0.6 else WARNING if p > 0.3 else ACCENT
                     bar.config(width=w, bg=col)
 
-    # ── registro: escaneo por tiempo ──────────────────────────────────────────
+    def _activar_paso_ui(self, paso_idx, progreso_paso=0.0):
+        """Actualiza visualmente los indicadores de pasos."""
+        if not hasattr(self, "_paso_frames"):
+            return
+        paso_w = 46
+        for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
+            if i < paso_idx:
+                # completado — verde
+                pf.config(bg=SUCCESS)
+                li.config(fg=BG, bg=SUCCESS)
+                ln.config(fg=BG, bg=SUCCESS)
+                bp.master.config(bg=SUCCESS)
+                bp.config(width=paso_w-4, bg=SUCCESS)
+            elif i == paso_idx:
+                # activo — azul con barra que avanza
+                pf.config(bg=CARD)
+                li.config(fg=ACCENT, bg=CARD)
+                ln.config(fg=ACCENT, bg=CARD)
+                bp.master.config(bg=BORDER)
+                bp.config(width=int(progreso_paso*(paso_w-4)), bg=ACCENT)
+            else:
+                # pendiente — gris
+                pf.config(bg=BORDER)
+                li.config(fg=SUBTEXT, bg=BORDER)
+                ln.config(fg=SUBTEXT, bg=BORDER)
+                bp.master.config(bg="#111")
+                bp.config(width=0, bg=SUBTEXT)
+
+    def _resetear_pasos_ui(self):
+        if not hasattr(self, "_paso_frames"):
+            return
+        paso_w = 46
+        for pf, li, ln, bp in self._paso_frames:
+            pf.config(bg=BORDER)
+            li.config(fg=SUBTEXT, bg=BORDER)
+            ln.config(fg=SUBTEXT, bg=BORDER)
+            bp.master.config(bg="#111")
+            bp.config(width=0)
+
+    # ── registro: escaneo multi-paso ──────────────────────────────────────────
     def _iniciar_registro(self):
         nombre = self.nombre_var.get().strip()
         cuenta = self.cuenta_var.get().strip()
@@ -558,6 +635,7 @@ class App(tk.Tk):
         self.progreso_var.set("Preparando escaneo...")
         self.prog_label.config(fg=WARNING)
         self.timer_var.set("")
+        self.after(0, self._resetear_pasos_ui)
         threading.Thread(target=self._capturar_registro,
                          args=(nombre, cuenta), daemon=True).start()
 
@@ -570,109 +648,147 @@ class App(tk.Tk):
                 "Numero de cuenta ya existe."))
             self.after(0, lambda: self.prog_label.config(fg=DANGER))
             self.after(0, lambda: self.cap_btn.config(
-                state="normal", bg=ACCENT, text="CAPTURAR ROSTRO"))
+                state="normal", bg=ACCENT, text="INICIAR ESCANEO"))
             return
 
-        vectores = []
-        pesos_l  = []
-        t_inicio = time.time()
-        t_fin    = t_inicio + TIEMPO_ESCANEO
-        ultimo   = None
-
+        # acumuladores globales (todos los pasos)
+        todos_vectores = []
+        todos_pesos    = []
         self._zona_cap_acum = np.zeros(N_ZONAS, dtype=np.float32)
         self.after(0, self._reset_cap_bars)
-        self.after(0, lambda: self.status_var.set(
-            "Mira directo a la camara — escaneo iniciado"))
 
-        while time.time() < t_fin and self.cam_running:
-            elapsed  = time.time() - t_inicio
-            restante = max(0.0, TIEMPO_ESCANEO - elapsed)
-            progreso = elapsed / TIEMPO_ESCANEO
+        # calcular offsets de tiempo de cada paso
+        t_offsets = []
+        acum = 0.0
+        for p in PASOS_REGISTRO:
+            t_offsets.append(acum)
+            acum += p[4]
 
-            instruccion = GUIA_TIEMPO[-1][2]
-            for (t0, t1, txt) in GUIA_TIEMPO:
-                if t0 <= elapsed < t1:
-                    instruccion = txt
-                    break
+        t_global_inicio = time.time()
+        ultimo_analisis = -1
 
-            seg = int(restante) + 1
-            self.after(0, lambda s=seg: self.timer_var.set(f"{s}s"))
-            self.after(0, lambda pw=int(progreso*BAR_W):
-                       self.prog_bar.config(width=pw))
+        for paso_idx, (_, icono, instruccion, etiqueta, duracion, modo_det) in enumerate(PASOS_REGISTRO):
+            vectores_paso = []
+            t_paso_inicio = time.time()
+            t_paso_fin    = t_paso_inicio + duracion
+            t_global_offset = t_offsets[paso_idx]
 
-            # leer del buffer de analisis — _loop_analisis ya hizo el trabajo
-            with self._analisis_lock:
-                frame_id = self._analisis["frame_id"]
-                v        = self._analisis["vector"]
-                p        = self._analisis["pesos"]
+            # cambiar modo de deteccion para este paso
+            self._modo_deteccion = modo_det
 
-            if frame_id == ultimo:
-                time.sleep(0.04)
-                continue
-
-            ultimo = frame_id
-
-            if v is not None and p is not None and np.sum(p > 0.15) >= 2:
-                vectores.append(v)
-                pesos_l.append(p)
-                n         = len(vectores)
-                zonas_vis = int(np.sum(p > 0.15))
-
-                for iz in range(N_ZONAS):
-                    if p[iz] > self._zona_cap_acum[iz]:
-                        self._zona_cap_acum[iz] = p[iz]
-
-                self._set_overlay((0, 255, 136),
-                                  f"{instruccion}  [{n} muestras]")
-                self.after(0, lambda nv=n, zv=zonas_vis:
-                           self.progreso_var.set(
-                               f"{nv} muestras  |  {zv}/7 zonas"))
-                self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
-
-                snap = self._zona_cap_acum.copy()
-                self.after(0, lambda s=snap: self._update_cap_bars(s))
-            else:
-                self._set_overlay((255, 184, 48), instruccion)
-                self.after(0, lambda: self.prog_label.config(fg=WARNING))
-
+            desc_paso = f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}"
             self.after(0, lambda i=instruccion: self.status_var.set(i))
-            time.sleep(0.04)
+            self.after(0, lambda d=desc_paso: self.paso_desc_var.set(d)
+                       if hasattr(self, "paso_desc_var") else None)
+            self.after(0, lambda pi=paso_idx: self._activar_paso_ui(pi, 0.0))
+            self._set_overlay((255,184,48),
+                              f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
 
-        # ── fin del tiempo ────────────────────────────────────────────────────
+            while time.time() < t_paso_fin and self.cam_running:
+                elapsed_paso   = time.time() - t_paso_inicio
+                elapsed_global = t_global_offset + elapsed_paso
+                progreso_paso  = elapsed_paso / duracion
+                progreso_total = elapsed_global / TIEMPO_ESCANEO
+                restante_paso  = max(0.0, duracion - elapsed_paso)
+
+                seg = int(restante_paso) + 1
+                self.after(0, lambda s=seg: self.timer_var.set(f"{s}s"))
+                self.after(0, lambda pt=int(progreso_total*BAR_W):
+                           self.prog_bar.config(width=pt))
+                self.after(0, lambda pi=paso_idx, pp=progreso_paso:
+                           self._activar_paso_ui(pi, pp))
+                self.after(0, lambda pi=paso_idx, e=etiqueta:
+                           self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
+                           if hasattr(self, "paso_txt_var") else None)
+
+                # leer del buffer de analisis
+                with self._analisis_lock:
+                    frame_id = self._analisis["frame_id"]
+                    v        = self._analisis["vector"]
+                    p        = self._analisis["pesos"]
+
+                if frame_id != ultimo_analisis and v is not None and \
+                        p is not None and np.sum(p > 0.15) >= 2:
+                    ultimo_analisis = frame_id
+                    vectores_paso.append(v)
+                    todos_vectores.append(v)
+                    todos_pesos.append(p)
+
+                    for iz in range(N_ZONAS):
+                        if p[iz] > self._zona_cap_acum[iz]:
+                            self._zona_cap_acum[iz] = p[iz]
+
+                    snap = self._zona_cap_acum.copy()
+                    self.after(0, lambda s=snap: self._update_cap_bars(s))
+
+                    n_total = len(todos_vectores)
+                    zv = int(np.sum(p > 0.15))
+                    self._set_overlay((0, 255, 136),
+                                      f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
+                    self.after(0, lambda nt=n_total, zv=zv:
+                               self.progreso_var.set(
+                                   f"Total: {nt} muestras  |  {zv}/7 zonas"))
+                    self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
+                else:
+                    self._set_overlay((255,184,48),
+                                      f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
+                    self.after(0, lambda: self.prog_label.config(fg=WARNING))
+
+                self.after(0, lambda pi=paso_idx, e=etiqueta:
+                           self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
+                           if hasattr(self, "paso_txt_var") else None)
+
+                time.sleep(0.04)
+
+            # paso completado — marcarlo verde
+            self.after(0, lambda pi=paso_idx: self._activar_paso_ui(pi+1, 0.0))
+
+            # aviso si el paso tuvo pocas muestras
+            if len(vectores_paso) < MUESTRAS_MIN:
+                self.after(0, lambda e=etiqueta, n=len(vectores_paso):
+                           self.progreso_var.set(
+                               f"Paso {e}: solo {n} muestras.\n"
+                               f"Mantente mas cerca de la camara."))
+
+        # ── fin de todos los pasos ────────────────────────────────────────────
+        self._modo_deteccion = "auto"   # restaurar para acceso
         self._set_overlay(None, "")
         self.after(0, lambda: self.timer_var.set(""))
+        self.after(0, lambda: self.paso_txt_var.set(""))
         self.after(0, lambda: self.prog_bar.config(width=BAR_W))
 
-        if len(vectores) >= MUESTRAS_MIN:
-            p_final = np.mean(pesos_l, axis=0).astype(np.float32)
-            guardar_vector_unico(pid, vectores, pesos_l)
+        if len(todos_vectores) >= MUESTRAS_MIN * N_PASOS:
+            p_final = np.mean(todos_pesos, axis=0).astype(np.float32)
+            guardar_vector_unico(pid, todos_vectores, todos_pesos)
 
             self.after(0, lambda pf=p_final: self._fijar_zonas(pf))
             self.after(0, lambda: self.prog_bar.config(bg=SUCCESS))
             self.after(0, lambda: self.status_var.set(
-                f"Registro completo — {len(vectores)} muestras capturadas"))
+                f"Registro completo — {len(todos_vectores)} muestras en {N_PASOS} poses"))
             self.after(0, lambda nv=nombre: self.progreso_var.set(
-                f"Listo. {nv} registrado\ncon {len(vectores)} muestras."))
+                f"Listo. {nv} registrado\n"
+                f"con {len(todos_vectores)} muestras."))
             self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
             self.after(0, lambda: self.cap_btn.config(
                 state="normal", bg=SUCCESS, text="REGISTRO COMPLETO ✓"))
             self.after(0, lambda: self.nombre_var.set(""))
             self.after(0, lambda: self.cuenta_var.set(""))
             self.after(3500, lambda: self.cap_btn.config(
-                bg=ACCENT, text="CAPTURAR ROSTRO"))
+                bg=ACCENT, text="INICIAR ESCANEO"))
         else:
             try:
                 from database import eliminar_persona
                 eliminar_persona(pid)
             except Exception:
                 pass
-            self.after(0, lambda nv=len(vectores): self.progreso_var.set(
-                f"Solo {nv} muestras validas.\nIntentalo de nuevo."))
+            self.after(0, lambda nv=len(todos_vectores): self.progreso_var.set(
+                f"Solo {nv} muestras totales.\nIntentalo de nuevo."))
             self.after(0, lambda: self.prog_label.config(fg=DANGER))
             self.after(0, lambda: self.status_var.set(
                 "Acercate mas a la camara e intentalo de nuevo"))
             self.after(0, lambda: self.cap_btn.config(
-                state="normal", bg=ACCENT, text="CAPTURAR ROSTRO"))
+                state="normal", bg=ACCENT, text="INICIAR ESCANEO"))
+            self.after(0, self._resetear_pasos_ui)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA ACCESO

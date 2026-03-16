@@ -43,16 +43,49 @@ Zonas (sobre imagen 128×128):
 
 import cv2
 import numpy as np
+import os
 
-# ─── inicializar detector y CLAHE ─────────────────────────────────────────────
-_detector = None
-_clahe    = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+# ─── tipos de deteccion ───────────────────────────────────────────────────────
+TIPO_FRONTAL  = "frontal"
+TIPO_PERFIL_D = "perfil_der"   # cara girada a la derecha (perfil izquierdo en imagen)
+TIPO_PERFIL_I = "perfil_izq"   # cara girada a la izquierda (flip del perfil)
+TIPO_ABAJO    = "abajo"        # cara inclinada hacia abajo (frontal con ajuste)
 
-def _get_detector(haar_path="haarcascade_frontalface_default.xml"):
-    global _detector
-    if _detector is None:
-        _detector = cv2.CascadeClassifier(haar_path)
-    return _detector
+# ─── inicializar detectores y CLAHE ───────────────────────────────────────────
+_detector_frontal = None
+_detector_perfil  = None
+_clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+
+def _encontrar_xml(nombre):
+    """Busca un XML de haar primero local, luego en cv2.data."""
+    if os.path.exists(nombre):
+        return nombre
+    try:
+        ruta = os.path.join(cv2.data.haarcascades, nombre)
+        if os.path.exists(ruta):
+            return ruta
+    except Exception:
+        pass
+    return None
+
+def _get_detector_frontal(haar_path=None):
+    global _detector_frontal
+    if _detector_frontal is None:
+        path = haar_path or _encontrar_xml("haarcascade_frontalface_default.xml")
+        _detector_frontal = cv2.CascadeClassifier(path)
+    return _detector_frontal
+
+def _get_detector_perfil():
+    global _detector_perfil
+    if _detector_perfil is None:
+        path = _encontrar_xml("haarcascade_profileface.xml")
+        if path:
+            _detector_perfil = cv2.CascadeClassifier(path)
+            print("[HAAR] Detector de perfil cargado.")
+        else:
+            print("[HAAR] haarcascade_profileface.xml no encontrado — perfiles desactivados.")
+            _detector_perfil = False   # marcar como no disponible
+    return _detector_perfil if _detector_perfil else None
 
 
 # ─── mapa LBP uniforme (se construye una sola vez) ───────────────────────────
@@ -172,33 +205,82 @@ def preprocesar_cara(gris_zona):
     return blur
 
 
-def extraer_caracteristicas(frame, haar_path="haarcascade_frontalface_default.xml"):
+def extraer_caracteristicas(frame, haar_path="haarcascade_frontalface_default.xml",
+                             modo="auto"):
     """
-    Detecta la cara mas grande y extrae el vector de caracteristicas.
+    Detecta la cara mas grande usando detectores frontal Y de perfil.
+
+    Parametro modo:
+      "auto"    — prueba frontal primero, luego perfil si no encuentra
+      "frontal" — solo detector frontal
+      "perfil"  — prueba perfil izquierdo y derecho (voltea imagen)
+      "abajo"   — frontal con parametros relajados para cara inclinada
 
     Retorna:
-        vector    : np.ndarray float32 de dim VECTOR_DIM (413) — histogramas LBP
-        pesos     : np.ndarray float32 de dim N_ZONAS   (7)   — peso por zona
-        coords    : (x, y, w, h) de la cara en el frame original
-        o bien (None, None, None) si no se detecto cara.
+        vector    : np.ndarray float32 dim VECTOR_DIM (413)
+        pesos     : np.ndarray float32 dim N_ZONAS (7)
+        coords    : (x, y, w, h) en el frame original
+        tipo      : str — TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
+        o bien (None, None, None, None) si no hay cara.
     """
-    det  = _get_detector(haar_path)
-    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    det_f = _get_detector_frontal(haar_path)
+    det_p = _get_detector_perfil()
 
-    # preprocesar imagen completa antes de detectar
+    gris      = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gris_proc = preprocesar_cara(gris)
+    h_img, w_img = gris_proc.shape
 
-    caras = det.detectMultiScale(gris_proc, scaleFactor=1.1,
-                                  minNeighbors=5, minSize=(70, 70))
-    if len(caras) == 0:
-        return None, None, None
+    cara_rect = None
+    tipo_det  = TIPO_FRONTAL
 
-    x, y, w, h = sorted(caras, key=lambda c: c[2]*c[3], reverse=True)[0]
-    recorte    = gris_proc[y:y+h, x:x+w]
-    cara128    = cv2.resize(recorte, (128, 128))
+    # ── 1. Intentar frontal ───────────────────────────────────────────────────
+    if modo in ("auto", "frontal", "abajo"):
+        params = {"scaleFactor": 1.1, "minNeighbors": 5, "minSize": (70, 70)}
+        if modo == "abajo":
+            # parametros mas permisivos para cara inclinada
+            params = {"scaleFactor": 1.1, "minNeighbors": 3, "minSize": (60, 60)}
+        caras = det_f.detectMultiScale(gris_proc, **params)
+        if len(caras) > 0:
+            cara_rect = sorted(caras, key=lambda c: c[2]*c[3], reverse=True)[0]
+            tipo_det  = TIPO_ABAJO if modo == "abajo" else TIPO_FRONTAL
 
-    hists  = []
-    pesos  = []
+    # ── 2. Intentar perfil si no hay frontal ──────────────────────────────────
+    if cara_rect is None and det_p and modo in ("auto", "perfil"):
+        # perfil derecho (cara mirando a la derecha = perfil izquierdo en imagen)
+        caras_p = det_p.detectMultiScale(gris_proc, scaleFactor=1.1,
+                                          minNeighbors=4, minSize=(60, 60))
+        if len(caras_p) > 0:
+            cara_rect = sorted(caras_p, key=lambda c: c[2]*c[3], reverse=True)[0]
+            tipo_det  = TIPO_PERFIL_D
+
+        # perfil izquierdo (voltear imagen horizontalmente)
+        if cara_rect is None:
+            gris_flip = cv2.flip(gris_proc, 1)
+            caras_f   = det_p.detectMultiScale(gris_flip, scaleFactor=1.1,
+                                                minNeighbors=4, minSize=(60, 60))
+            if len(caras_f) > 0:
+                xf, yf, wf, hf = sorted(caras_f,
+                                         key=lambda c: c[2]*c[3],
+                                         reverse=True)[0]
+                # convertir coordenadas de vuelta al frame original
+                cara_rect = (w_img - xf - wf, yf, wf, hf)
+                tipo_det  = TIPO_PERFIL_I
+
+    if cara_rect is None:
+        return None, None, None, None
+
+    x, y, w, h = cara_rect
+    # asegurar que el recorte este dentro de los limites
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(w_img, x+w), min(h_img, y+h)
+    recorte = gris_proc[y1:y2, x1:x2]
+    if recorte.size == 0:
+        return None, None, None, None
+
+    cara128 = cv2.resize(recorte, (128, 128))
+
+    hists = []
+    pesos = []
     for r0, r1, c0, c1, _ in ZONAS:
         hist, var = _histograma_zona(cara128, r0, r1, c0, c1)
         hists.append(hist)
@@ -207,7 +289,7 @@ def extraer_caracteristicas(frame, haar_path="haarcascade_frontalface_default.xm
     vector = np.concatenate(hists).astype(np.float32)
     pesos  = np.array(pesos, dtype=np.float32)
 
-    return vector, pesos, (x, y, w, h)
+    return vector, pesos, (x1, y1, x2-x1, y2-y1), tipo_det
 
 
 def distancia_ponderada(v1, p1, v2, p2):
@@ -247,17 +329,40 @@ def distancia_ponderada(v1, p1, v2, p2):
     return dist_total / peso_total, zonas_usadas
 
 
-def dibujar_overlay(frame, coords, color, texto=""):
+def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     x, y, w, h = coords
     L = max(18, w // 4)
+
+    # color de esquinas segun tipo de deteccion
+    color_esquinas = color
+    if tipo == TIPO_PERFIL_D:
+        color_esquinas = (255, 165, 0)    # naranja — perfil derecho
+    elif tipo == TIPO_PERFIL_I:
+        color_esquinas = (0, 165, 255)    # azul claro — perfil izquierdo
+    elif tipo == TIPO_ABAJO:
+        color_esquinas = (180, 0, 255)    # morado — inclinado abajo
+
     for p1, p2 in [
         ((x,   y),   (x+L, y)),     ((x,   y),   (x,   y+L)),
         ((x+w, y),   (x+w-L, y)),   ((x+w, y),   (x+w, y+L)),
         ((x,   y+h), (x+L, y+h)),   ((x,   y+h), (x,   y+h-L)),
         ((x+w, y+h), (x+w-L, y+h)), ((x+w, y+h), (x+w, y+h-L)),
     ]:
-        cv2.line(frame, p1, p2, color, 2)
+        cv2.line(frame, p1, p2, color_esquinas, 2)
+
+    # etiqueta del tipo de deteccion
+    tipo_txt = {
+        TIPO_FRONTAL:  "FRONTAL",
+        TIPO_PERFIL_D: "PERFIL DER",
+        TIPO_PERFIL_I: "PERFIL IZQ",
+        TIPO_ABAJO:    "INCLINADO",
+    }.get(tipo, "")
+
+    if tipo_txt:
+        cv2.putText(frame, tipo_txt,
+                    (x, y + h + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_esquinas, 1)
     if texto:
-        cv2.putText(frame, texto, (x, y - 10),
+        cv2.putText(frame, texto, (x, max(14, y - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     return frame
