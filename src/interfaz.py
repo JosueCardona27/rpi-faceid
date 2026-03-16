@@ -579,44 +579,55 @@ class App(tk.Tk):
                     col = SUCCESS if p > 0.6 else WARNING if p > 0.3 else ACCENT
                     bar.config(width=w, bg=col)
 
+    def _safe(self, fn):
+        """Ejecuta fn() solo si la camara sigue corriendo (evita TclError)."""
+        if self.cam_running:
+            try:
+                fn()
+            except Exception:
+                pass
+
     def _activar_paso_ui(self, paso_idx, progreso_paso=0.0):
         """Actualiza visualmente los indicadores de pasos."""
-        if not hasattr(self, "_paso_frames"):
+        if not hasattr(self, "_paso_frames") or not self.cam_running:
             return
         paso_w = 46
-        for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
-            if i < paso_idx:
-                # completado — verde
-                pf.config(bg=SUCCESS)
-                li.config(fg=BG, bg=SUCCESS)
-                ln.config(fg=BG, bg=SUCCESS)
-                bp.master.config(bg=SUCCESS)
-                bp.config(width=paso_w-4, bg=SUCCESS)
-            elif i == paso_idx:
-                # activo — azul con barra que avanza
-                pf.config(bg=CARD)
-                li.config(fg=ACCENT, bg=CARD)
-                ln.config(fg=ACCENT, bg=CARD)
-                bp.master.config(bg=BORDER)
-                bp.config(width=int(progreso_paso*(paso_w-4)), bg=ACCENT)
-            else:
-                # pendiente — gris
-                pf.config(bg=BORDER)
-                li.config(fg=SUBTEXT, bg=BORDER)
-                ln.config(fg=SUBTEXT, bg=BORDER)
-                bp.master.config(bg="#111")
-                bp.config(width=0, bg=SUBTEXT)
+        try:
+            for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
+                if i < paso_idx:
+                    pf.config(bg=SUCCESS)
+                    li.config(fg=BG, bg=SUCCESS)
+                    ln.config(fg=BG, bg=SUCCESS)
+                    bp.master.config(bg=SUCCESS)
+                    bp.config(width=paso_w-4, bg=SUCCESS)
+                elif i == paso_idx:
+                    pf.config(bg=CARD)
+                    li.config(fg=ACCENT, bg=CARD)
+                    ln.config(fg=ACCENT, bg=CARD)
+                    bp.master.config(bg=BORDER)
+                    bp.config(width=int(progreso_paso*(paso_w-4)), bg=ACCENT)
+                else:
+                    pf.config(bg=BORDER)
+                    li.config(fg=SUBTEXT, bg=BORDER)
+                    ln.config(fg=SUBTEXT, bg=BORDER)
+                    bp.master.config(bg="#111")
+                    bp.config(width=0, bg=SUBTEXT)
+        except Exception:
+            pass
 
     def _resetear_pasos_ui(self):
         if not hasattr(self, "_paso_frames"):
             return
         paso_w = 46
-        for pf, li, ln, bp in self._paso_frames:
-            pf.config(bg=BORDER)
-            li.config(fg=SUBTEXT, bg=BORDER)
-            ln.config(fg=SUBTEXT, bg=BORDER)
-            bp.master.config(bg="#111")
-            bp.config(width=0)
+        try:
+            for pf, li, ln, bp in self._paso_frames:
+                pf.config(bg=BORDER)
+                li.config(fg=SUBTEXT, bg=BORDER)
+                ln.config(fg=SUBTEXT, bg=BORDER)
+                bp.master.config(bg="#111")
+                bp.config(width=0)
+        except Exception:
+            pass
 
     # ── registro: escaneo multi-paso ──────────────────────────────────────────
     def _iniciar_registro(self):
@@ -639,11 +650,13 @@ class App(tk.Tk):
 
         pid = registrar_persona(cuenta, nombre)
         if pid == -1:
-            self.after(0, lambda: self.progreso_var.set(
-                "Numero de cuenta ya existe."))
-            self.after(0, lambda: self.prog_label.config(fg=DANGER))
-            self.after(0, lambda: self.cap_btn.config(
-                state="normal", bg=ACCENT, text="INICIAR ESCANEO"))
+            self.after(0, lambda: self._safe(
+                lambda: self.progreso_var.set("Numero de cuenta ya existe.")))
+            self.after(0, lambda: self._safe(
+                lambda: self.prog_label.config(fg=DANGER)))
+            self.after(0, lambda: self._safe(
+                lambda: self.cap_btn.config(state="normal", bg=ACCENT,
+                                            text="INICIAR ESCANEO")))
             return
 
         # acumuladores: uno por angulo + global para barras
@@ -673,9 +686,11 @@ class App(tk.Tk):
             # activar modo de deteccion y UI para este paso
             self._modo_deteccion = modo_det
             desc_paso = f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}"
-            self.after(0, lambda i=instruccion: self.status_var.set(i))
-            self.after(0, lambda d=desc_paso: self.paso_desc_var.set(d)
-                       if hasattr(self, "paso_desc_var") else None)
+            self.after(0, lambda i=instruccion: self._safe(
+                lambda: self.status_var.set(i)))
+            self.after(0, lambda d=desc_paso: self._safe(
+                lambda: self.paso_desc_var.set(d)
+                if hasattr(self, "paso_desc_var") else None))
             self.after(0, lambda pi=paso_idx: self._activar_paso_ui(pi, 0.0))
             self._set_overlay((255,184,48),
                               f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
@@ -699,7 +714,6 @@ class App(tk.Tk):
                         t_paso_activo += ahora - t_ultimo_tick
                     t_ultimo_tick = ahora
                 else:
-                    # angulo incorrecto o sin cara — pausar
                     t_ultimo_tick = None
 
                 restante_paso  = max(0.0, duracion - t_paso_activo)
@@ -708,25 +722,24 @@ class App(tk.Tk):
                 progreso_total = min(1.0, elapsed_global / TIEMPO_ESCANEO)
 
                 seg = int(restante_paso) + 1
-                self.after(0, lambda s=seg: self.timer_var.set(f"{s}s"))
-                self.after(0, lambda pt=int(progreso_total*BAR_W):
-                           self.prog_bar.config(width=pt))
+                self.after(0, lambda s=seg: self._safe(
+                    lambda: self.timer_var.set(f"{s}s")))
+                self.after(0, lambda pt=int(progreso_total*BAR_W): self._safe(
+                    lambda: self.prog_bar.config(width=pt)))
                 self.after(0, lambda pi=paso_idx, pp=progreso_paso:
                            self._activar_paso_ui(pi, pp))
-                self.after(0, lambda pi=paso_idx, e=etiqueta:
-                           self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
-                           if hasattr(self, "paso_txt_var") else None)
+                self.after(0, lambda pi=paso_idx, e=etiqueta: self._safe(
+                    lambda: self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
+                    if hasattr(self, "paso_txt_var") else None))
 
                 # ── procesar muestra si es nuevo frame ────────────────────────
                 if frame_id != ultimo_analisis:
                     ultimo_analisis = frame_id
 
                     if angulo_ok and np.sum(p > 0.15) >= 2:
-                        # muestra VALIDA — guardar por angulo
                         vectores_paso.append(v)
                         todos_vectores.append(v)
 
-                        # acumular en dict por angulo
                         if tipo_esperado not in vectores_angulo:
                             vectores_angulo[tipo_esperado] = {"vectores": [], "pesos": []}
                         vectores_angulo[tipo_esperado]["vectores"].append(v)
@@ -737,87 +750,90 @@ class App(tk.Tk):
                                 self._zona_cap_acum[iz] = p[iz]
 
                         snap = self._zona_cap_acum.copy()
-                        self.after(0, lambda s=snap: self._update_cap_bars(s))
+                        self.after(0, lambda s=snap: self._safe(
+                            lambda: self._update_cap_bars(s)))
 
                         n_total = len(todos_vectores)
                         zv = int(np.sum(p > 0.15))
                         self._set_overlay(
                             (0, 255, 136),
                             f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
-                        self.after(0, lambda nt=n_total, zv=zv:
-                                   self.progreso_var.set(
-                                       f"Total: {nt} muestras  |  {zv}/7 zonas"))
-                        self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
+                        self.after(0, lambda nt=n_total, zv=zv: self._safe(
+                            lambda: self.progreso_var.set(
+                                f"Total: {nt} muestras  |  {zv}/7 zonas")))
+                        self.after(0, lambda: self._safe(
+                            lambda: self.prog_label.config(fg=SUCCESS)))
 
                     elif cara_presente and not angulo_ok:
-                        # cara detectada pero angulo incorrecto — PAUSADO
                         self._set_overlay(
                             (255, 59, 92),
                             f"PAUSADO — {msg_correccion}")
-                        self.after(0, lambda mc=msg_correccion:
-                                   self.status_var.set(f"⏸ {mc}"))
-                        self.after(0, lambda: self.prog_label.config(fg=DANGER))
+                        self.after(0, lambda mc=msg_correccion: self._safe(
+                            lambda: self.status_var.set(f"⏸ {mc}")))
+                        self.after(0, lambda: self._safe(
+                            lambda: self.prog_label.config(fg=DANGER)))
 
                     else:
-                        # sin cara — PAUSADO esperando
                         self._set_overlay(
                             (255, 184, 48),
                             f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
-                        self.after(0, lambda i=instruccion:
-                                   self.status_var.set(i))
-                        self.after(0, lambda: self.prog_label.config(fg=WARNING))
+                        self.after(0, lambda i=instruccion: self._safe(
+                            lambda: self.status_var.set(i)))
+                        self.after(0, lambda: self._safe(
+                            lambda: self.prog_label.config(fg=WARNING)))
 
                 time.sleep(0.04)
 
-            # paso completado — marcarlo verde
+            # paso completado
             self.after(0, lambda pi=paso_idx: self._activar_paso_ui(pi+1, 0.0))
 
-            # aviso si el paso tuvo pocas muestras
             if len(vectores_paso) < MUESTRAS_MIN:
-                self.after(0, lambda e=etiqueta, n=len(vectores_paso):
-                           self.progreso_var.set(
-                               f"Paso {e}: solo {n} muestras.\n"
-                               f"Mantente mas cerca de la camara."))
+                self.after(0, lambda e=etiqueta, n=len(vectores_paso): self._safe(
+                    lambda: self.progreso_var.set(
+                        f"Paso {e}: solo {n} muestras.\n"
+                        f"Mantente mas cerca de la camara.")))
 
         # ── fin de todos los pasos ────────────────────────────────────────────
-        self._modo_deteccion = "auto"   # restaurar para acceso
+        self._modo_deteccion = "auto"
         self._set_overlay(None, "")
-        self.after(0, lambda: self.timer_var.set(""))
-        self.after(0, lambda: self.paso_txt_var.set(""))
-        self.after(0, lambda: self.prog_bar.config(width=BAR_W))
+        self.after(0, lambda: self._safe(lambda: self.timer_var.set("")))
+        self.after(0, lambda: self._safe(lambda: self.paso_txt_var.set("")))
+        self.after(0, lambda: self._safe(lambda: self.prog_bar.config(width=BAR_W)))
 
         if len(todos_vectores) >= MUESTRAS_MIN * N_PASOS:
             guardar_vectores_por_angulo(pid, vectores_angulo)
 
-            # congelar barras con el acumulado de zonas
-            self.after(0, lambda pf=self._zona_cap_acum.copy():
-                       self._fijar_zonas(pf))
-            self.after(0, lambda: self.prog_bar.config(bg=SUCCESS))
-            self.after(0, lambda: self.status_var.set(
-                f"Registro completo — {len(todos_vectores)} muestras en {N_PASOS} poses"))
-            self.after(0, lambda nv=nombre: self.progreso_var.set(
-                f"Listo. {nv} registrado\n"
-                f"con {len(todos_vectores)} muestras."))
-            self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
-            self.after(0, lambda: self.cap_btn.config(
-                state="normal", bg=SUCCESS, text="REGISTRO COMPLETO ✓"))
-            self.after(0, lambda: self.nombre_var.set(""))
-            self.after(0, lambda: self.cuenta_var.set(""))
-            self.after(3500, lambda: self.cap_btn.config(
-                bg=ACCENT, text="INICIAR ESCANEO"))
+            self.after(0, lambda pf=self._zona_cap_acum.copy(): self._safe(
+                lambda: self._fijar_zonas(pf)))
+            self.after(0, lambda: self._safe(
+                lambda: self.prog_bar.config(bg=SUCCESS)))
+            self.after(0, lambda: self._safe(lambda: self.status_var.set(
+                f"Registro completo — {len(todos_vectores)} muestras en {N_PASOS} poses")))
+            self.after(0, lambda nv=nombre: self._safe(lambda: self.progreso_var.set(
+                f"Listo. {nv} registrado\ncon {len(todos_vectores)} muestras.")))
+            self.after(0, lambda: self._safe(
+                lambda: self.prog_label.config(fg=SUCCESS)))
+            self.after(0, lambda: self._safe(lambda: self.cap_btn.config(
+                state="normal", bg=SUCCESS, text="REGISTRO COMPLETO ✓")))
+            self.after(0, lambda: self._safe(lambda: self.nombre_var.set("")))
+            self.after(0, lambda: self._safe(lambda: self.cuenta_var.set("")))
+            self.after(3500, lambda: self._safe(lambda: self.cap_btn.config(
+                bg=ACCENT, text="INICIAR ESCANEO")))
         else:
             try:
                 from database import eliminar_persona
                 eliminar_persona(pid)
             except Exception:
                 pass
-            self.after(0, lambda nv=len(todos_vectores): self.progreso_var.set(
-                f"Solo {nv} muestras totales.\nIntentalo de nuevo."))
-            self.after(0, lambda: self.prog_label.config(fg=DANGER))
-            self.after(0, lambda: self.status_var.set(
-                "Acercate mas a la camara e intentalo de nuevo"))
-            self.after(0, lambda: self.cap_btn.config(
-                state="normal", bg=ACCENT, text="INICIAR ESCANEO"))
+            self.after(0, lambda nv=len(todos_vectores): self._safe(
+                lambda: self.progreso_var.set(
+                    f"Solo {nv} muestras totales.\nIntentalo de nuevo.")))
+            self.after(0, lambda: self._safe(
+                lambda: self.prog_label.config(fg=DANGER)))
+            self.after(0, lambda: self._safe(lambda: self.status_var.set(
+                "Acercate mas a la camara e intentalo de nuevo")))
+            self.after(0, lambda: self._safe(lambda: self.cap_btn.config(
+                state="normal", bg=ACCENT, text="INICIAR ESCANEO")))
             self.after(0, self._resetear_pasos_ui)
 
     # ══════════════════════════════════════════════════════════════════════════
