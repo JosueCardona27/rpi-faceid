@@ -270,8 +270,8 @@ def _clasificar_por_asimetria(cara128):
 
     # Umbrales calibrados a partir de datos reales de la RPi
     # Frontal llega hasta +-0.09, perfiles empiezan desde +-0.11
-    UMBRAL_YAW_DER  =  0.13   # para PERFIL_DER (ratio_h positivo)
-    UMBRAL_YAW_IZQ  = -0.11   # para PERFIL_IZQ (ratio_h negativo)
+    UMBRAL_YAW_DER  =  0.14   # para PERFIL_DER
+    UMBRAL_YAW_IZQ  = -0.11   # para PERFIL_IZQ
     UMBRAL_ABAJO    =  0.14   # para ABAJO (ratio_v positivo o negativo)
 
     if rh > UMBRAL_YAW_DER:
