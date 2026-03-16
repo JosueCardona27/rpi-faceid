@@ -51,128 +51,13 @@ TIPO_PERFIL_D = "perfil_der"
 TIPO_PERFIL_I = "perfil_izq"
 TIPO_ABAJO    = "abajo"
 
-# ─── MediaPipe Face Mesh — deteccion + angulos 3D precisos ───────────────────
-_mp_face  = None
-_mp_mesh  = None
-_clahe    = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+_clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 
-def _get_mp():
-    """Inicializa MediaPipe Face Mesh una sola vez."""
-    global _mp_face, _mp_mesh
-    if _mp_mesh is None:
-        import mediapipe as mp
-        _mp_face = mp.solutions.face_mesh
-        _mp_mesh = _mp_face.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5)
-        print("[MP] MediaPipe Face Mesh iniciado.")
-    return _mp_mesh
-
-
-def _detectar_y_clasificar(frame):
-    """
-    Usa MediaPipe Face Mesh para:
-      1. Detectar la cara y obtener bounding box
-      2. Calcular angulos de cabeza con landmarks 3D reales
-
-    Angulos calculados (estimacion PnP simplificada):
-      - Yaw   (giro horizontal): positivo = cara girando a su izquierda
-      - Pitch (inclinacion):     positivo = cara mirando hacia arriba
-
-    Retorna: (bbox, tipo) donde bbox = (x,y,w,h) o None si no hay cara.
-    """
-    mesh = _get_mp()
-    h_img, w_img = frame.shape[:2]
-
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    resultado = mesh.process(rgb)
-
-    if not resultado.multi_face_landmarks:
-        return None, None
-
-    lm = resultado.multi_face_landmarks[0].landmark
-
-    # ── Bounding box a partir de landmarks ───────────────────────────────────
-    xs = [l.x * w_img for l in lm]
-    ys = [l.y * h_img for l in lm]
-    x1, y1 = int(min(xs)), int(min(ys))
-    x2, y2 = int(max(xs)), int(max(ys))
-    margen = int((x2 - x1) * 0.15)
-    x1 = max(0, x1 - margen)
-    y1 = max(0, y1 - margen)
-    x2 = min(w_img, x2 + margen)
-    y2 = min(h_img, y2 + margen)
-    bbox = (x1, y1, x2 - x1, y2 - y1)
-
-    # ── Calcular Yaw y Pitch con puntos clave ─────────────────────────────────
-    # Landmarks clave (indices MediaPipe 468-point mesh):
-    #   1  = punta nariz
-    #   33 = comisura ojo izquierdo (lado derecho en imagen espejada)
-    #   263 = comisura ojo derecho
-    #   152 = menton
-    #   10  = frente superior
-    #   234 = mejilla izquierda
-    #   454 = mejilla derecha
-
-    def pt(idx):
-        return np.array([lm[idx].x * w_img,
-                         lm[idx].y * h_img,
-                         lm[idx].z * w_img])
-
-    nariz    = pt(1)
-    ojo_izq  = pt(33)
-    ojo_der  = pt(263)
-    menton   = pt(152)
-    frente   = pt(10)
-    mejilla_izq = pt(234)
-    mejilla_der = pt(454)
-
-    # Centro de ojos
-    centro_ojos = (ojo_izq + ojo_der) / 2.0
-
-    # ── YAW: diferencia horizontal entre mejillas respecto a nariz ────────────
-    # Si cara gira a su derecha → mejilla_der queda mas cerca / mejilla_izq mas lejos
-    dist_izq = np.linalg.norm(nariz[:2] - mejilla_izq[:2])
-    dist_der = np.linalg.norm(nariz[:2] - mejilla_der[:2])
-    total_d  = dist_izq + dist_der + 1e-6
-    # yaw_ratio > 0 → mejilla izq mas lejos → cara girada a su derecha
-    # yaw_ratio < 0 → mejilla der mas lejos → cara girada a su izquierda
-    yaw_ratio = (dist_izq - dist_der) / total_d
-
-    # ── PITCH: posicion vertical de la nariz relativa a ojos y menton ─────────
-    # Normalizar por altura cara
-    altura_cara = abs(menton[1] - frente[1]) + 1e-6
-    # Posicion normalizada de nariz entre ojos(0) y menton(1)
-    pos_nariz_v = (nariz[1] - centro_ojos[1]) / altura_cara
-    # pos_nariz_v frontal ≈ 0.4
-    # cara hacia ABAJO → menton desaparece, nariz sube → pos < 0.35
-    # cara hacia ARRIBA → frente desaparece, nariz baja → pos > 0.50
-
-    # ── Clasificacion ─────────────────────────────────────────────────────────
-    UMBRAL_YAW   = 0.12   # >12% asimetria → perfil
-    UMBRAL_ABAJO = 0.34   # nariz muy alta en cara → mirando hacia abajo
-    UMBRAL_ARRIBA= 0.50   # nariz muy baja en cara → mirando hacia arriba
-
-    if yaw_ratio > UMBRAL_YAW:
-        return bbox, TIPO_PERFIL_D
-    elif yaw_ratio < -UMBRAL_YAW:
-        return bbox, TIPO_PERFIL_I
-    elif pos_nariz_v < UMBRAL_ABAJO:
-        return bbox, TIPO_ABAJO
-    elif pos_nariz_v > UMBRAL_ARRIBA:
-        return bbox, TIPO_ABAJO   # arriba extremo tb cuenta como ABAJO
-    else:
-        return bbox, TIPO_FRONTAL
-
-
-# ─── DNN fallback (si MediaPipe no esta disponible) ──────────────────────────
+# ─── DNN detector (SSD ResNet) ───────────────────────────────────────────────
 _dnn_net = None
 
 def _encontrar_dnn():
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+    base  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
     proto = os.path.join(base, "opencv_face_detector.prototxt")
     model = os.path.join(base, "opencv_face_detector.caffemodel")
     if os.path.exists(proto) and os.path.exists(model):
@@ -185,30 +70,205 @@ def _get_dnn():
         proto, model = _encontrar_dnn()
         if proto and model:
             _dnn_net = cv2.dnn.readNetFromCaffe(proto, model)
+            print(f"[DNN] Modelo cargado: {model}")
         else:
             _dnn_net = False
+            print("[DNN] WARN: modelo no encontrado")
     return _dnn_net if _dnn_net else None
 
-def _detectar_dnn_fallback(frame, conf_min=0.55):
+def _detectar_dnn(frame, conf_min=0.45):
+    """Detecta caras con DNN SSD. Retorna lista de (x,y,w,h,conf)."""
     net = _get_dnn()
     if net is None:
-        return None
+        return []
     h_img, w_img = frame.shape[:2]
     blob = cv2.dnn.blobFromImage(
         cv2.resize(frame, (300, 300)), 1.0,
         (300, 300), (104.0, 117.0, 123.0))
     net.setInput(blob)
     dets = net.forward()
+    caras = []
     for i in range(dets.shape[2]):
         conf = float(dets[0, 0, i, 2])
-        if conf >= conf_min:
-            x1 = max(0, int(dets[0,0,i,3]*w_img))
-            y1 = max(0, int(dets[0,0,i,4]*h_img))
-            x2 = min(w_img, int(dets[0,0,i,5]*w_img))
-            y2 = min(h_img, int(dets[0,0,i,6]*h_img))
-            if x2 > x1 and y2 > y1:
-                return (x1, y1, x2-x1, y2-y1)
-    return None
+        if conf < conf_min:
+            continue
+        x1 = max(0, int(dets[0,0,i,3] * w_img))
+        y1 = max(0, int(dets[0,0,i,4] * h_img))
+        x2 = min(w_img, int(dets[0,0,i,5] * w_img))
+        y2 = min(h_img, int(dets[0,0,i,6] * h_img))
+        if x2 > x1 and y2 > y1:
+            caras.append((x1, y1, x2-x1, y2-y1, conf))
+    caras.sort(key=lambda c: c[2]*c[3], reverse=True)
+    return caras
+
+
+# ─── Clasificacion de angulo con solvePnP ────────────────────────────────────
+# Puntos 3D canonicos de una cara promedio (en mm, origen en nariz)
+# Basados en el modelo de cara estandar de OpenCV head-pose estimation
+_PUNTOS_3D = np.array([
+    [ 0.0,    0.0,    0.0  ],   # Punta de la nariz
+    [ 0.0,   -63.6,  -12.5],   # Menton
+    [-43.3,   32.7,  -26.0],   # Comisura ojo izquierdo
+    [ 43.3,   32.7,  -26.0],   # Comisura ojo derecho
+    [-28.9,  -28.9,  -24.1],   # Comisura boca izquierda
+    [ 28.9,  -28.9,  -24.1],   # Comisura boca derecha
+], dtype=np.float64)
+
+# Detector de landmarks faciales de OpenCV (5 puntos: ojos, nariz, boca)
+_lm_detector = None
+
+def _get_lm_detector():
+    """Carga el detector de landmarks de OpenCV."""
+    global _lm_detector
+    if _lm_detector is None:
+        # Buscar el modelo de landmarks en rutas conocidas
+        nombres = [
+            "face_landmark_model.dat",
+            "lbfmodel.yaml",
+        ]
+        rutas_base = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models"),
+            os.path.dirname(os.path.abspath(__file__)),
+            "/usr/share/opencv4",
+            "/usr/local/share/opencv4",
+        ]
+        for base in rutas_base:
+            for nombre in nombres:
+                ruta = os.path.join(base, nombre)
+                if os.path.exists(ruta):
+                    try:
+                        det = cv2.face.createFacemarkLBF()
+                        det.loadModel(ruta)
+                        _lm_detector = det
+                        print(f"[LM] Landmarks cargados: {ruta}")
+                        return _lm_detector
+                    except Exception:
+                        pass
+        _lm_detector = False
+        print("[LM] Landmarks no disponibles — usando clasificacion por asimetria")
+    return _lm_detector if _lm_detector else None
+
+
+def _clasificar_con_solvepnp(cara_recortada_gris, bbox, frame_shape):
+    """
+    Intenta calcular yaw/pitch con solvePnP si hay landmarks disponibles.
+    Si no, usa clasificacion por asimetria de bordes (metodo robusto).
+    Retorna tipo: TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
+    """
+    lm_det = _get_lm_detector()
+    x, y, w, h = bbox
+    fw, fh = frame_shape[1], frame_shape[0]
+
+    if lm_det is not None:
+        # ── Metodo solvePnP con landmarks ─────────────────────────────────────
+        try:
+            rect = np.array([[x, y, w, h]], dtype=np.int32)
+            ok, landmarks = lm_det.fit(cara_recortada_gris, rect)
+            if ok and len(landmarks) > 0:
+                lm = landmarks[0][0]   # shape (5,2) o (68,2)
+                # Usar los 5 puntos basicos si estan disponibles
+                if len(lm) >= 6:
+                    pts_2d = lm[:6].astype(np.float64)
+                elif len(lm) >= 5:
+                    # 5 puntos: ojo_izq, ojo_der, nariz, boca_izq, boca_der
+                    nariz   = lm[2]
+                    ojo_izq = lm[0]
+                    ojo_der = lm[1]
+                    boca_izq = lm[3]
+                    boca_der = lm[4]
+                    # Estimar menton y nariz punta para completar 6 puntos
+                    menton = nariz + (nariz - (ojo_izq + ojo_der) / 2) * 1.5
+                    pts_2d = np.array([nariz, menton, ojo_izq, ojo_der,
+                                       boca_izq, boca_der], dtype=np.float64)
+                else:
+                    raise ValueError("Pocos landmarks")
+
+                focal = fw
+                centro = (fw / 2, fh / 2)
+                cam_matrix = np.array([
+                    [focal, 0,     centro[0]],
+                    [0,     focal, centro[1]],
+                    [0,     0,     1        ]
+                ], dtype=np.float64)
+                dist_coefs = np.zeros((4, 1))
+
+                ok2, rvec, tvec = cv2.solvePnP(
+                    _PUNTOS_3D, pts_2d, cam_matrix, dist_coefs,
+                    flags=cv2.SOLVEPNP_ITERATIVE)
+
+                if ok2:
+                    rmat, _ = cv2.Rodrigues(rvec)
+                    # Extraer yaw y pitch en grados
+                    pitch = float(np.degrees(np.arcsin(-rmat[2, 0])))
+                    yaw   = float(np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2])))
+
+                    # Umbrales en grados
+                    if yaw > 18:
+                        return TIPO_PERFIL_D
+                    elif yaw < -18:
+                        return TIPO_PERFIL_I
+                    elif pitch < -15:
+                        return TIPO_ABAJO
+                    elif pitch > 20:
+                        return TIPO_ABAJO
+                    else:
+                        return TIPO_FRONTAL
+        except Exception:
+            pass
+
+    # ── Fallback: asimetria de bordes sobre la cara recortada ─────────────────
+    return _clasificar_por_asimetria(cara_recortada_gris)
+
+
+def _clasificar_por_asimetria(cara128):
+    """
+    Clasificacion robusta usando asimetria de bordes Sobel.
+    Funciona sin landmarks — solo con la imagen de la cara 128x128.
+
+    Logica:
+      YAW  : Si volteas a la derecha, la mejilla izquierda ocupa mas espacio
+             → mas bordes en la mitad izquierda de la imagen
+      PITCH: Si bajas la cabeza, los ojos/frente ocupan mas espacio
+             → mas bordes en la zona superior
+    """
+    # Calcular mapa de bordes
+    gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
+    bordes = np.abs(gx) + np.abs(gy)
+
+    h, w = bordes.shape
+
+    # Dividir en mitades izq/der con zona central ignorada (10% central)
+    margen = w // 10
+    izq = float(np.mean(bordes[:, :w//2 - margen]))
+    der = float(np.mean(bordes[:, w//2 + margen:]))
+    total_h = izq + der + 1e-6
+    # ratio > 0: mas bordes izquierda → cara girada a su DERECHA
+    # ratio < 0: mas bordes derecha  → cara girada a su IZQUIERDA
+    ratio_h = (izq - der) / total_h
+
+    # Dividir en 3 bandas verticales (ignorar zona media)
+    t1 = float(np.mean(bordes[:h//3,    :]))   # frente/ojos
+    t2 = float(np.mean(bordes[h//3:2*h//3, :]))  # nariz/mejillas
+    t3 = float(np.mean(bordes[2*h//3:,  :]))   # boca/menton/cuello
+    total_v = t1 + t2 + t3 + 1e-6
+    # ratio_v > 0: mas info arriba → cara inclinada hacia ABAJO
+    ratio_v = (t1 - t3) / total_v
+
+    # Umbrales — mas permisivos que antes
+    UMBRAL_YAW   = 0.10
+    UMBRAL_ABAJO = 0.12
+
+    if ratio_h > UMBRAL_YAW:
+        return TIPO_PERFIL_D
+    elif ratio_h < -UMBRAL_YAW:
+        return TIPO_PERFIL_I
+    elif ratio_v > UMBRAL_ABAJO:
+        return TIPO_ABAJO
+    elif ratio_v < -UMBRAL_ABAJO:
+        return TIPO_ABAJO
+    else:
+        return TIPO_FRONTAL
 
 
 # ─── mapa LBP uniforme (se construye una sola vez) ───────────────────────────
@@ -330,26 +390,19 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     """
-    Usa MediaPipe Face Mesh para detectar la cara y calcular angulos 3D reales.
-    Si MediaPipe falla usa DNN como fallback (sin clasificacion de angulo).
+    Detecta la cara con DNN SSD y clasifica el angulo con:
+      1. solvePnP (si hay landmarks disponibles) — angulos 3D exactos
+      2. Asimetria de bordes Sobel (fallback siempre disponible)
 
     Retorna: (vector, pesos, coords, tipo)  o  (None, None, None, None)
     """
-    # ── Intentar MediaPipe primero ────────────────────────────────────────────
-    try:
-        bbox, tipo = _detectar_y_clasificar(frame)
-    except Exception as e:
-        print(f"[MP] Error: {e} — usando DNN fallback")
-        bbox = _detectar_dnn_fallback(frame)
-        tipo = TIPO_FRONTAL if bbox else None
-
-    if bbox is None:
+    caras = _detectar_dnn(frame)
+    if not caras:
         return None, None, None, None
 
-    x, y, w, h = bbox
+    x, y, w, h, _ = caras[0]
     h_img, w_img = frame.shape[:2]
 
-    # ── Recortar cara y extraer LBP ───────────────────────────────────────────
     x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x+w), min(h_img, y+h)
     gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -359,6 +412,10 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
 
     cara128 = cv2.resize(recorte, (128, 128))
 
+    # Clasificar angulo
+    tipo = _clasificar_con_solvepnp(gris, (x1, y1, x2-x1, y2-y1), frame.shape)
+
+    # Extraer vector LBP
     hists, pesos = [], []
     for r0, r1, c0, c1, _ in ZONAS:
         hist, var = _histograma_zona(cara128, r0, r1, c0, c1)

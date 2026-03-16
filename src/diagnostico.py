@@ -1,19 +1,20 @@
 """
 diagnostico.py
 ==============
-Herramienta de diagnostico para ver en tiempo real:
-  - Que angulo esta detectando MediaPipe
-  - Los valores exactos de yaw_ratio y pos_nariz_v
-  - Las distancias contra personas registradas
+Muestra en tiempo real el angulo que detecta el sistema.
+No requiere MediaPipe.
 
-Corre con:  python3 diagnostico.py
-Presiona Q para salir, A/S para ajustar umbrales en vivo.
+Teclas:
+  Q     — salir
+  Y/U   — bajar/subir umbral YAW (giro lateral)
+  I/O   — bajar/subir umbral ABAJO (inclinacion)
+  R     — reset umbrales al valor original
+  D     — medir distancias contra BD (5 muestras)
 """
 import cv2
 import numpy as np
 import sys, os, time
 
-# Asegurar que puede importar los modulos del proyecto
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─── camara ───────────────────────────────────────────────────────────────────
@@ -39,54 +40,41 @@ def leer_frame():
     ret, f = cap.read()
     return f if ret else None
 
-# ─── MediaPipe ────────────────────────────────────────────────────────────────
-import mediapipe as mp
-mp_face = mp.solutions.face_mesh
-mesh   = mp_face.FaceMesh(
-    static_image_mode=False,
-    max_num_faces=1,
-    refine_landmarks=False,
-    min_detection_confidence=0.4,
-    min_tracking_confidence=0.4)
+# ─── importar motor facial ────────────────────────────────────────────────────
+from face_engine import (extraer_caracteristicas, distancia_ponderada,
+                          _detectar_dnn, _clasificar_por_asimetria,
+                          preprocesar_cara,
+                          TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I, TIPO_ABAJO)
 
-# ─── Umbrales ajustables con teclas ──────────────────────────────────────────
-UMBRAL_YAW    = 0.12
-UMBRAL_ABAJO  = 0.34
-UMBRAL_ARRIBA = 0.50
+# ─── umbrales ajustables ──────────────────────────────────────────────────────
+UMBRAL_YAW   = 0.10
+UMBRAL_ABAJO = 0.12
 
-TIPOS = {
-    "frontal":    (0,   212, 255),   # cyan
-    "perfil_der": (0,   165, 255),   # naranja
-    "perfil_izq": (255, 165, 0  ),   # azul
-    "abajo":      (180, 0,   255),   # morado
-    "sin_cara":   (80,  80,  80 ),   # gris
+COLORES = {
+    TIPO_FRONTAL:  (0,   212, 255),
+    TIPO_PERFIL_D: (0,   165, 255),
+    TIPO_PERFIL_I: (255, 165,   0),
+    TIPO_ABAJO:    (180,   0, 255),
+    "sin_cara":    (80,   80,  80),
 }
 
-print("\n=== DIAGNOSTICO DE ANGULOS ===")
-print("Teclas:")
-print("  Q       — salir")
-print("  Y/U     — bajar/subir umbral YAW")
-print("  I/O     — bajar/subir umbral ABAJO")
-print("  R       — reset umbrales")
-print("  D       — mostrar distancias BD (5 muestras)")
-print()
-
-# ─── BD para distancias ───────────────────────────────────────────────────────
+# ─── BD ───────────────────────────────────────────────────────────────────────
 try:
     from database import cargar_vectores_por_angulo
-    from face_engine import extraer_caracteristicas, distancia_ponderada
     registros_bd = cargar_vectores_por_angulo()
-    print(f"[BD] {len(registros_bd)} vectores cargados de la BD")
+    print(f"[BD] {len(registros_bd)} vectores")
     for r in registros_bd:
-        print(f"     {r['nombre']} — angulo: {r['angulo']}")
+        print(f"     {r['nombre']} — {r['angulo']}")
 except Exception as e:
     registros_bd = []
-    print(f"[BD] No se pudo cargar BD: {e}")
+    print(f"[BD] {e}")
 
-muestras_dist = []
+muestras_dist   = []
 modo_distancias = False
 
-# ─── loop principal ───────────────────────────────────────────────────────────
+print("\nTeclas: Q=salir  Y/U=yaw  I/O=abajo  R=reset  D=distancias\n")
+
+# ─── loop ─────────────────────────────────────────────────────────────────────
 while True:
     frame = leer_frame()
     if frame is None:
@@ -94,162 +82,130 @@ while True:
     frame = cv2.flip(frame, 1)
     h_img, w_img = frame.shape[:2]
 
-    rgb       = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    resultado = mesh.process(rgb)
+    caras = _detectar_dnn(frame)
 
-    tipo      = "sin_cara"
-    yaw_ratio = 0.0
-    pos_nariz = 0.0
-    bbox      = None
+    tipo    = "sin_cara"
+    ratio_h = 0.0
+    ratio_v = 0.0
+    bbox    = None
 
-    if resultado.multi_face_landmarks:
-        lm = resultado.multi_face_landmarks[0].landmark
+    if caras:
+        x, y, w, h, conf = caras[0]
+        bbox = (x, y, w, h)
 
-        def pt(idx):
-            return np.array([lm[idx].x * w_img,
-                             lm[idx].y * h_img,
-                             lm[idx].z * w_img])
+        gris    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        recorte = preprocesar_cara(gris[y:y+h, x:x+w])
+        if recorte.size > 0:
+            cara128 = cv2.resize(recorte, (128, 128))
 
-        nariz       = pt(1)
-        ojo_izq     = pt(33)
-        ojo_der     = pt(263)
-        menton      = pt(152)
-        frente      = pt(10)
-        mejilla_izq = pt(234)
-        mejilla_der = pt(454)
+            gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
+            bordes = np.abs(gx) + np.abs(gy)
+            hw, ww = bordes.shape
+            margen = ww // 10
+            izq = float(np.mean(bordes[:, :ww//2 - margen]))
+            der = float(np.mean(bordes[:, ww//2 + margen:]))
+            ratio_h = (izq - der) / (izq + der + 1e-6)
 
-        centro_ojos = (ojo_izq + ojo_der) / 2.0
+            t1 = float(np.mean(bordes[:hw//3,   :]))
+            t3 = float(np.mean(bordes[2*hw//3:, :]))
+            ratio_v = (t1 - t3) / (t1 + t3 + 1e-6)
 
-        dist_izq  = np.linalg.norm(nariz[:2] - mejilla_izq[:2])
-        dist_der  = np.linalg.norm(nariz[:2] - mejilla_der[:2])
-        total_d   = dist_izq + dist_der + 1e-6
-        yaw_ratio = (dist_izq - dist_der) / total_d
+            if ratio_h > UMBRAL_YAW:
+                tipo = TIPO_PERFIL_D
+            elif ratio_h < -UMBRAL_YAW:
+                tipo = TIPO_PERFIL_I
+            elif ratio_v > UMBRAL_ABAJO:
+                tipo = TIPO_ABAJO
+            elif ratio_v < -UMBRAL_ABAJO:
+                tipo = TIPO_ABAJO
+            else:
+                tipo = TIPO_FRONTAL
 
-        altura_cara = abs(menton[1] - frente[1]) + 1e-6
-        pos_nariz   = (nariz[1] - centro_ojos[1]) / altura_cara
-
-        # Clasificar con umbrales actuales
-        if yaw_ratio > UMBRAL_YAW:
-            tipo = "perfil_der"
-        elif yaw_ratio < -UMBRAL_YAW:
-            tipo = "perfil_izq"
-        elif pos_nariz < UMBRAL_ABAJO:
-            tipo = "abajo"
-        elif pos_nariz > UMBRAL_ARRIBA:
-            tipo = "abajo"
-        else:
-            tipo = "frontal"
-
-        # Bounding box
-        xs = [l.x * w_img for l in lm]
-        ys = [l.y * h_img for l in lm]
-        x1 = max(0, int(min(xs)) - 20)
-        y1 = max(0, int(min(ys)) - 20)
-        x2 = min(w_img, int(max(xs)) + 20)
-        y2 = min(h_img, int(max(ys)) + 20)
-        bbox = (x1, y1, x2, y2)
-
-        # Acumular para distancias
-        if modo_distancias and registros_bd:
-            try:
+            if modo_distancias and registros_bd:
                 v, p, coords, t = extraer_caracteristicas(frame)
                 if v is not None:
                     muestras_dist.append((v, p))
                     if len(muestras_dist) >= 5:
-                        print("\n--- DISTANCIAS (5 muestras) ---")
-                        v_final = np.mean([m[0] for m in muestras_dist], axis=0)
-                        p_final = np.mean([m[1] for m in muestras_dist], axis=0)
-
-                        # Agrupar por persona
+                        print("\n--- DISTANCIAS ---")
+                        vf = np.mean([m[0] for m in muestras_dist], axis=0)
+                        pf = np.mean([m[1] for m in muestras_dist], axis=0)
                         por_persona = {}
                         for reg in registros_bd:
-                            pid  = reg["persona_id"]
-                            dist, nz = distancia_ponderada(v_final, p_final,
-                                                            reg["vector"], reg["pesos"])
+                            pid = reg["persona_id"]
+                            dist, nz = distancia_ponderada(vf, pf,
+                                           reg["vector"], reg["pesos"])
                             if pid not in por_persona or dist < por_persona[pid][0]:
-                                por_persona[pid] = (dist, nz, reg["nombre"],
-                                                    reg["angulo"])
-
+                                por_persona[pid] = (dist, nz,
+                                    reg["nombre"], reg["angulo"])
                         for pid, (dist, nz, nombre, angulo) in por_persona.items():
                             estado = ("ACCESO" if dist <= 0.12 else
                                       "CERCA"  if dist <= 0.25 else "LEJOS")
-                            print(f"  {nombre:25s} dist={dist:.4f} "
-                                  f"angulo={angulo:12s} zonas={nz} [{estado}]")
+                            print(f"  {nombre:20s} dist={dist:.4f} "
+                                  f"angulo={angulo:12s} [{estado}]")
                         print()
-                        muestras_dist = []
+                        muestras_dist   = []
                         modo_distancias = False
-            except Exception as e:
-                print(f"[ERR] {e}")
 
     # ── Dibujar ───────────────────────────────────────────────────────────────
-    color = TIPOS[tipo]
+    color = COLORES.get(tipo, (80, 80, 80))
 
     if bbox:
-        x1, y1, x2, y2 = bbox
-        L = max(15, (x2-x1)//4)
+        x, y, w, h = bbox
+        L = max(15, w // 4)
         for p1, p2 in [
-            ((x1,y1),(x1+L,y1)), ((x1,y1),(x1,y1+L)),
-            ((x2,y1),(x2-L,y1)), ((x2,y1),(x2,y1+L)),
-            ((x1,y2),(x1+L,y2)), ((x1,y2),(x1,y2-L)),
-            ((x2,y2),(x2-L,y2)), ((x2,y2),(x2,y2-L)),
+            ((x,   y),   (x+L, y)),    ((x,   y),   (x,   y+L)),
+            ((x+w, y),   (x+w-L, y)),  ((x+w, y),   (x+w, y+L)),
+            ((x,   y+h), (x+L, y+h)),  ((x,   y+h), (x,   y+h-L)),
+            ((x+w, y+h), (x+w-L,y+h)), ((x+w, y+h), (x+w, y+h-L)),
         ]:
             cv2.line(frame, p1, p2, color, 2)
+        cv2.putText(frame, tipo.upper(), (x, y+h+18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-    # Panel de info
-    panel_y = 20
-    def txt(s, y, col=(220,220,220)):
-        cv2.putText(frame, s, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, col, 1)
+    def txt(s, yy, col=(200, 200, 200)):
+        cv2.putText(frame, s, (10, yy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, col, 1)
 
-    txt(f"ANGULO:    {tipo.upper()}", panel_y,      color)
-    txt(f"yaw_ratio: {yaw_ratio:+.3f}  (umbral +/-{UMBRAL_YAW:.2f})",
-        panel_y+22)
-    txt(f"pos_nariz: {pos_nariz:.3f}  "
-        f"(abajo<{UMBRAL_ABAJO:.2f} arriba>{UMBRAL_ARRIBA:.2f})",
-        panel_y+44)
-    txt(f"YAW umbral: {UMBRAL_YAW:.3f}  [Y/U para ajustar]",
-        panel_y+70, (160,160,160))
-    txt(f"ABAJO umbral: {UMBRAL_ABAJO:.3f}  [I/O para ajustar]",
-        panel_y+88, (160,160,160))
+    txt(f"ANGULO: {tipo.upper()}", 22, color)
+    txt(f"ratio_h (yaw):   {ratio_h:+.3f}  umbral +/-{UMBRAL_YAW:.2f}  [Y/U]", 44)
+    txt(f"ratio_v (pitch): {ratio_v:+.3f}  umbral +/-{UMBRAL_ABAJO:.2f}  [I/O]", 64)
+    txt("ratio_h>+u=PERFIL_DER  <-u=PERFIL_IZQ", 84, (140, 140, 140))
+    txt("ratio_v>+u=ABAJO       <-u=ABAJO",       100, (140, 140, 140))
 
     if modo_distancias:
-        txt(f"Midiendo distancias... {len(muestras_dist)}/5",
-            panel_y+114, (0,255,136))
+        txt(f"Midiendo... {len(muestras_dist)}/5", 120, (0, 255, 136))
 
-    cv2.imshow("Diagnostico de angulos — Q para salir", frame)
+    cv2.imshow("Diagnostico — Q salir", frame)
     key = cv2.waitKey(1) & 0xFF
 
-    if key == ord('q'):
-        break
+    if   key == ord('q'): break
     elif key == ord('y'):
         UMBRAL_YAW = max(0.02, UMBRAL_YAW - 0.01)
-        print(f"[YAW] umbral = {UMBRAL_YAW:.3f}")
+        print(f"[YAW] {UMBRAL_YAW:.3f}")
     elif key == ord('u'):
         UMBRAL_YAW = min(0.40, UMBRAL_YAW + 0.01)
-        print(f"[YAW] umbral = {UMBRAL_YAW:.3f}")
+        print(f"[YAW] {UMBRAL_YAW:.3f}")
     elif key == ord('i'):
-        UMBRAL_ABAJO = max(0.10, UMBRAL_ABAJO - 0.01)
-        print(f"[ABAJO] umbral = {UMBRAL_ABAJO:.3f}")
+        UMBRAL_ABAJO = max(0.05, UMBRAL_ABAJO - 0.01)
+        print(f"[ABAJO] {UMBRAL_ABAJO:.3f}")
     elif key == ord('o'):
-        UMBRAL_ABAJO = min(0.60, UMBRAL_ABAJO + 0.01)
-        print(f"[ABAJO] umbral = {UMBRAL_ABAJO:.3f}")
+        UMBRAL_ABAJO = min(0.50, UMBRAL_ABAJO + 0.01)
+        print(f"[ABAJO] {UMBRAL_ABAJO:.3f}")
     elif key == ord('r'):
-        UMBRAL_YAW   = 0.12
-        UMBRAL_ABAJO = 0.34
-        print("[RESET] Umbrales restaurados")
+        UMBRAL_YAW, UMBRAL_ABAJO = 0.10, 0.12
+        print("[RESET]")
     elif key == ord('d'):
-        modo_distancias = True
-        muestras_dist   = []
+        modo_distancias, muestras_dist = True, []
         print("[DIST] Midiendo 5 muestras...")
 
-# ─── Cierre ───────────────────────────────────────────────────────────────────
+# ─── cierre ───────────────────────────────────────────────────────────────────
 if USAR_PICAM:
     picam2.close()
 else:
     cap.release()
 cv2.destroyAllWindows()
 
-print(f"\nUmbrales finales:")
+print(f"\nUmbrales finales — copia a face_engine.py si funcionan bien:")
 print(f"  UMBRAL_YAW   = {UMBRAL_YAW:.3f}")
 print(f"  UMBRAL_ABAJO = {UMBRAL_ABAJO:.3f}")
-print("Copia estos valores a face_engine.py si los quieres guardar.")
