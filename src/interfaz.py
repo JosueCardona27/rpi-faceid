@@ -669,14 +669,13 @@ class App(tk.Tk):
         for paso_idx, (_, icono, instruccion, etiqueta,
                        duracion, modo_det,
                        tipo_esperado, msg_correccion) in enumerate(PASOS_REGISTRO):
-            vectores_paso = []
-            t_paso_inicio = time.time()
-            t_paso_fin    = t_paso_inicio + duracion
-            t_global_offset = t_offsets[paso_idx]
+            vectores_paso    = []
+            t_paso_activo    = 0.0   # tiempo VALIDO acumulado (solo cuando angulo correcto)
+            t_ultimo_tick    = None  # marca de tiempo del ultimo tick valido
+            ultimo_analisis  = -1
 
-            # activar modo de deteccion para este paso
+            # activar modo de deteccion y UI para este paso
             self._modo_deteccion = modo_det
-
             desc_paso = f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}"
             self.after(0, lambda i=instruccion: self.status_var.set(i))
             self.after(0, lambda d=desc_paso: self.paso_desc_var.set(d)
@@ -685,12 +684,32 @@ class App(tk.Tk):
             self._set_overlay((255,184,48),
                               f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
 
-            while time.time() < t_paso_fin and self.cam_running:
-                elapsed_paso   = time.time() - t_paso_inicio
-                elapsed_global = t_global_offset + elapsed_paso
-                progreso_paso  = elapsed_paso / duracion
-                progreso_total = elapsed_global / TIEMPO_ESCANEO
-                restante_paso  = max(0.0, duracion - elapsed_paso)
+            while t_paso_activo < duracion and self.cam_running:
+
+                # leer resultado del buffer de analisis
+                with self._analisis_lock:
+                    frame_id = self._analisis["frame_id"]
+                    v        = self._analisis["vector"]
+                    p        = self._analisis["pesos"]
+                    tipo_det = self._analisis["tipo"]
+
+                angulo_ok = (tipo_det == tipo_esperado) and (v is not None) and (p is not None)
+                cara_presente = (v is not None)
+
+                # ── avanzar o pausar el timer ─────────────────────────────────
+                ahora = time.time()
+                if angulo_ok:
+                    if t_ultimo_tick is not None:
+                        t_paso_activo += ahora - t_ultimo_tick
+                    t_ultimo_tick = ahora
+                else:
+                    # angulo incorrecto o sin cara — pausar
+                    t_ultimo_tick = None
+
+                restante_paso  = max(0.0, duracion - t_paso_activo)
+                progreso_paso  = min(1.0, t_paso_activo / duracion)
+                elapsed_global = t_offsets[paso_idx] + t_paso_activo
+                progreso_total = min(1.0, elapsed_global / TIEMPO_ESCANEO)
 
                 seg = int(restante_paso) + 1
                 self.after(0, lambda s=seg: self.timer_var.set(f"{s}s"))
@@ -702,57 +721,49 @@ class App(tk.Tk):
                            self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
                            if hasattr(self, "paso_txt_var") else None)
 
-                # leer resultado del buffer de analisis
-                with self._analisis_lock:
-                    frame_id = self._analisis["frame_id"]
-                    v        = self._analisis["vector"]
-                    p        = self._analisis["pesos"]
-                    tipo_det = self._analisis["tipo"]
-
+                # ── procesar muestra si es nuevo frame ────────────────────────
                 if frame_id != ultimo_analisis:
                     ultimo_analisis = frame_id
 
-                    if v is not None and p is not None:
-                        # ── validar que el angulo detectado es el correcto ────
-                        tipo_ok = (tipo_det == tipo_esperado)
+                    if angulo_ok and np.sum(p > 0.15) >= 2:
+                        # muestra VALIDA
+                        vectores_paso.append(v)
+                        todos_vectores.append(v)
+                        todos_pesos.append(p)
 
-                        if tipo_ok and np.sum(p > 0.15) >= 2:
-                            # muestra VALIDA para este paso
-                            vectores_paso.append(v)
-                            todos_vectores.append(v)
-                            todos_pesos.append(p)
+                        for iz in range(N_ZONAS):
+                            if p[iz] > self._zona_cap_acum[iz]:
+                                self._zona_cap_acum[iz] = p[iz]
 
-                            for iz in range(N_ZONAS):
-                                if p[iz] > self._zona_cap_acum[iz]:
-                                    self._zona_cap_acum[iz] = p[iz]
+                        snap = self._zona_cap_acum.copy()
+                        self.after(0, lambda s=snap: self._update_cap_bars(s))
 
-                            snap = self._zona_cap_acum.copy()
-                            self.after(0, lambda s=snap: self._update_cap_bars(s))
+                        n_total = len(todos_vectores)
+                        zv = int(np.sum(p > 0.15))
+                        self._set_overlay(
+                            (0, 255, 136),
+                            f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
+                        self.after(0, lambda nt=n_total, zv=zv:
+                                   self.progreso_var.set(
+                                       f"Total: {nt} muestras  |  {zv}/7 zonas"))
+                        self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
 
-                            n_total = len(todos_vectores)
-                            zv = int(np.sum(p > 0.15))
-                            self._set_overlay(
-                                (0, 255, 136),
-                                f"PASO {paso_idx+1}/{N_PASOS} {etiqueta} [{len(vectores_paso)} ok]")
-                            self.after(0, lambda nt=n_total, zv=zv:
-                                       self.progreso_var.set(
-                                           f"Total: {nt} muestras  |  {zv}/7 zonas"))
-                            self.after(0, lambda: self.prog_label.config(fg=SUCCESS))
-
-                        else:
-                            # angulo incorrecto — guiar al usuario
-                            self._set_overlay(
-                                (255, 59, 92),
-                                f"{msg_correccion}")
-                            self.after(0, lambda mc=msg_correccion:
-                                       self.status_var.set(mc))
-                            self.after(0, lambda: self.prog_label.config(fg=DANGER))
+                    elif cara_presente and not angulo_ok:
+                        # cara detectada pero angulo incorrecto — PAUSADO
+                        self._set_overlay(
+                            (255, 59, 92),
+                            f"PAUSADO — {msg_correccion}")
+                        self.after(0, lambda mc=msg_correccion:
+                                   self.status_var.set(f"⏸ {mc}"))
+                        self.after(0, lambda: self.prog_label.config(fg=DANGER))
 
                     else:
-                        # no hay cara detectada
+                        # sin cara — PAUSADO esperando
                         self._set_overlay(
                             (255, 184, 48),
                             f"PASO {paso_idx+1}/{N_PASOS}: {instruccion}")
+                        self.after(0, lambda i=instruccion:
+                                   self.status_var.set(i))
                         self.after(0, lambda: self.prog_label.config(fg=WARNING))
 
                 time.sleep(0.04)

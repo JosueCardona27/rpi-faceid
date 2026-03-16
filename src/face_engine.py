@@ -132,39 +132,71 @@ def _detectar_dnn(frame, conf_min=0.55):
 
 def _clasificar_angulo(cara128):
     """
-    Determina si la cara recortada es frontal, perfil derecho,
-    perfil izquierdo o inclinada, usando la simetria de zonas LBP.
+    Clasifica el angulo de la cara usando:
+    - Simetria horizontal (izq vs der) → perfiles
+    - Densidad de bordes en zonas → arriba/abajo/frontal
 
-    Logica:
-      - Calcula la varianza de la mitad izquierda y derecha de la cara.
-      - Si una mitad tiene mucho menos varianza → es un perfil.
-      - Si la cara esta muy comprimida verticalmente → inclinada hacia abajo.
+    La cara 128x128 se divide en:
+      - Zona OJOS   : filas 20-50  (siempre visible en frontal)
+      - Zona NARIZ  : filas 50-80
+      - Zona BOCA   : filas 80-110 (desaparece al inclinar hacia abajo)
+      - Mitad IZQ   : cols 0-64
+      - Mitad DER   : cols 64-128
     """
     h, w = cara128.shape
+    img  = cara128.astype(np.float32)
 
-    # Varianza izquierda vs derecha
-    mitad_izq = float(np.var(cara128[:, :w//2].astype(np.float32)))
-    mitad_der = float(np.var(cara128[:, w//2:].astype(np.float32)))
-    total_var  = mitad_izq + mitad_der + 1e-6
-    ratio      = (mitad_der - mitad_izq) / total_var   # >0 = mas textura a la derecha
+    # ── Deteccion de bordes (Sobel) para medir "informacion facial" ───────────
+    # Usar bordes es mas robusto que varianza pura contra iluminacion no uniforme
+    gx = cv2.Sobel(cara128, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(cara128, cv2.CV_32F, 0, 1, ksize=3)
+    bordes = np.sqrt(gx**2 + gy**2)
 
-    # Varianza zona superior vs inferior para detectar inclinacion
-    zona_sup = float(np.var(cara128[:h//2, :].astype(np.float32)))
-    zona_inf = float(np.var(cara128[h//2:, :].astype(np.float32)))
-    ratio_v  = (zona_sup - zona_inf) / (zona_sup + zona_inf + 1e-6)
+    # ── Simetria horizontal → perfiles ────────────────────────────────────────
+    mitad_izq = float(np.mean(bordes[:, :w//2]))
+    mitad_der = float(np.mean(bordes[:, w//2:]))
+    total_h   = mitad_izq + mitad_der + 1e-6
+    ratio_h   = (mitad_der - mitad_izq) / total_h
+    # ratio_h > 0 → mas bordes a la derecha → cara girada a su izquierda
+    # ratio_h < 0 → mas bordes a la izquierda → cara girada a su derecha
 
-    # Umbrales calibrados
-    UMBRAL_PERFIL   = 0.18   # diferencia izq/der significativa
-    UMBRAL_INCLIN   = 0.20   # cara mas textura arriba → barbilla oculta
+    # ── Distribucion vertical → arriba/abajo ──────────────────────────────────
+    # Dividir en 4 bandas verticales
+    b1 = float(np.mean(bordes[0:32,  :]))    # frente/ojos
+    b2 = float(np.mean(bordes[32:64, :]))    # nariz
+    b3 = float(np.mean(bordes[64:96, :]))    # boca/mejillas
+    b4 = float(np.mean(bordes[96:128,:]))    # menton/cuello
 
-    if ratio_v > UMBRAL_INCLIN:
-        return TIPO_ABAJO          # cara inclinada hacia abajo
-    elif ratio < -UMBRAL_PERFIL:
-        return TIPO_PERFIL_D       # mas textura a la derecha → cara mirando a su derecha
-    elif ratio > UMBRAL_PERFIL:
-        return TIPO_PERFIL_I       # mas textura a la izquierda → cara mirando a su izquierda
-    else:
-        return TIPO_FRONTAL
+    total_v = b1 + b2 + b3 + b4 + 1e-6
+
+    # Centro de masa vertical (0=arriba, 1=abajo)
+    # Si la cara esta inclinada hacia ABAJO → barbilla oculta → b3,b4 bajan
+    # Si la cara esta inclinada hacia ARRIBA → frente oculta → b1,b2 bajan
+    centro_masa = (0.15*b1 + 0.38*b2 + 0.62*b3 + 0.85*b4) / total_v * 4
+
+    # Ratio superior vs inferior
+    sup = b1 + b2
+    inf = b3 + b4
+    ratio_v = (sup - inf) / (sup + inf + 1e-6)
+
+    # ── Umbrales ──────────────────────────────────────────────────────────────
+    UMBRAL_PERFIL = 0.15   # asimetria horizontal → perfil
+    UMBRAL_ABAJO  = 0.18   # mas info arriba → cara hacia abajo
+    UMBRAL_ARRIBA = -0.22  # mas info abajo → cara hacia arriba (contar como ABAJO tambien)
+
+    # Primero verificar perfiles (son mas faciles de detectar)
+    if ratio_h < -UMBRAL_PERFIL:
+        return TIPO_PERFIL_D    # mas bordes izquierda → cara a su derecha
+    elif ratio_h > UMBRAL_PERFIL:
+        return TIPO_PERFIL_I    # mas bordes derecha → cara a su izquierda
+
+    # Luego vertical
+    if ratio_v > UMBRAL_ABAJO:
+        return TIPO_ABAJO       # frente/ojos dominan → barbilla oculta = cara abajo
+    elif ratio_v < UMBRAL_ARRIBA:
+        return TIPO_ABAJO       # boca/cuello dominan = cara muy hacia arriba, tambien "abajo"
+
+    return TIPO_FRONTAL
 
 
 # ─── mapa LBP uniforme (se construye una sola vez) ───────────────────────────
