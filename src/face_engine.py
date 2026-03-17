@@ -40,14 +40,13 @@ _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 #  DETECCION DE CARA  (DNN + Haar backup)
 # =============================================================================
 
-_dnn_net      = None
-_haar_frontal = None   # backup frontal
-_haar_perfil  = None   # perfil completo (izquierdo y derecho)
-_det_init     = False
+_dnn_net  = None
+_haar_cas = None
+_det_init = False
 
 
 def _init_detectores():
-    global _dnn_net, _haar_frontal, _haar_perfil, _det_init
+    global _dnn_net, _haar_cas, _det_init
     if _det_init:
         return
     _det_init = True
@@ -63,49 +62,32 @@ def _init_detectores():
     else:
         print("[DNN] WARN: modelo no encontrado")
 
-    # Haar frontal -- backup
-    haar_rutas = [
+    # Haar frontal -- backup cuando DNN pierde perfiles
+    haar_candidatos = [
         os.path.join(base, "haarcascade_frontalface_default.xml"),
         "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
     ]
     try:
-        haar_rutas.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        haar_candidatos.append(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     except Exception:
         pass
-    for ruta in haar_rutas:
+
+    for ruta in haar_candidatos:
         if os.path.exists(ruta):
             cas = cv2.CascadeClassifier(ruta)
             if not cas.empty():
-                _haar_frontal = cas
-                print(f"[HAAR] Frontal: {ruta}")
+                _haar_cas = cas
+                print(f"[HAAR] Cascade backup: {ruta}")
                 break
 
-    # Haar perfil -- detecta caras completamente de lado
-    perfil_rutas = [
-        os.path.join(base, "haarcascade_profileface.xml"),
-        "/usr/share/opencv4/haarcascades/haarcascade_profileface.xml",
-    ]
-    try:
-        perfil_rutas.append(cv2.data.haarcascades + "haarcascade_profileface.xml")
-    except Exception:
-        pass
-    for ruta in perfil_rutas:
-        if os.path.exists(ruta):
-            cas = cv2.CascadeClassifier(ruta)
-            if not cas.empty():
-                _haar_perfil = cas
-                print(f"[HAAR] Perfil: {ruta}")
-                break
-    if _haar_perfil is None:
-        print("[HAAR] haarcascade_profileface.xml no encontrado")
 
-
-def _detectar_dnn(frame, conf_min=0.35):
+def _detectar_dnn(frame, conf_min=0.18):
     """
-    Detecta caras con estrategia triple:
-      1. DNN SSD conf=0.18 — bueno para frontales y perfiles leves
-      2. Haar perfil — detecta caras completamente de lado
-      3. Haar frontal — ultimo recurso
+    Detecta caras en el frame con estrategia dual.
+
+    1. DNN SSD con conf_min=0.18 (bajo para capturar perfiles parciales)
+    2. Haar frontal muy permisivo si DNN no detecta nada
 
     Retorna lista de (x, y, w, h, conf) ordenada por area descendente.
     """
@@ -121,6 +103,7 @@ def _detectar_dnn(frame, conf_min=0.35):
             (300, 300), (104.0, 117.0, 123.0))
         _dnn_net.setInput(blob)
         dets = _dnn_net.forward()
+
         for i in range(dets.shape[2]):
             conf = float(dets[0, 0, i, 2])
             if conf < conf_min:
@@ -136,36 +119,11 @@ def _detectar_dnn(frame, conf_min=0.35):
         resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
         return resultados
 
-    # Intento 2: Haar perfil (para caras completamente de lado)
-    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gris = cv2.equalizeHist(gris)
-
-    if _haar_perfil is not None and not _haar_perfil.empty():
-        # Buscar perfil izquierdo directo
-        caras_izq = _haar_perfil.detectMultiScale(
-            gris, scaleFactor=1.1, minNeighbors=2,
-            minSize=(50, 50), flags=cv2.CASCADE_SCALE_IMAGE)
-        # Buscar perfil derecho (imagen espejada)
-        gris_flip  = cv2.flip(gris, 1)
-        caras_der  = _haar_perfil.detectMultiScale(
-            gris_flip, scaleFactor=1.1, minNeighbors=2,
-            minSize=(50, 50), flags=cv2.CASCADE_SCALE_IMAGE)
-        # Convertir coordenadas del espejo
-        caras_der_orig = []
-        for (x, y, w, h) in caras_der:
-            x_orig = w_img - x - w
-            caras_der_orig.append((x_orig, y, w, h))
-
-        for (x, y, w, h) in list(caras_izq) + caras_der_orig:
-            resultados.append((int(x), int(y), int(w), int(h), 0.6))
-
-    if resultados:
-        resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
-        return resultados
-
-    # Intento 3: Haar frontal muy permisivo
-    if _haar_frontal is not None and not _haar_frontal.empty():
-        caras = _haar_frontal.detectMultiScale(
+    # Intento 2: Haar muy permisivo
+    if _haar_cas is not None and not _haar_cas.empty():
+        gris  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gris  = cv2.equalizeHist(gris)
+        caras = _haar_cas.detectMultiScale(
             gris, scaleFactor=1.1, minNeighbors=2,
             minSize=(50, 50), flags=cv2.CASCADE_SCALE_IMAGE)
         if len(caras) > 0:
