@@ -350,9 +350,34 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
     return hist, varianza
 
 
-# ─── definicion de zonas sobre imagen 128x128 ─────────────────────────────────
-#  (r0, r1, c0, c1, nombre)
-ZONAS = [
+# ─── definicion de zonas por angulo sobre imagen 128x128 ──────────────────────
+#
+# FRONTAL: cara simetrica, 7 zonas balanceadas
+#   ┌──────────────────────────────┐
+#   │  Z0: frente                  │
+#   ├──────────┬───────────────────┤
+#   │ Z1:ojo izq│ Z2: ojo der      │
+#   ├──────────┴───────────────────┤
+#   │  Z3: nariz/entrecejo         │
+#   ├────────────┬─────────────────┤
+#   │ Z4:mejilla │ Z5:mejilla der  │
+#   ├────────────┴─────────────────┤
+#   │  Z6: boca/menton             │
+#   └──────────────────────────────┘
+#
+# PERFIL_DER (cara girando a su derecha = lado izquierdo en imagen):
+#   Visible: frente, ojo izq, nariz izq, mejilla izq, mandibula izq
+#   Zonas desplazadas al lado izquierdo de la imagen
+#
+# PERFIL_IZQ (cara girando a su izquierda = lado derecho en imagen):
+#   Visible: frente, ojo der, nariz der, mejilla der, mandibula der
+#   Zonas desplazadas al lado derecho de la imagen
+#
+# ABAJO (cara inclinada hacia abajo):
+#   Visible: frente prominente, ojos, nariz superior
+#   Zonas concentradas en parte superior
+
+ZONAS_FRONTAL = [
     (0,  40,  0,  128, "frente"),
     (28, 65,  0,   58, "ojo_izq"),
     (28, 65, 70,  128, "ojo_der"),
@@ -362,9 +387,53 @@ ZONAS = [
     (88, 128, 14, 114, "boca_menton"),
 ]
 
-N_ZONAS  = len(ZONAS)   # 7
-LBP_BINS = 59
-VECTOR_DIM = N_ZONAS * LBP_BINS  # 7 × 59 = 413
+ZONAS_PERFIL_D = [
+    # Cara girando a su derecha — lado izquierdo de imagen visible
+    (0,  40,  0,  128, "frente"),          # frente siempre visible
+    (20, 60,  0,   64, "ojo_visible"),     # ojo izquierdo (lado visible)
+    (45, 85,  0,   70, "nariz_lateral"),   # nariz vista de lado
+    (55, 100, 0,   60, "mejilla_visible"), # mejilla izquierda
+    (70, 115, 0,   55, "mandibula"),       # mandibula/jawline visible
+    (30, 80,  0,   45, "pomulo"),          # pomulo visible
+    (85, 128, 0,   80, "cuello_menton"),   # menton/cuello
+]
+
+ZONAS_PERFIL_I = [
+    # Cara girando a su izquierda — lado derecho de imagen visible
+    (0,  40,  0,  128, "frente"),          # frente siempre visible
+    (20, 60, 64,  128, "ojo_visible"),     # ojo derecho (lado visible)
+    (45, 85, 58,  128, "nariz_lateral"),   # nariz vista de lado
+    (55, 100, 68, 128, "mejilla_visible"), # mejilla derecha
+    (70, 115, 73, 128, "mandibula"),       # mandibula/jawline visible
+    (30, 80,  83, 128, "pomulo"),          # pomulo visible
+    (85, 128, 48, 128, "cuello_menton"),   # menton/cuello
+]
+
+ZONAS_ABAJO = [
+    # Cara inclinada hacia abajo — frente y ojos prominentes
+    (0,  35,  0,  128, "frente_sup"),     # frente superior muy visible
+    (10, 50,  0,   58, "frente_izq"),     # frente izquierda
+    (10, 50, 70,  128, "frente_der"),     # frente derecha
+    (30, 70,  0,   58, "ojo_izq"),        # ojo izquierdo
+    (30, 70, 70,  128, "ojo_der"),        # ojo derecho
+    (50, 90, 28,  100, "nariz_sup"),      # nariz superior visible
+    (0,  40, 28,  100, "entrecejo"),      # entrecejo prominente
+]
+
+# Mapa de angulo → zonas
+ZONAS_POR_TIPO = {
+    TIPO_FRONTAL:  ZONAS_FRONTAL,
+    TIPO_PERFIL_D: ZONAS_PERFIL_D,
+    TIPO_PERFIL_I: ZONAS_PERFIL_I,
+    TIPO_ABAJO:    ZONAS_ABAJO,
+}
+
+# ZONAS legacy para compatibilidad (igual que frontal)
+ZONAS = ZONAS_FRONTAL
+
+N_ZONAS    = len(ZONAS_FRONTAL)   # 7 — igual para todos los angulos
+LBP_BINS   = 59
+VECTOR_DIM = N_ZONAS * LBP_BINS   # 7 × 59 = 413
 
 # umbral de varianza: zona con var < este valor probablemente ocluida
 VAR_MIN  = 250.0
@@ -415,9 +484,12 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto"):
     # Clasificar angulo con LBF landmarks + solvePnP (o fallback asimetria)
     tipo = _clasificar_angulo(gris_full, (x1, y1, x2-x1, y2-y1), frame.shape)
 
-    # Extraer vector LBP
+    # Seleccionar zonas segun el angulo detectado
+    zonas_activas = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
+
+    # Extraer vector LBP con las zonas del angulo correspondiente
     hists, pesos = [], []
-    for r0, r1, c0, c1, _ in ZONAS:
+    for r0, r1, c0, c1, _ in zonas_activas:
         hist, var = _histograma_zona(cara128, r0, r1, c0, c1)
         hists.append(hist)
         pesos.append(_varianza_a_peso(var))
