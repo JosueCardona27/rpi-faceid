@@ -63,7 +63,7 @@ def _init_detectores():
         try:
             _yunet = cv2.FaceDetectorYN.create(
                 yunet_ruta, "", (640, 480),
-                score_threshold=0.6,
+                score_threshold=0.4,
                 nms_threshold=0.3,
                 top_k=5)
             print(f"[YuNet] Modelo cargado: {yunet_ruta}")
@@ -102,7 +102,7 @@ def _detectar_dnn(frame, conf_min=0.45):
                 w  = int(face[2])
                 h  = int(face[3])
                 cf = float(face[14])
-                if cf >= 0.6 and w > 20 and h > 20:
+                if cf >= 0.4 and w > 20 and h > 20:
                     x2 = min(w_img, x + w)
                     y2 = min(h_img, y + h)
                     resultados.append((x, y, x2 - x, y2 - y, cf))
@@ -141,7 +141,7 @@ def _detectar_dnn(frame, conf_min=0.45):
 
 _lm_det    = None
 _buf_yaw   = []
-_BUF_N_YAW = 5
+_BUF_N_YAW = 3   # buffer pequeno para respuesta rapida
 
 
 def _get_lm_detector():
@@ -245,11 +245,18 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
     if yaw is None:
         yaw = _calcular_yaw_sobel(frame_gris, bbox, frame_shape)
 
-    # Suavizar con buffer
+    # Suavizar con buffer pequeno
     _buf_yaw.append(yaw)
     if len(_buf_yaw) > _BUF_N_YAW:
         _buf_yaw.pop(0)
-    yaw_s = float(np.mean(_buf_yaw))
+
+    # Usar el valor de mayor magnitud del buffer (no el promedio)
+    # Esto responde mas rapido cuando la cara gira
+    if len(_buf_yaw) > 0:
+        idx_max = int(np.argmax(np.abs(_buf_yaw)))
+        yaw_s   = float(_buf_yaw[idx_max])
+    else:
+        yaw_s = yaw
 
     # Umbral adaptativo
     if tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I):
