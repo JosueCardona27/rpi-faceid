@@ -32,7 +32,9 @@ except Exception:
 
 from face_engine  import (extraer_caracteristicas, dibujar_overlay,
                            N_ZONAS, ZONAS,
-                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
+                           ZONAS_FRONTAL, ZONAS_PERFIL_D, ZONAS_PERFIL_I,
+                           ZONAS_ABAJO, ZONAS_POR_TIPO,
+                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I, TIPO_ABAJO)
 from database     import (registrar_persona, guardar_vectores_por_angulo,
                           guardar_vector_unico, reconocer_persona)
 
@@ -85,6 +87,11 @@ TIEMPO_ESCANEO = sum(p[4] for p in PASOS_REGISTRO)   # 20s total
 
 NOMBRES_ZONA = ["Frente", "Ojo izq", "Ojo der",
                 "Nariz", "Mejilla izq", "Mejilla der", "Boca/menton"]
+
+def _nombres_para_tipo(tipo):
+    """Retorna los nombres de zonas para el tipo de angulo dado."""
+    zonas = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
+    return [z[4].replace("_", " ").title() for z in zonas]
 
 
 # ── helper ────────────────────────────────────────────────────────────────────
@@ -260,15 +267,22 @@ class App(tk.Tk):
 
                 if pesos is not None and vector is not None:
                     x0, y0, w0, h0 = coords
-                    for iz, (r0, r1, c0_, c1_, _) in enumerate(ZONAS):
+                    # Usar las zonas del angulo actual para dibujar los recuadros
+                    zonas_vis = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
+                    for iz, (r0, r1, c0_, c1_, nombre_zona) in enumerate(zonas_vis):
                         zx = int(x0 + c0_ * w0 / 128)
                         zy = int(y0 + r0  * h0 / 128)
                         zw = int((c1_ - c0_) * w0 / 128)
                         zh = int((r1  - r0)  * h0 / 128)
-                        if pesos[iz] > 0.1:
+                        if iz < len(pesos) and pesos[iz] > 0.1:
                             a = pesos[iz]
-                            cv2.rectangle(vis, (zx,zy),(zx+zw,zy+zh),
-                                (int(255*(1-a)), int(200*a), int(255*a)), 1)
+                            color_zona = (int(255*(1-a)), int(200*a), int(255*a))
+                            cv2.rectangle(vis, (zx,zy),(zx+zw,zy+zh), color_zona, 1)
+                            # Nombre de la zona en la esquina superior izquierda
+                            cv2.putText(vis, nombre_zona[:6],
+                                        (zx+2, zy+10),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.28,
+                                        color_zona, 1)
 
             # convertir a ImageTk en el hilo (cpu, no tkinter)
             imgtk = _imgtk(vis, max_w, max_h)
