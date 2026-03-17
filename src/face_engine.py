@@ -206,14 +206,13 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape):
                     yaw_s   = float(np.mean(_buf_yaw))
                     pitch_s = float(np.mean(_buf_pitch))
 
-                    # Umbrales en grados — ajustados para uso normal
-                    if yaw_s > 20:
+                    # Pitch tiene prioridad SOLO si yaw es pequeño
+                    # Esto evita que voltear lateral se confunda con abajo
+                    if yaw_s > 15:
                         return TIPO_PERFIL_D
-                    elif yaw_s < -20:
+                    elif yaw_s < -15:
                         return TIPO_PERFIL_I
-                    elif pitch_s < -18:
-                        return TIPO_ABAJO
-                    elif pitch_s > 18:
+                    elif pitch_s < -25 or pitch_s > 25:
                         return TIPO_ABAJO
                     else:
                         return TIPO_FRONTAL
@@ -260,11 +259,13 @@ def _clasificar_por_asimetria(cara128):
     rh = float(np.mean(_buf_rh))
     rv = float(np.mean(_buf_rv))
 
+    # YAW tiene prioridad sobre PITCH
+    # Si hay asimetria lateral significativa → es perfil, no abajo
     if rh > 0.14:
         return TIPO_PERFIL_D
     elif rh < -0.11:
         return TIPO_PERFIL_I
-    elif abs(rv) > 0.14:
+    elif abs(rv) > 0.18:   # umbral mas alto para evitar falsos abajo
         return TIPO_ABAJO
     else:
         return TIPO_FRONTAL
