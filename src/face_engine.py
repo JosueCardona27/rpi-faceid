@@ -106,11 +106,9 @@ def _detectar_dnn(frame, conf_min=0.45):
 _lm_detector = None
 
 def _get_lm_detector():
-    """Carga el modelo LBF de landmarks. Se inicializa una sola vez."""
     global _lm_detector
     if _lm_detector is not None:
         return _lm_detector if _lm_detector is not False else None
-
     ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "..", "models", "lbfmodel.yaml")
     if os.path.exists(ruta):
@@ -122,111 +120,149 @@ def _get_lm_detector():
             return _lm_detector
         except Exception as e:
             print(f"[LM] Error cargando LBF: {e}")
-
     _lm_detector = False
     print("[LM] lbfmodel.yaml no disponible — usando asimetria de bordes")
     return None
 
 
-# ─── Puntos 3D modelo de cara estandar (para solvePnP) ───────────────────────
-# Indices en landmarks de 68 puntos:
-#   30 = punta nariz, 8 = menton, 36 = ojo izq ext,
-#   45 = ojo der ext, 48 = boca izq, 54 = boca der
-_PTS_3D = np.array([
-    [ 0.0,    0.0,    0.0   ],   # 30 punta nariz
-    [ 0.0,  -63.6,  -12.5  ],   # 8  menton
-    [-43.3,  32.7,  -26.0  ],   # 36 ojo izq ext
-    [ 43.3,  32.7,  -26.0  ],   # 45 ojo der ext
-    [-28.9, -28.9,  -24.1  ],   # 48 boca izq
-    [ 28.9, -28.9,  -24.1  ],   # 54 boca der
+# ─── Modelo 3D de cara estandar para solvePnP ────────────────────────────────
+# Coordenadas en mm, sistema: X=derecha, Y=abajo, Z=hacia camara
+# Indices LBF de 68 puntos usados:
+#   30=nariz punta, 8=menton, 36=ojo_izq_ext, 45=ojo_der_ext,
+#   48=boca_izq,    54=boca_der, 0=mandibula_izq, 16=mandibula_der,
+#   17=ceja_izq,    26=ceja_der, 33=nariz_base
+_PTS_3D_BASE = np.array([
+    [ 0.0,    0.0,    0.0  ],   # 30 punta nariz (origen)
+    [ 0.0,   -63.6, -12.5 ],   # 8  menton
+    [-43.3,   32.7, -26.0 ],   # 36 ojo izq externo
+    [ 43.3,   32.7, -26.0 ],   # 45 ojo der externo
+    [-28.9,  -28.9, -24.1 ],   # 48 boca izq
+    [ 28.9,  -28.9, -24.1 ],   # 54 boca der
 ], dtype=np.float64)
 
-_IDX_LM = [30, 8, 36, 45, 48, 54]   # indices en el array de 68 landmarks
+_IDX_BASE = [30, 8, 36, 45, 48, 54]
 
-# Buffer de suavizado para estabilizar angulos entre frames
-_BUFFER_N    = 4
-_buf_yaw     = []
-_buf_pitch   = []
+# Buffer de suavizado
+_BUFFER_N  = 5
+_buf_yaw   = []
+_buf_pitch = []
+
+
+def _extraer_angulos_lbf(frame_gris, bbox, fw, fh):
+    """
+    Usa LBF + solvePnP para calcular yaw y pitch en grados.
+    Retorna (yaw, pitch) o (None, None) si falla.
+
+    Convencion:
+      yaw   > 0  → cara girada a su DERECHA  (perfil_der en imagen)
+      yaw   < 0  → cara girada a su IZQUIERDA (perfil_izq en imagen)
+      pitch > 0  → cara mirando hacia ARRIBA
+      pitch < 0  → cara mirando hacia ABAJO
+    """
+    lm_det = _get_lm_detector()
+    if lm_det is None:
+        return None, None
+
+    x, y, w, h = bbox
+    try:
+        rect = np.array([[x, y, w, h]], dtype=np.int32)
+        ok, landmarks = lm_det.fit(frame_gris, rect)
+        if not ok or len(landmarks) == 0:
+            return None, None
+
+        lm = landmarks[0][0]  # (68, 2)
+        pts_2d = np.array([lm[i] for i in _IDX_BASE], dtype=np.float64)
+
+        # Camara estimada con focal = ancho de imagen
+        cam = np.array([
+            [fw, 0,  fw / 2],
+            [0,  fw, fh / 2],
+            [0,  0,  1     ]
+        ], dtype=np.float64)
+
+        ok2, rvec, _ = cv2.solvePnP(
+            _PTS_3D_BASE, pts_2d, cam,
+            np.zeros((4, 1)),
+            flags=cv2.SOLVEPNP_ITERATIVE)
+
+        if not ok2:
+            return None, None
+
+        # Convertir vector de rotacion a matriz
+        rmat, _ = cv2.Rodrigues(rvec)
+
+        # Extraer angulos de Euler correctos para pose de cabeza
+        # Usando descomposicion estandar: Rx*Ry*Rz
+        # pitch = rotacion en X (arriba/abajo)
+        # yaw   = rotacion en Y (izq/der)
+        pitch = float(np.degrees(np.arcsin(-rmat[2, 0])))
+        yaw   = float(np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2])))
+
+        # Tambien calcular usando asimetria de landmarks como verificacion
+        # Si ojo_izq y ojo_der tienen distancias muy distintas a nariz → perfil
+        nariz    = lm[30]
+        ojo_izq  = lm[36]
+        ojo_der  = lm[45]
+        mej_izq  = lm[1]   # punto mandibula izq
+        mej_der  = lm[15]  # punto mandibula der
+
+        d_izq = float(np.linalg.norm(nariz - ojo_izq))
+        d_der = float(np.linalg.norm(nariz - ojo_der))
+        asim  = (d_izq - d_der) / (d_izq + d_der + 1e-6)
+        # asim > 0 → ojo_der mas lejos → cara girada a DERECHA
+        # asim < 0 → ojo_izq mas lejos → cara girada a IZQUIERDA
+
+        # Combinar solvePnP con asimetria para mayor robustez
+        # Si asimetria es fuerte, usarla para corregir el yaw
+        if abs(asim) > 0.08:
+            yaw_asim = asim * 90  # escalar a grados aprox
+            yaw = 0.5 * yaw + 0.5 * yaw_asim
+
+        return yaw, pitch
+
+    except Exception:
+        return None, None
 
 
 def _clasificar_angulo(frame_gris, bbox, frame_shape):
     """
-    Calcula yaw y pitch con cv2.face LBF + solvePnP.
-    Si LBF no esta disponible, cae a asimetria de bordes.
-    Retorna: TIPO_FRONTAL / TIPO_PERFIL_D / TIPO_PERFIL_I / TIPO_ABAJO
+    Clasifica el angulo de la cabeza usando LBF + solvePnP.
+    Fallback a asimetria de bordes si LBF no esta disponible.
     """
     global _buf_yaw, _buf_pitch
 
-    lm_det = _get_lm_detector()
+    fw, fh = frame_shape[1], frame_shape[0]
+    yaw, pitch = _extraer_angulos_lbf(frame_gris, bbox, fw, fh)
+
+    if yaw is not None:
+        # Suavizar
+        _buf_yaw.append(yaw)
+        _buf_pitch.append(pitch)
+        if len(_buf_yaw) > _BUFFER_N:
+            _buf_yaw.pop(0)
+            _buf_pitch.pop(0)
+
+        ys = float(np.mean(_buf_yaw))
+        ps = float(np.mean(_buf_pitch))
+
+        # Yaw tiene prioridad sobre pitch
+        if ys > 12:
+            return TIPO_PERFIL_D
+        elif ys < -12:
+            return TIPO_PERFIL_I
+        elif abs(ps) > 22:
+            return TIPO_ABAJO
+        else:
+            return TIPO_FRONTAL
+
+    # Fallback: asimetria de bordes
     x, y, w, h = bbox
-    fw = frame_shape[1]
-    fh = frame_shape[0]
-
-    if lm_det is not None:
-        try:
-            # LBF necesita imagen completa + rect en formato (x,y,w,h)
-            rect = np.array([[x, y, w, h]], dtype=np.int32)
-            ok, landmarks = lm_det.fit(frame_gris, rect)
-
-            if ok and len(landmarks) > 0:
-                lm = landmarks[0][0]   # shape: (68, 2)
-
-                # Extraer los 6 puntos clave
-                pts_2d = np.array(
-                    [lm[i] for i in _IDX_LM], dtype=np.float64)
-
-                # Matriz de camara estimada
-                focal      = fw
-                cam_matrix = np.array([
-                    [focal, 0,     fw / 2],
-                    [0,     focal, fh / 2],
-                    [0,     0,     1     ]
-                ], dtype=np.float64)
-
-                ok2, rvec, tvec = cv2.solvePnP(
-                    _PTS_3D, pts_2d, cam_matrix,
-                    np.zeros((4, 1)),
-                    flags=cv2.SOLVEPNP_ITERATIVE)
-
-                if ok2:
-                    rmat, _ = cv2.Rodrigues(rvec)
-                    yaw   = float(np.degrees(
-                        np.arctan2(rmat[1, 0], rmat[0, 0])))
-                    pitch = float(np.degrees(
-                        np.arctan2(-rmat[2, 0],
-                                   np.sqrt(rmat[2,1]**2 + rmat[2,2]**2))))
-
-                    # Suavizar con buffer
-                    _buf_yaw.append(yaw)
-                    _buf_pitch.append(pitch)
-                    if len(_buf_yaw) > _BUFFER_N:
-                        _buf_yaw.pop(0)
-                        _buf_pitch.pop(0)
-
-                    yaw_s   = float(np.mean(_buf_yaw))
-                    pitch_s = float(np.mean(_buf_pitch))
-
-                    # Pitch tiene prioridad SOLO si yaw es pequeño
-                    # Esto evita que voltear lateral se confunda con abajo
-                    if yaw_s > 15:
-                        return TIPO_PERFIL_D
-                    elif yaw_s < -15:
-                        return TIPO_PERFIL_I
-                    elif pitch_s < -25 or pitch_s > 25:
-                        return TIPO_ABAJO
-                    else:
-                        return TIPO_FRONTAL
-        except Exception as e:
-            pass   # fallback a asimetria
-
-    # ── Fallback: asimetria de bordes ────────────────────────────────────────
     x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(frame_shape[1], x+w), min(frame_shape[0], y+h)
+    x2, y2 = min(fw, x+w), min(fh, y+h)
     recorte = frame_gris[y1:y2, x1:x2]
     if recorte.size == 0:
         return TIPO_FRONTAL
-    cara128 = cv2.resize(recorte, (128, 128))
-    return _clasificar_por_asimetria(cara128)
+    return _clasificar_por_asimetria(cv2.resize(recorte, (128, 128)))
 
 
 # ─── Fallback: asimetria de bordes Sobel ─────────────────────────────────────
