@@ -152,6 +152,9 @@ class App(tk.Tk):
         self._ov_texto = ""
         self._ov_lock  = threading.Lock()
 
+        # angulo esperado en el paso actual de registro (None = modo acceso libre)
+        self._tipo_esperado = None
+
         self._zonas_vivas = np.zeros(N_ZONAS, dtype=np.float32)
         self._zonas_lock  = threading.Lock()
 
@@ -319,8 +322,10 @@ class App(tk.Tk):
                 continue
 
             ultimo_id = frame_id
-            modo = self._modo_deteccion
-            resultado = extraer_caracteristicas(frame, HAAR_PATH, modo=modo)
+            modo          = self._modo_deteccion
+            tipo_esperado = self._tipo_esperado
+            resultado = extraer_caracteristicas(frame, HAAR_PATH, modo=modo,
+                                                tipo_esperado=tipo_esperado)
             vector, pesos, coords, tipo = resultado
 
             with self._analisis_lock:
@@ -697,8 +702,9 @@ class App(tk.Tk):
             t_ultimo_tick    = None  # marca de tiempo del ultimo tick valido
             ultimo_analisis  = -1
 
-            # activar modo de deteccion y UI para este paso
+            # activar modo de deteccion y angulo esperado para este paso
             self._modo_deteccion = modo_det
+            self._tipo_esperado  = tipo_esperado
             desc_paso = f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}"
             self.after(0, lambda i=instruccion: self._safe(
                 lambda: self.status_var.set(i)))
@@ -807,8 +813,9 @@ class App(tk.Tk):
                         f"Paso {e}: solo {n} muestras.\n"
                         f"Mantente mas cerca de la camara.")))
 
-        # ── fin de todos los pasos ────────────────────────────────────────────
+        # fin de todos los pasos -- restaurar modo libre
         self._modo_deteccion = "auto"
+        self._tipo_esperado  = None
         self._set_overlay(None, "")
         self.after(0, lambda: self._safe(lambda: self.timer_var.set("")))
         self.after(0, lambda: self._safe(lambda: self.paso_txt_var.set("")))
