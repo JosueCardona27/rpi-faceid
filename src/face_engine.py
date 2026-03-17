@@ -172,38 +172,29 @@ def _extraer_angulos_lbf(frame_gris, bbox, fw, fh):
 
         lm = landmarks[0][0]  # (68, 2)
 
-        # ── YAW: asimetria nariz-ojos (robusto, sin solvePnP) ────────────────
-        # Cuando la cara gira a su DERECHA:
-        #   - ojo derecho se aleja de la nariz → d_der aumenta
-        #   - ojo izquierdo se acerca → d_izq disminuye
+        # ── YAW: asimetria nariz-ojos ─────────────────────────────────────────
         nariz   = lm[30].astype(np.float64)
         ojo_izq = lm[36].astype(np.float64)
         ojo_der = lm[45].astype(np.float64)
         menton  = lm[8].astype(np.float64)
-        frente  = lm[27].astype(np.float64)  # puente nariz (aprox frente)
+        frente  = lm[27].astype(np.float64)
 
         d_izq = float(np.linalg.norm(nariz - ojo_izq))
         d_der = float(np.linalg.norm(nariz - ojo_der))
         total = d_izq + d_der + 1e-6
+        asim  = (d_der - d_izq) / total
+        yaw   = asim * 120.0
 
-        # asim > 0 → d_der > d_izq → cara girada a su DERECHA
-        # asim < 0 → d_izq > d_der → cara girada a su IZQUIERDA
-        asim = (d_der - d_izq) / total
-
-        # Escalar a grados aproximados: asim=0.15 ≈ 15-20 grados
-        yaw = asim * 120.0
-
-        # ── PITCH: posicion vertical de nariz entre frente y menton ──────────
-        # Cuando la cara baja (pitch negativo):
-        #   - nariz sube relativamente entre frente y menton
-        # Cuando la cara sube (pitch positivo):
-        #   - nariz baja relativamente
-        altura = float(np.linalg.norm(menton - frente)) + 1e-6
-        pos_nariz = float(nariz[1] - frente[1]) / altura
-        # Frontal: pos_nariz ≈ 0.55
-        # Cara abajo: pos_nariz < 0.45
-        # Cara arriba: pos_nariz > 0.65
-        pitch = (0.55 - pos_nariz) * 100.0  # escalar a grados aprox
+        # ── PITCH: ratio entre distancia ojos-nariz vs nariz-menton ──────────
+        # Mas robusto que posicion absoluta — es invariante a escala
+        dist_ojos_nariz   = float(np.linalg.norm(nariz - (ojo_izq+ojo_der)/2))
+        dist_nariz_menton = float(np.linalg.norm(menton - nariz)) + 1e-6
+        ratio_vm = dist_ojos_nariz / dist_nariz_menton
+        # Frontal: ratio ≈ 0.5-0.6
+        # Cara abajo: ojos-nariz se achica, nariz-menton crece → ratio < 0.45
+        # Cara arriba: ojos-nariz crece → ratio > 0.65
+        # Escalar: pitch=0 cuando ratio=0.55 (frontal calibrado)
+        pitch = (0.55 - ratio_vm) * 150.0
 
         return yaw, pitch
 
@@ -232,12 +223,14 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape):
         ys = float(np.mean(_buf_yaw))
         ps = float(np.mean(_buf_pitch))
 
-        # Yaw tiene prioridad sobre pitch
-        if ys > 12:
+        # Umbrales calibrados con datos reales de la RPi:
+        # YAW frontal: -10 a +10, perfil der: >15, perfil izq: <-15
+        # PITCH frontal: -5 a +5 (con nueva formula ratio)
+        if ys > 15:
             return TIPO_PERFIL_D
-        elif ys < -12:
+        elif ys < -15:
             return TIPO_PERFIL_I
-        elif abs(ps) > 22:
+        elif ps > 10 or ps < -10:
             return TIPO_ABAJO
         else:
             return TIPO_FRONTAL
