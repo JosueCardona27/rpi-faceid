@@ -100,7 +100,7 @@ def _init_detectores():
         print("[HAAR] haarcascade_profileface.xml no encontrado")
 
 
-def _detectar_dnn(frame, conf_min=0.18):
+def _detectar_dnn(frame, conf_min=0.35):
     """
     Detecta caras con estrategia triple:
       1. DNN SSD conf=0.18 — bueno para frontales y perfiles leves
