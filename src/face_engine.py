@@ -37,58 +37,53 @@ _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 
 
 # =============================================================================
-#  DETECCION DE CARA  (DNN + Haar backup)
+#  DETECCION DE CARA  (YuNet principal + DNN SSD backup)
 # =============================================================================
+#
+#  YuNet: detector moderno incluido en OpenCV 4.5.4+
+#         maneja perfiles hasta ~90 grados de rotacion lateral.
+#  DNN SSD: backup si YuNet falla.
 
+_yunet    = None
 _dnn_net  = None
-_haar_cas = None
 _det_init = False
 
 
 def _init_detectores():
-    global _dnn_net, _haar_cas, _det_init
+    global _yunet, _dnn_net, _det_init
     if _det_init:
         return
     _det_init = True
 
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
 
-    # DNN SSD ResNet -- deteccion principal
+    # YuNet -- detector principal
+    yunet_ruta = os.path.join(base, "face_detection_yunet.onnx")
+    if os.path.exists(yunet_ruta):
+        try:
+            _yunet = cv2.FaceDetectorYN.create(
+                yunet_ruta, "", (640, 480),
+                score_threshold=0.6,
+                nms_threshold=0.3,
+                top_k=5)
+            print(f"[YuNet] Modelo cargado: {yunet_ruta}")
+        except Exception as e:
+            print(f"[YuNet] Error: {e}")
+    else:
+        print("[YuNet] WARN: face_detection_yunet.onnx no encontrado")
+
+    # DNN SSD ResNet -- backup
     proto = os.path.join(base, "opencv_face_detector.prototxt")
     caffe = os.path.join(base, "opencv_face_detector.caffemodel")
     if os.path.exists(proto) and os.path.exists(caffe):
         _dnn_net = cv2.dnn.readNetFromCaffe(proto, caffe)
-        print(f"[DNN] Modelo cargado: {caffe}")
-    else:
-        print("[DNN] WARN: modelo no encontrado")
-
-    # Haar frontal -- backup cuando DNN pierde perfiles
-    haar_candidatos = [
-        os.path.join(base, "haarcascade_frontalface_default.xml"),
-        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-    ]
-    try:
-        haar_candidatos.append(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    except Exception:
-        pass
-
-    for ruta in haar_candidatos:
-        if os.path.exists(ruta):
-            cas = cv2.CascadeClassifier(ruta)
-            if not cas.empty():
-                _haar_cas = cas
-                print(f"[HAAR] Cascade backup: {ruta}")
-                break
+        print(f"[DNN] Backup cargado: {caffe}")
 
 
-def _detectar_dnn(frame, conf_min=0.18):
+def _detectar_dnn(frame, conf_min=0.45):
     """
-    Detecta caras en el frame con estrategia dual.
-
-    1. DNN SSD con conf_min=0.18 (bajo para capturar perfiles parciales)
-    2. Haar frontal muy permisivo si DNN no detecta nada
-
+    Detecta caras con YuNet (principal) o DNN SSD (backup).
+    YuNet detecta caras hasta ~90 grados de rotacion lateral.
     Retorna lista de (x, y, w, h, conf) ordenada por area descendente.
     """
     _init_detectores()
@@ -96,14 +91,33 @@ def _detectar_dnn(frame, conf_min=0.18):
     h_img, w_img = frame.shape[:2]
     resultados   = []
 
-    # Intento 1: DNN
+    # Intento 1: YuNet
+    if _yunet is not None:
+        _yunet.setInputSize((w_img, h_img))
+        _, faces = _yunet.detect(frame)
+        if faces is not None:
+            for face in faces:
+                x  = max(0, int(face[0]))
+                y  = max(0, int(face[1]))
+                w  = int(face[2])
+                h  = int(face[3])
+                cf = float(face[14])
+                if cf >= 0.6 and w > 20 and h > 20:
+                    x2 = min(w_img, x + w)
+                    y2 = min(h_img, y + h)
+                    resultados.append((x, y, x2 - x, y2 - y, cf))
+
+    if resultados:
+        resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
+        return resultados
+
+    # Intento 2: DNN SSD backup
     if _dnn_net is not None:
         blob = cv2.dnn.blobFromImage(
             cv2.resize(frame, (300, 300)), 1.0,
             (300, 300), (104.0, 117.0, 123.0))
         _dnn_net.setInput(blob)
         dets = _dnn_net.forward()
-
         for i in range(dets.shape[2]):
             conf = float(dets[0, 0, i, 2])
             if conf < conf_min:
@@ -114,25 +128,11 @@ def _detectar_dnn(frame, conf_min=0.18):
             y2 = min(h_img, int(dets[0, 0, i, 6] * h_img))
             if x2 > x1 and y2 > y1:
                 resultados.append((x1, y1, x2 - x1, y2 - y1, conf))
-
-    if resultados:
-        resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
-        return resultados
-
-    # Intento 2: Haar muy permisivo
-    if _haar_cas is not None and not _haar_cas.empty():
-        gris  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gris  = cv2.equalizeHist(gris)
-        caras = _haar_cas.detectMultiScale(
-            gris, scaleFactor=1.1, minNeighbors=2,
-            minSize=(50, 50), flags=cv2.CASCADE_SCALE_IMAGE)
-        if len(caras) > 0:
-            resultados = [(int(x), int(y), int(w), int(h), 0.5)
-                          for (x, y, w, h) in caras]
+        if resultados:
             resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
-            return resultados
 
-    return []
+    return resultados
+
 
 
 # =============================================================================
