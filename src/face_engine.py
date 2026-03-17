@@ -171,52 +171,39 @@ def _extraer_angulos_lbf(frame_gris, bbox, fw, fh):
             return None, None
 
         lm = landmarks[0][0]  # (68, 2)
-        pts_2d = np.array([lm[i] for i in _IDX_BASE], dtype=np.float64)
 
-        # Camara estimada con focal = ancho de imagen
-        cam = np.array([
-            [fw, 0,  fw / 2],
-            [0,  fw, fh / 2],
-            [0,  0,  1     ]
-        ], dtype=np.float64)
-
-        ok2, rvec, _ = cv2.solvePnP(
-            _PTS_3D_BASE, pts_2d, cam,
-            np.zeros((4, 1)),
-            flags=cv2.SOLVEPNP_ITERATIVE)
-
-        if not ok2:
-            return None, None
-
-        # Convertir vector de rotacion a matriz
-        rmat, _ = cv2.Rodrigues(rvec)
-
-        # Extraer angulos de Euler correctos para pose de cabeza
-        # Usando descomposicion estandar: Rx*Ry*Rz
-        # pitch = rotacion en X (arriba/abajo)
-        # yaw   = rotacion en Y (izq/der)
-        pitch = float(np.degrees(np.arcsin(-rmat[2, 0])))
-        yaw   = float(np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2])))
-
-        # Tambien calcular usando asimetria de landmarks como verificacion
-        # Si ojo_izq y ojo_der tienen distancias muy distintas a nariz → perfil
-        nariz    = lm[30]
-        ojo_izq  = lm[36]
-        ojo_der  = lm[45]
-        mej_izq  = lm[1]   # punto mandibula izq
-        mej_der  = lm[15]  # punto mandibula der
+        # ── YAW: asimetria nariz-ojos (robusto, sin solvePnP) ────────────────
+        # Cuando la cara gira a su DERECHA:
+        #   - ojo derecho se aleja de la nariz → d_der aumenta
+        #   - ojo izquierdo se acerca → d_izq disminuye
+        nariz   = lm[30].astype(np.float64)
+        ojo_izq = lm[36].astype(np.float64)
+        ojo_der = lm[45].astype(np.float64)
+        menton  = lm[8].astype(np.float64)
+        frente  = lm[27].astype(np.float64)  # puente nariz (aprox frente)
 
         d_izq = float(np.linalg.norm(nariz - ojo_izq))
         d_der = float(np.linalg.norm(nariz - ojo_der))
-        asim  = (d_izq - d_der) / (d_izq + d_der + 1e-6)
-        # asim > 0 → ojo_der mas lejos → cara girada a DERECHA
-        # asim < 0 → ojo_izq mas lejos → cara girada a IZQUIERDA
+        total = d_izq + d_der + 1e-6
 
-        # Combinar solvePnP con asimetria para mayor robustez
-        # Si asimetria es fuerte, usarla para corregir el yaw
-        if abs(asim) > 0.08:
-            yaw_asim = asim * 90  # escalar a grados aprox
-            yaw = 0.5 * yaw + 0.5 * yaw_asim
+        # asim > 0 → d_der > d_izq → cara girada a su DERECHA
+        # asim < 0 → d_izq > d_der → cara girada a su IZQUIERDA
+        asim = (d_der - d_izq) / total
+
+        # Escalar a grados aproximados: asim=0.15 ≈ 15-20 grados
+        yaw = asim * 120.0
+
+        # ── PITCH: posicion vertical de nariz entre frente y menton ──────────
+        # Cuando la cara baja (pitch negativo):
+        #   - nariz sube relativamente entre frente y menton
+        # Cuando la cara sube (pitch positivo):
+        #   - nariz baja relativamente
+        altura = float(np.linalg.norm(menton - frente)) + 1e-6
+        pos_nariz = float(nariz[1] - frente[1]) / altura
+        # Frontal: pos_nariz ≈ 0.55
+        # Cara abajo: pos_nariz < 0.45
+        # Cara arriba: pos_nariz > 0.65
+        pitch = (0.55 - pos_nariz) * 100.0  # escalar a grados aprox
 
         return yaw, pitch
 
