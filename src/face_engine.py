@@ -352,10 +352,10 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
 def _extraer_angulos_lbf(gris, bbox, fw, fh):
     """
     Extrae yaw y pitch usando LBF landmarks.
-    Pitch no implementado, retorna None.
+    Pitch no implementado, retorna 0.0.
     """
     yaw = _calcular_yaw_lbf(gris, bbox)
-    pitch = None
+    pitch = 0.0
     return yaw, pitch
 
 
