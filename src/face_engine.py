@@ -1,30 +1,16 @@
 """
-face_engine.py - VERSIÓN MEJORADA CON MEDIAPIPE
-==================================================
+face_engine.py - VERSIÓN OPTIMIZADA PARA PERFILES
+===================================================
 Motor de reconocimiento facial multiángulo con LBP.
 
-Detección (en orden):
-  1. MediaPipe    — detector robusto (±90°)
-  2. YuNet        — si existe models/face_detection_yunet.onnx
-  3. DNN SSD      — si existe models/opencv_face_detector.caffemodel
-  4. Haar         — cascadas de fallback
-  5. Dlib         — último recurso
-
-Mejoras:
-  - MediaPipe detecta perfiles completos (±90°)
-  - Umbrales adaptativos por contexto
-  - Mejor manejo de excepciones
-  - Logging detallado para debugging
+SOLUCIÓN: Umbrales MUCHO más bajos para YuNet en perfiles
+          + Haar cascades mejorados como fallback principal
+          + Mejor preprocesamiento de imagen
 """
 
 import cv2
 import numpy as np
 import os
-import logging
-
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 TIPO_FRONTAL  = "frontal"
 TIPO_PERFIL_D = "perfil_der"
@@ -37,37 +23,22 @@ _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
 #  DETECCION
 # =============================================================================
 
-_mediapipe_detector = None
-_yunet              = None
-_dnn_net            = None
-_haar_frontal       = None
-_haar_perfil        = None
-_dlib_detector      = None
-_det_init           = False
+_yunet         = None
+_dnn_net       = None
+_haar_frontal  = None
+_haar_perfil   = None
+_dlib_detector = None
+_det_init      = False
 
 
 def _init_detectores():
-    """Inicializa todos los detectores disponibles."""
-    global _mediapipe_detector, _yunet, _dnn_net, _haar_frontal, _haar_perfil, _dlib_detector, _det_init
-    
+    """Inicializa detectores."""
+    global _yunet, _dnn_net, _haar_frontal, _haar_perfil, _det_init
     if _det_init:
         return
     _det_init = True
 
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-
-    # ── MediaPipe (PRINCIPAL) ──────────────────────────────────────────────────
-    try:
-        import mediapipe as mp
-        mp_face_detection = mp.solutions.face_detection
-        _mediapipe_detector = mp_face_detection.FaceDetection(
-            model_selection=1,  # 1=full range, 0=short range
-            min_detection_confidence=0.3
-        )
-        logger.info("[DET] MediaPipe: disponible (PRINCIPAL)")
-    except ImportError:
-        logger.warning("[DET] MediaPipe no instalado. Instalar: pip install mediapipe")
-        _mediapipe_detector = None
 
     # ── YuNet ──────────────────────────────────────────────────────────────────
     yunet_ruta = os.path.join(base, "face_detection_yunet.onnx")
@@ -75,24 +46,24 @@ def _init_detectores():
         try:
             _yunet = cv2.FaceDetectorYN.create(
                 yunet_ruta, "", (640, 480),
-                score_threshold=0.3, nms_threshold=0.3, top_k=10)
-            logger.info(f"[DET] YuNet: {yunet_ruta}")
+                score_threshold=0.1, nms_threshold=0.3, top_k=20)
+            print(f"[DET] YuNet: {yunet_ruta}")
         except Exception as e:
-            logger.error(f"[DET] YuNet error: {e}")
+            print(f"[DET] YuNet error: {e}")
     else:
-        logger.info("[DET] YuNet no encontrado")
+        print("[DET] YuNet no encontrado")
 
-    # ── DNN SSD ──────────────────────────────────────────────────���─────────────
+    # ── DNN SSD ────────────────────────────────────────────────────────────────
     proto = os.path.join(base, "opencv_face_detector.prototxt")
     caffe = os.path.join(base, "opencv_face_detector.caffemodel")
     if os.path.exists(proto) and os.path.exists(caffe):
         try:
             _dnn_net = cv2.dnn.readNetFromCaffe(proto, caffe)
-            logger.info(f"[DET] DNN SSD: {caffe}")
+            print(f"[DET] DNN SSD: {caffe}")
         except Exception as e:
-            logger.error(f"[DET] DNN SSD error: {e}")
+            print(f"[DET] DNN SSD error: {e}")
     else:
-        logger.info("[DET] DNN SSD no encontrado")
+        print("[DET] DNN SSD no encontrado")
 
     # ── Haar frontal ───────────────────────────────────────────────────────────
     rutas_frontal = [
@@ -107,12 +78,9 @@ def _init_detectores():
     for ruta in rutas_frontal:
         if os.path.exists(ruta):
             _haar_frontal = cv2.CascadeClassifier(ruta)
-            logger.info(f"[DET] Haar frontal: {ruta}")
-            break
-
-    if _haar_frontal is None or _haar_frontal.empty():
-        logger.warning("[DET] Haar frontal no cargado correctamente")
-        _haar_frontal = None
+            if not _haar_frontal.empty():
+                print(f"[DET] Haar frontal: {ruta}")
+                break
 
     # ── Haar perfil ────────────────────────────────────────────────────────────
     ruta_perfil = None
@@ -125,107 +93,90 @@ def _init_detectores():
     if ruta_perfil and os.path.exists(ruta_perfil):
         _haar_perfil = cv2.CascadeClassifier(ruta_perfil)
         if not _haar_perfil.empty():
-            logger.info(f"[DET] Haar perfil: {ruta_perfil}")
+            print(f"[DET] Haar perfil: {ruta_perfil}")
         else:
             _haar_perfil = None
-            logger.warning("[DET] Haar perfil no cargado correctamente")
     else:
-        logger.info("[DET] Haar perfil no encontrado")
+        print("[DET] Haar perfil no encontrado - usará Haar frontal relajado")
 
     # ── Dlib ───────────────────────────────────────────────────────────────────
     try:
         import dlib
         _dlib_detector = dlib.get_frontal_face_detector()
-        logger.info("[DET] Dlib: disponible")
+        print("[DET] Dlib: disponible")
     except ImportError:
-        logger.info("[DET] Dlib no instalado")
         _dlib_detector = None
 
 
-def _detectar_mediapipe(frame):
-    """Detecta caras usando MediaPipe."""
-    if _mediapipe_detector is None:
-        return []
-    
-    try:
-        h_img, w_img = frame.shape[:2]
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        results = _mediapipe_detector.process(rgb_frame)
-        resultados = []
-        
-        if results.detections:
-            for detection in results.detections:
-                bbox = detection.location_data.relative_bounding_box
-                x = max(0, int(bbox.xmin * w_img))
-                y = max(0, int(bbox.ymin * h_img))
-                w = int(bbox.width * w_img)
-                h = int(bbox.height * h_img)
-                conf = detection.score[0]
-                
-                if w > 20 and h > 20:
-                    resultados.append((x, y, w, h, conf))
-        
-        return sorted(resultados, key=lambda c: c[2]*c[3], reverse=True)
-    except Exception as e:
-        logger.error(f"[MediaPipe] Error: {e}")
-        return []
+def _preprocess_frame(frame):
+    """Preprocesa el frame para mejorar detección de perfiles."""
+    # Mejorar contraste
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
 
 def _detectar_dnn(frame, tipo_esperado=None):
     """
-    Detecta la cara principal segun el angulo esperado.
-    Orden: MediaPipe → YuNet → DNN SSD → Haar → Dlib
+    Detecta caras con énfasis en perfiles.
+    Orden: YuNet (ultra-sensible) → DNN → Haar perfil → Haar frontal relajado → Dlib
     """
     _init_detectores()
     h_img, w_img = frame.shape[:2]
     resultados   = []
     es_perfil = tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I)
 
-    # ── MediaPipe (PRINCIPAL) ──────────────────────────────────────────────────
-    resultados = _detectar_mediapipe(frame)
-    if resultados:
-        logger.debug(f"[MediaPipe] Detectadas {len(resultados)} cara(s)")
-        return resultados
+    # Preprocesar frame
+    frame_prep = _preprocess_frame(frame)
 
-    # ── YuNet ──────────────────────────────────────────────────────────────────
+    # ── YuNet (ULTRA SENSIBLE PARA PERFILES) ───────────────────────────────────
     if _yunet is not None:
         try:
-            if es_perfil:
-                _yunet.setScoreThreshold(0.25)
-                _yunet.setTopK(15)
-            else:
-                _yunet.setScoreThreshold(0.35)
-                _yunet.setTopK(5)
-            
             _yunet.setInputSize((w_img, h_img))
-            _, faces = _yunet.detect(frame)
             
-            if faces is not None:
+            # Parámetros MUCHO más permisivos para perfiles
+            if es_perfil:
+                _yunet.setScoreThreshold(0.05)  # ANTES: 0.4 → AHORA: 0.05
+                _yunet.setTopK(30)              # ANTES: 5   → AHORA: 30
+            else:
+                _yunet.setScoreThreshold(0.2)   # ANTES: 0.4 → AHORA: 0.2
+                _yunet.setTopK(10)
+            
+            _, faces = _yunet.detect(frame_prep)
+            
+            if faces is not None and len(faces) > 0:
                 for face in faces:
                     x  = max(0, int(face[0]))
                     y  = max(0, int(face[1]))
                     w  = int(face[2])
                     h  = int(face[3])
                     cf = float(face[14])
-                    if cf >= (0.25 if es_perfil else 0.35) and w > 20 and h > 20:
+                    
+                    # Filtro de tamaño más permisivo
+                    if w > 15 and h > 15:
                         resultados.append((x, y, min(w_img-x, w), min(h_img-y, h), cf))
-            
-            if resultados:
-                logger.debug(f"[YuNet] Detectadas {len(resultados)} cara(s)")
-                return sorted(resultados, key=lambda c: c[2]*c[3], reverse=True)
+                
+                if resultados:
+                    resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+                    print(f"[YuNet] Detectadas {len(resultados)} cara(s), confianza: {resultados[0][4]:.2f}")
+                    return resultados
         except Exception as e:
-            logger.error(f"[YuNet] Error: {e}")
+            print(f"[YuNet] Error: {e}")
 
     # ── DNN SSD ────────────────────────────────────────────────────────────────
     if _dnn_net is not None:
         try:
             blob = cv2.dnn.blobFromImage(
-                cv2.resize(frame, (300, 300)), 1.0,
+                cv2.resize(frame_prep, (300, 300)), 1.0,
                 (300, 300), (104.0, 117.0, 123.0))
             _dnn_net.setInput(blob)
             dets = _dnn_net.forward()
-            umbral_conf = 0.2 if es_perfil else 0.45
+            
+            # Umbrales muy bajos para perfiles
+            umbral_conf = 0.1 if es_perfil else 0.35
             
             for i in range(dets.shape[2]):
                 conf = float(dets[0, 0, i, 2])
@@ -239,15 +190,21 @@ def _detectar_dnn(frame, tipo_esperado=None):
                     resultados.append((x1, y1, x2-x1, y2-y1, conf))
             
             if resultados:
-                logger.debug(f"[DNN SSD] Detectadas {len(resultados)} cara(s)")
-                return sorted(resultados, key=lambda c: c[2]*c[3], reverse=True)
+                resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+                print(f"[DNN SSD] Detectadas {len(resultados)} cara(s)")
+                return resultados
         except Exception as e:
-            logger.error(f"[DNN SSD] Error: {e}")
+            print(f"[DNN SSD] Error: {e}")
 
-    # ── Haar Cascades ──────────────────────────────────────────────────────────
+    # ── Haar Cascades (PRINCIPAL PARA PERFILES) ────────────────────────────────
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gris = cv2.equalizeHist(gris)
+    
+    # Aplicar CLAHE para mejorar contraste en perfiles
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    gris = clahe.apply(gris)
 
+    # Haar perfil
     if es_perfil and _haar_perfil is not None:
         try:
             if tipo_esperado == TIPO_PERFIL_I:
@@ -255,23 +212,32 @@ def _detectar_dnn(frame, tipo_esperado=None):
             else:
                 gris_det = gris
 
+            # Parámetros RELAJADOS para detectar perfiles completos
             caras = _haar_perfil.detectMultiScale(
-                gris_det, scaleFactor=1.05, minNeighbors=3, minSize=(40, 40))
+                gris_det, 
+                scaleFactor=1.02,    # ANTES: 1.05 → AHORA: 1.02 (más sensible)
+                minNeighbors=2,      # ANTES: 3    → AHORA: 2
+                minSize=(30, 30),    # ANTES: 40   → AHORA: 30
+                maxSize=(300, 300))
 
             if len(caras) > 0:
                 for (x, y, w, h) in caras:
                     if tipo_esperado == TIPO_PERFIL_I:
                         x = w_img - x - w
-                    resultados.append((int(x), int(y), int(w), int(h), 0.85))
-                logger.debug(f"[Haar Perfil] Detectadas {len(caras)} cara(s)")
-                return sorted(resultados, key=lambda c: c[2]*c[3], reverse=True)
+                    resultados.append((int(x), int(y), int(w), int(h), 0.9))
+                
+                resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+                print(f"[Haar Perfil] Detectadas {len(caras)} cara(s)")
+                return resultados
         except Exception as e:
-            logger.error(f"[Haar Perfil] Error: {e}")
+            print(f"[Haar Perfil] Error: {e}")
 
+    # Haar frontal RELAJADO (para cuando el perfil es parcial)
     if _haar_frontal is not None:
         try:
             if es_perfil:
-                scale, vecinos, tam = 1.05, 3, (40, 40)
+                # Parámetros MÁS relajados para perfiles
+                scale, vecinos, tam = 1.02, 2, (30, 30)
             else:
                 scale, vecinos, tam = 1.1, 5, (60, 60)
 
@@ -282,10 +248,12 @@ def _detectar_dnn(frame, tipo_esperado=None):
             if len(caras) > 0:
                 for (x, y, w, h) in caras:
                     resultados.append((int(x), int(y), int(w), int(h), 0.8))
-                logger.debug(f"[Haar Frontal] Detectadas {len(caras)} cara(s)")
-                return sorted(resultados, key=lambda c: c[2]*c[3], reverse=True)
+                
+                resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+                print(f"[Haar Frontal] Detectadas {len(caras)} cara(s) (modo relajado)")
+                return resultados
         except Exception as e:
-            logger.error(f"[Haar Frontal] Error: {e}")
+            print(f"[Haar Frontal] Error: {e}")
 
     # ── Dlib (último recurso) ──────────────────────────────────────────────────
     if not resultados and _dlib_detector is not None:
@@ -298,10 +266,11 @@ def _detectar_dnn(frame, tipo_esperado=None):
                 h = det.bottom() - det.top()
                 if w > 20 and h > 20:
                     resultados.append((x, y, w, h, 0.7))
+            
             if resultados:
-                logger.debug(f"[Dlib] Detectadas {len(resultados)} cara(s)")
+                print(f"[Dlib] Detectadas {len(resultados)} cara(s)")
         except Exception as e:
-            logger.error(f"[Dlib] Error: {e}")
+            print(f"[Dlib] Error: {e}")
 
     return resultados
 
@@ -317,7 +286,7 @@ _yunet_kpts = None
 
 
 def _get_lm_detector():
-    """Carga el detector de landmarks LBF."""
+    """Carga detector LBF."""
     global _lm_det
     if _lm_det is not None:
         return _lm_det if _lm_det is not False else None
@@ -329,18 +298,18 @@ def _get_lm_detector():
             det = cv2.face.createFacemarkLBF()
             det.loadModel(ruta)
             _lm_det = det
-            logger.info(f"[LBF] Cargado: {ruta}")
+            print(f"[LBF] Cargado: {ruta}")
             return _lm_det
         except Exception as e:
-            logger.error(f"[LBF] Error: {e}")
+            print(f"[LBF] Error: {e}")
     
     _lm_det = False
-    logger.info("[LBF] No disponible, usando Sobel")
+    print("[LBF] No disponible, usando Sobel")
     return None
 
 
 def _calcular_yaw_lbf(frame_gris, bbox):
-    """Calcula yaw usando LBF landmarks."""
+    """Calcula yaw con LBF landmarks."""
     lm_det = _get_lm_detector()
     if lm_det is None:
         return None
@@ -362,13 +331,12 @@ def _calcular_yaw_lbf(frame_gris, bbox):
         total   = d_izq + d_der + 1e-6
         
         return -((d_der - d_izq) / total) * 120.0
-    except Exception as e:
-        logger.debug(f"[LBF] Error en cálculo: {e}")
+    except:
         return None
 
 
 def _calcular_yaw_sobel(frame_gris, bbox, frame_shape):
-    """Calcula yaw usando análisis Sobel."""
+    """Calcula yaw con Sobel."""
     x, y, w, h = bbox
     x1 = max(0, x)
     y1 = max(0, y)
@@ -383,7 +351,7 @@ def _calcular_yaw_sobel(frame_gris, bbox, frame_shape):
         cara = cv2.resize(recorte, (128, 128))
         gx   = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=5)
         gy   = cv2.Sobel(cara, cv2.CV_32F, 0, 1, ksize=5)
-        b    = np.sqrt(gx**2 + gy**2)  # magnitud euclidiana
+        b    = np.sqrt(gx**2 + gy**2)
         
         w_   = b.shape[1]
         m    = int(w_ * 0.12)
@@ -391,21 +359,17 @@ def _calcular_yaw_sobel(frame_gris, bbox, frame_shape):
         der  = float(np.mean(b[:, w_//2 + m:]))
         
         return -((der - izq) / (der + izq + 1e-6)) * 120.0
-    except Exception as e:
-        logger.debug(f"[Sobel] Error: {e}")
+    except:
         return 0.0
 
 
 def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
-    """Clasifica el ángulo de la cara."""
-    global _buf_yaw, _yunet_kpts
+    """Clasifica el ángulo."""
+    global _buf_yaw
 
     yaw = None
-    
-    # 1. LBF landmarks
     yaw = _calcular_yaw_lbf(frame_gris, bbox)
     
-    # 2. Sobel (fallback)
     if yaw is None:
         yaw = _calcular_yaw_sobel(frame_gris, bbox, frame_shape)
 
@@ -426,7 +390,7 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
 
 
 def _extraer_angulos_lbf(gris, bbox, fw, fh):
-    """Extrae yaw y pitch usando LBF."""
+    """Extrae yaw y pitch."""
     yaw = _calcular_yaw_lbf(gris, bbox)
     pitch = 0.0
     return yaw, pitch
@@ -547,19 +511,15 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
-    """Preprocesa la zona de la cara."""
+    """Preprocesa zona de cara."""
     return cv2.GaussianBlur(_clahe.apply(gris_zona), (3, 3), 0)
 
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto",
                              tipo_esperado=None):
-    """
-    Detecta cara y extrae vector LBP de 512 dims.
-    Retorna (vector, coords, tipo) o (None, None, None).
-    """
+    """Detecta cara y extrae vector LBP."""
     caras = _detectar_dnn(frame, tipo_esperado=tipo_esperado)
     if not caras:
-        logger.debug("No se detectó cara")
         return None, None, None
 
     x, y, w, h, _ = caras[0]
@@ -588,13 +548,13 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto",
 
 
 def distancia_chi2(v1, v2):
-    """Calcula distancia chi-cuadrado entre vectores."""
+    """Distancia chi-cuadrado."""
     denom = v1 + v2 + 1e-7
     return float(np.sum((v1 - v2) ** 2 / denom))
 
 
 def dibujar_overlay(frame, coords, color, texto="", tipo=None):
-    """Dibuja el overlay de detección en el frame."""
+    """Dibuja overlay."""
     x, y, w, h = coords
     L = max(18, w // 4)
 
@@ -618,7 +578,6 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
         TIPO_FRONTAL:  "FRONTAL",
         TIPO_PERFIL_D: "PERFIL DER",
         TIPO_PERFIL_I: "PERFIL IZQ",
-        TIPO_ABAJO:    "ABAJO",
     }
     if tipo in etiquetas:
         cv2.putText(frame, etiquetas[tipo], (x, y+h+16),
