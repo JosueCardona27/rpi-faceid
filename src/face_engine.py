@@ -128,7 +128,12 @@ def _detectar_dnn(frame, tipo_esperado=None):
                     resultados.append((x, y, min(w_img-x, w), min(h_img-y, h), cf))
         if resultados:
             resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+            # Guardar keypoints de la cara mas grande para clasificar angulo
+            if faces is not None and len(faces) > 0:
+                idx = int(np.argmax([f[2]*f[3] for f in faces]))
+                _yunet_kpts = faces[idx][4:10].copy()
             return resultados
+        _yunet_kpts = None
 
     # ── DNN SSD (maneja todos los angulos) ────────────────────────────────────
     if _dnn_net is not None:
@@ -205,6 +210,7 @@ def _detectar_dnn(frame, tipo_esperado=None):
 _lm_det    = None
 _buf_yaw   = []
 _BUF_N_YAW = 3
+_yunet_kpts = None   # keypoints YuNet [oj_dx,oj_dy,oj_ix,oj_iy,nz_x,nz_y]
 
 
 def _get_lm_detector():
@@ -283,9 +289,30 @@ def _calcular_yaw_sobel(frame_gris, bbox, frame_shape):
 
 
 def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
-    global _buf_yaw
+    global _buf_yaw, _yunet_kpts
 
-    yaw = _calcular_yaw_lbf(frame_gris, bbox)
+    yaw = None
+    # 1. Keypoints YuNet: precisos, funcionan en perfiles completos
+    if _yunet_kpts is not None:
+        try:
+            od = np.array([_yunet_kpts[0], _yunet_kpts[1]], dtype=np.float64)
+            oi = np.array([_yunet_kpts[2], _yunet_kpts[3]], dtype=np.float64)
+            nz = np.array([_yunet_kpts[4], _yunet_kpts[5]], dtype=np.float64)
+            if np.linalg.norm(od)>1 and np.linalg.norm(oi)>1 and np.linalg.norm(nz)>1:
+                d_der = float(np.linalg.norm(nz - od))
+                d_izq = float(np.linalg.norm(nz - oi))
+                # Frame ya flippeado: imagen-derecha = ojo izq del usuario
+                # usuario gira DERECHA => d_der > d_izq => asim > 0 => PERFIL_DER
+                asim  = (d_der - d_izq) / (d_der + d_izq + 1e-6)
+                yaw   = asim * 120.0
+        except Exception:
+            yaw = None
+
+    # 2. LBF 68 landmarks -- backup
+    if yaw is None:
+        yaw = _calcular_yaw_lbf(frame_gris, bbox)
+
+    # 3. Sobel -- ultimo recurso
     if yaw is None:
         yaw = _calcular_yaw_sobel(frame_gris, bbox, frame_shape)
 
