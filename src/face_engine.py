@@ -340,6 +340,16 @@ def _clasificar_angulo(frame_gris, bbox, frame_shape, tipo_esperado=None):
     else:                 return TIPO_FRONTAL
 
 
+def _extraer_angulos_lbf(gris, bbox, fw, fh):
+    """
+    Extrae yaw y pitch usando LBF landmarks.
+    Pitch no implementado, retorna None.
+    """
+    yaw = _calcular_yaw_lbf(gris, bbox)
+    pitch = None
+    return yaw, pitch
+
+
 # =============================================================================
 #  ZONAS LBP POR ANGULO  (8 zonas x 64 bins = 512 dims)
 # =============================================================================
