@@ -75,8 +75,12 @@ def _init_detectores():
     # Busca primero en models/, luego en el directorio de OpenCV
     rutas_frontal = [
         os.path.join(base, "haarcascade_frontalface_default.xml"),
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml",
     ]
+    try:
+        if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+            rutas_frontal.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    except:
+        pass
     for ruta in rutas_frontal:
         if os.path.exists(ruta):
             _haar_frontal = cv2.CascadeClassifier(ruta)
@@ -87,8 +91,13 @@ def _init_detectores():
         print("[DET] ERROR: Haar frontal no encontrado")
 
     # ── Haar perfil ───────────────────────────────────────────────────────────
-    ruta_perfil = cv2.data.haarcascades + "haarcascade_profileface.xml"
-    if os.path.exists(ruta_perfil):
+    ruta_perfil = None
+    try:
+        if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+            ruta_perfil = cv2.data.haarcascades + "haarcascade_profileface.xml"
+    except:
+        pass
+    if ruta_perfil and os.path.exists(ruta_perfil):
         _haar_perfil = cv2.CascadeClassifier(ruta_perfil)
         print(f"[DET] Haar perfil: {ruta_perfil}")
     else:
