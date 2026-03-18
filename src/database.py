@@ -1,33 +1,39 @@
 """
 database.py
 ===========
-Manejo de la base de datos SQLite para el sistema de acceso facial.
+Base de datos SQLite para el sistema de acceso facial.
 
-Cada persona almacena UN VECTOR POR ANGULO (paso de registro):
-  - angulo    : str  — "frontal", "perfil_der", "perfil_izq", "abajo"
-  - vector    : 413 floats (7 zonas x 59 bins LBP)
-  - pesos     : 7 floats   (peso de cada zona)
-  - n_muestras: cuantas muestras se promediaron para este angulo
+Tablas:
+  usuarios            — datos del usuario (nombre, apellidos, cuenta, rol)
+  vectores_faciales   — legacy, un vector por usuario (512 dims)
+  vectores_por_angulo — nuevo, un vector por angulo por usuario (512 dims)
+                        angulos: 'frontal', 'perfil_der', 'perfil_izq'
 
-El reconocimiento compara la cara actual contra TODOS los vectores
-de TODAS las personas y retorna el mejor match por angulo.
-Esto es mucho mas preciso que un unico vector promediado.
+Los 4 pasos del registro producen 3 entradas en vectores_por_angulo:
+  Paso 1 (frente)     → angulo 'frontal'     (se promedia con paso 4)
+  Paso 2 (derecha)    → angulo 'perfil_der'
+  Paso 3 (izquierda)  → angulo 'perfil_izq'
+  Paso 4 (frente)     → angulo 'frontal'     (se promedia con paso 1)
+
+En el reconocimiento, se evaluan los 3 angulos del usuario y se toma
+el de menor distancia chi2 como su mejor match.
 """
 
 import sqlite3
 import json
 import os
 import numpy as np
-from face_engine import distancia_ponderada, N_ZONAS, VECTOR_DIM
+from face_engine import distancia_chi2, VECTOR_DIM
 
-# ─── ruta de la base de datos ─────────────────────────────────────────────────
 _DIR_ESTE_ARCHIVO = os.path.dirname(os.path.abspath(__file__))
 _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-# umbral de distancia chi2 ponderada para dar acceso
-UMBRAL = 0.12
+UMBRAL    = 1.5
+MAX_DIST  = 8.0
+
+ROLES_VALIDOS = ("admin", "maestro", "estudiante")
 
 
 def conectar():
@@ -37,273 +43,331 @@ def conectar():
 
 
 def _crear_tablas():
-    """Crea todas las tablas necesarias si no existen."""
     conn = conectar()
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS personas (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            numero_cuenta   TEXT    UNIQUE NOT NULL,
-            nombre_completo TEXT    NOT NULL,
-            fecha_registro  TEXT    DEFAULT (datetime('now'))
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_usuario       TEXT    NOT NULL UNIQUE,
+            nombre           TEXT    NOT NULL,
+            apellido_paterno TEXT    NOT NULL,
+            apellido_materno TEXT    NOT NULL,
+            numero_cuenta    TEXT    UNIQUE,
+            rol              TEXT    NOT NULL
+                             CHECK(rol IN ('admin','maestro','estudiante')),
+            fecha_registro   TEXT    DEFAULT (datetime('now','localtime')),
+            registrado_por   INTEGER
         );
 
-        -- Tabla antigua: se mantiene para compatibilidad con registros previos
         CREATE TABLE IF NOT EXISTS vectores_faciales (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            persona_id  INTEGER UNIQUE NOT NULL,
-            vector      TEXT    NOT NULL,
-            dimensiones INTEGER NOT NULL,
-            pesos       TEXT    DEFAULT NULL,
-            FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE CASCADE
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id    INTEGER NOT NULL UNIQUE,
+            vector        TEXT    NOT NULL,
+            dimensiones   INTEGER DEFAULT 512,
+            fecha_captura TEXT    DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
         );
 
-        -- Tabla nueva: un vector por angulo por persona
         CREATE TABLE IF NOT EXISTS vectores_por_angulo (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            persona_id  INTEGER NOT NULL,
+            usuario_id  INTEGER NOT NULL,
             angulo      TEXT    NOT NULL,
             vector      TEXT    NOT NULL,
-            pesos       TEXT    NOT NULL,
             n_muestras  INTEGER DEFAULT 1,
-            UNIQUE(persona_id, angulo),
-            FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE CASCADE
+            UNIQUE(usuario_id, angulo),
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
         );
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usuarios_rol ON usuarios(rol)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vf_usuario ON vectores_faciales(usuario_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vpa_usuario ON vectores_por_angulo(usuario_id)")
     conn.commit()
     conn.close()
 
 _crear_tablas()
 
 
-# ─── migracion: asegurar columna pesos en tabla vieja ────────────────────────
-def _migrar_si_necesario():
-    conn = conectar()
-    cols = [r[1] for r in conn.execute(
-        "PRAGMA table_info(vectores_faciales)").fetchall()]
-    if "pesos" not in cols:
-        conn.execute(
-            "ALTER TABLE vectores_faciales ADD COLUMN pesos TEXT DEFAULT NULL")
-        conn.commit()
-        print("[DB] Columna 'pesos' agregada a vectores_faciales.")
-    conn.close()
+# =============================================================================
+#  CRUD USUARIOS
+# =============================================================================
 
-_migrar_si_necesario()
+def registrar_usuario(
+        numero_cuenta:    str,
+        nombre:           str,
+        apellido_paterno: str,
+        apellido_materno: str = "",
+        rol:              str = "estudiante",
+        telefono:         int = None,
+        registrado_por:   int = None,
+) -> int:
+    if rol not in ROLES_VALIDOS:
+        print(f"[ERROR] Rol '{rol}' no valido.")
+        return -1
 
+    id_usuario = f"{rol[:3].upper()}-{numero_cuenta}"
+    ap_mat     = apellido_materno.strip() if apellido_materno.strip() else "."
 
-# ─── CRUD personas ────────────────────────────────────────────────────────────
-
-def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
     try:
         conn   = conectar()
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO personas (numero_cuenta, nombre_completo) VALUES (?, ?)",
-            (numero_cuenta, nombre_completo))
+        cursor.execute("""
+            INSERT INTO usuarios
+                (id_usuario, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, telefono, rol, registrado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id_usuario, nombre, apellido_paterno, ap_mat,
+              numero_cuenta, telefono, rol, registrado_por))
         conn.commit()
-        pid = cursor.lastrowid
-        print(f"[OK] Persona registrada ID={pid}: {nombre_completo}")
-        return pid
-    except sqlite3.IntegrityError:
-        print(f"[AVISO] Cuenta '{numero_cuenta}' ya existe.")
+        uid = cursor.lastrowid
+        print(f"[DB] Usuario registrado ID={uid}: {nombre} {apellido_paterno} "
+              f"({rol}) cuenta={numero_cuenta}")
+        return uid
+    except sqlite3.IntegrityError as e:
+        print(f"[DB] Cuenta '{numero_cuenta}' ya existe: {e}")
         return -1
     finally:
         conn.close()
 
 
-# ─── NUEVO: guardar un vector por angulo ─────────────────────────────────────
+def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
+    partes = nombre_completo.strip().split()
+    if len(partes) >= 3:
+        nombre = " ".join(partes[:-2]); ap_pat = partes[-2]; ap_mat = partes[-1]
+    elif len(partes) == 2:
+        nombre = partes[0]; ap_pat = partes[1]; ap_mat = ""
+    else:
+        nombre = nombre_completo.strip(); ap_pat = "."; ap_mat = ""
+    return registrar_usuario(numero_cuenta, nombre, ap_pat, ap_mat)
 
-def guardar_vectores_por_angulo(persona_id: int, vectores_por_paso: dict):
+
+# =============================================================================
+#  GUARDAR VECTORES POR ANGULO
+# =============================================================================
+
+def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
     """
-    Guarda un vector promediado por cada angulo.
+    Guarda un vector promediado por angulo.
 
-    vectores_por_paso formato:
-    {
-        "frontal":    {"vectores": [np.array, ...], "pesos": [np.array, ...]},
-        "perfil_der": {"vectores": [...],           "pesos": [...]},
-        "perfil_izq": {"vectores": [...],           "pesos": [...]},
-        "abajo":      {"vectores": [...],           "pesos": [...]},
-    }
+    vectores_por_paso:
+      {
+        "frontal":    {"vectores": [array(512), ...]},
+        "perfil_der": {"vectores": [array(512), ...]},
+        "perfil_izq": {"vectores": [array(512), ...]},
+      }
+
+    Los pasos 1 y 4 (ambos frontales) se promedian juntos en 'frontal'.
     """
     conn   = conectar()
     cursor = conn.cursor()
     total  = 0
 
     for angulo, datos in vectores_por_paso.items():
-        vecs  = datos.get("vectores", [])
-        pesos = datos.get("pesos",    [])
+        vecs = datos.get("vectores", [])
         if not vecs:
-            print(f"[WARN] Angulo '{angulo}' sin muestras, omitido.")
+            print(f"[DB] Angulo '{angulo}' sin muestras.")
             continue
 
-        v_prom = np.mean(vecs,  axis=0).astype(np.float32)
-        p_prom = np.mean(pesos, axis=0).astype(np.float32)
+        v_prom = np.mean(vecs, axis=0).astype(np.float32)
+
+        if len(v_prom) != VECTOR_DIM:
+            print(f"[DB] Angulo '{angulo}': {len(v_prom)} dims != {VECTOR_DIM}. Omitido.")
+            continue
 
         cursor.execute("""
             INSERT OR REPLACE INTO vectores_por_angulo
-                (persona_id, angulo, vector, pesos, n_muestras)
-            VALUES (?, ?, ?, ?, ?)
-        """, (persona_id,
-              angulo,
-              json.dumps(v_prom.tolist()),
-              json.dumps(p_prom.tolist()),
-              len(vecs)))
+                (usuario_id, angulo, vector, n_muestras)
+            VALUES (?, ?, ?, ?)
+        """, (usuario_id, angulo, json.dumps(v_prom.tolist()), len(vecs)))
 
-        zonas_vis = int(np.sum(p_prom > 0.15))
-        print(f"[OK] '{angulo}': {len(vecs)} muestras, "
-              f"{zonas_vis}/7 zonas — ID {persona_id}")
+        print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
         total += 1
 
     conn.commit()
     conn.close()
-    print(f"[OK] {total} angulos guardados para persona ID {persona_id}.")
+    print(f"[DB] {total} angulos guardados para usuario ID={usuario_id}.")
 
 
-# ─── LEGACY: compatibilidad con codigo anterior ───────────────────────────────
-
-def guardar_vector_unico(persona_id: int,
-                          vectores: list,
-                          pesos_lista: list):
-    """Compatibilidad: promedia todo y guarda en tabla vieja."""
+def guardar_vector_unico(usuario_id: int, vectores: list, pesos_lista=None):
     if not vectores:
-        print("[ERROR] Lista de vectores vacia.")
         return
-
-    v_prom = np.mean(vectores,    axis=0).astype(np.float32)
-    p_prom = np.mean(pesos_lista, axis=0).astype(np.float32)
-
+    v_prom = np.mean(vectores, axis=0).astype(np.float32)
     conn   = conectar()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO vectores_faciales
-            (persona_id, vector, dimensiones, pesos)
-        VALUES (?, ?, ?, ?)
-    """, (persona_id,
-          json.dumps(v_prom.tolist()),
-          len(v_prom),
-          json.dumps(p_prom.tolist())))
+    conn.execute("""
+        INSERT OR REPLACE INTO vectores_faciales (usuario_id, vector, dimensiones)
+        VALUES (?, ?, ?)
+    """, (usuario_id, json.dumps(v_prom.tolist()), len(v_prom)))
     conn.commit()
     conn.close()
-
-    zonas_vis = int(np.sum(p_prom > 0.15))
-    print(f"[OK] Vector legacy ({len(v_prom)} dims, "
-          f"{zonas_vis}/7 zonas) guardado para ID {persona_id}.")
+    print(f"[DB] Vector legacy ({len(v_prom)} dims) ID={usuario_id}.")
 
 
-# ─── cargar todos los vectores (nuevo + legacy) ───────────────────────────────
+# =============================================================================
+#  CARGAR VECTORES
+# =============================================================================
 
 def cargar_vectores_por_angulo() -> list:
     """
-    Retorna todos los vectores registrados (tabla nueva + legacy).
-    Formato de cada item:
-      persona_id, nombre, numero_cuenta, angulo, vector, pesos, n_muestras
+    Carga todos los vectores.
+    Los angulos de un mismo usuario comparten usuario_id.
+    Solo carga vectores con dims == 512.
     """
     conn      = conectar()
     cursor    = conn.cursor()
     resultado = []
 
-    # Registros nuevos
     cursor.execute("""
-        SELECT p.id, p.nombre_completo, p.numero_cuenta,
-               va.angulo, va.vector, va.pesos, va.n_muestras
+        SELECT u.id,
+               u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
+               u.numero_cuenta, u.rol,
+               va.angulo, va.vector, va.n_muestras
         FROM vectores_por_angulo va
-        JOIN personas p ON p.id = va.persona_id
+        JOIN usuarios u ON u.id = va.usuario_id
+        ORDER BY u.id, va.angulo
     """)
-    for pid, nombre, cuenta, angulo, vjson, pjson, n in cursor.fetchall():
-        resultado.append({
-            "persona_id":    pid,
-            "nombre":        nombre,
-            "numero_cuenta": cuenta,
-            "angulo":        angulo,
-            "vector":        np.array(json.loads(vjson), dtype=np.float32),
-            "pesos":         np.array(json.loads(pjson), dtype=np.float32),
-            "n_muestras":    n,
-        })
-
-    # Registros legacy — solo si esa persona NO tiene registros nuevos
-    pids_nuevos = {r["persona_id"] for r in resultado}
-    cursor.execute("""
-        SELECT p.id, p.nombre_completo, p.numero_cuenta,
-               vf.vector, vf.pesos
-        FROM vectores_faciales vf
-        JOIN personas p ON p.id = vf.persona_id
-    """)
-    for pid, nombre, cuenta, vjson, pjson in cursor.fetchall():
-        if pid not in pids_nuevos:
+    for uid, nombre, cuenta, rol, angulo, vjson, n in cursor.fetchall():
+        v = np.array(json.loads(vjson), dtype=np.float32)
+        if len(v) == VECTOR_DIM:
             resultado.append({
-                "persona_id":    pid,
-                "nombre":        nombre,
+                "usuario_id":    uid,
+                "nombre":        nombre.strip(),
                 "numero_cuenta": cuenta,
-                "angulo":        "legacy",
-                "vector":        np.array(json.loads(vjson), dtype=np.float32),
-                "pesos":         (np.array(json.loads(pjson), dtype=np.float32)
-                                  if pjson else
-                                  np.ones(N_ZONAS, dtype=np.float32)),
-                "n_muestras":    1,
+                "rol":           rol,
+                "angulo":        angulo,
+                "vector":        v,
+                "n_muestras":    n,
             })
+        else:
+            print(f"[DB] SKIP usuario_id={uid} angulo='{angulo}' "
+                  f"{len(v)} dims != {VECTOR_DIM}")
+
+    ids_nuevos = {r["usuario_id"] for r in resultado}
+
+    cursor.execute("""
+        SELECT u.id,
+               u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
+               u.numero_cuenta, u.rol,
+               vf.vector, vf.dimensiones
+        FROM vectores_faciales vf
+        JOIN usuarios u ON u.id = vf.usuario_id
+    """)
+    for uid, nombre, cuenta, rol, vjson, dims in cursor.fetchall():
+        if uid in ids_nuevos:
+            continue
+        if dims != VECTOR_DIM:
+            print(f"[DB] SKIP legacy ID={uid}: {dims} dims. Re-registrar.")
+            continue
+        v = np.array(json.loads(vjson), dtype=np.float32)
+        resultado.append({
+            "usuario_id":    uid,
+            "nombre":        nombre.strip(),
+            "numero_cuenta": cuenta,
+            "rol":           rol,
+            "angulo":        "legacy",
+            "vector":        v,
+            "n_muestras":    1,
+        })
 
     conn.close()
     return resultado
 
 
-# ─── reconocimiento multi-angulo ─────────────────────────────────────────────
+# =============================================================================
+#  RECONOCIMIENTO
+# =============================================================================
 
 def reconocer_persona(vector_nuevo: np.ndarray,
-                       pesos_nuevos: np.ndarray,
                        umbral: float = UMBRAL) -> dict | None:
     """
-    Compara el vector nuevo contra TODOS los vectores por angulo
-    de TODAS las personas. Para cada persona toma su mejor angulo
-    y retorna la persona con menor distancia global.
-
-    dist=0 → identico | dist>=0.5 → muy diferente
+    Compara vector_nuevo contra todos los angulos de todos los usuarios.
+    Por cada usuario toma su angulo con menor distancia chi2.
+    Retorna el usuario con menor distancia global.
     """
     registros = cargar_vectores_por_angulo()
     if not registros:
         return None
 
-    # Para cada persona guardar su mejor distancia entre todos sus angulos
-    mejores = {}
+    mejores: dict[int, dict] = {}
 
     for reg in registros:
-        pid        = reg["persona_id"]
-        dist, nz   = distancia_ponderada(
-            vector_nuevo, pesos_nuevos,
-            reg["vector"], reg["pesos"])
+        uid  = reg["usuario_id"]
+        dist = distancia_chi2(vector_nuevo, reg["vector"])
 
-        if pid not in mejores or dist < mejores[pid]["distancia"]:
-            mejores[pid] = {
-                "persona_id":    pid,
+        if uid not in mejores or dist < mejores[uid]["distancia"]:
+            mejores[uid] = {
+                "usuario_id":    uid,
                 "nombre":        reg["nombre"],
                 "numero_cuenta": reg["numero_cuenta"],
+                "rol":           reg["rol"],
                 "angulo":        reg["angulo"],
                 "distancia":     round(dist, 4),
-                "zonas_usadas":  nz,
             }
 
     if not mejores:
         return None
 
-    # La persona con menor distancia
     mejor = min(mejores.values(), key=lambda x: x["distancia"])
 
-    sim_raw = max(0.0, 1.0 - (mejor["distancia"] / 0.5))
+    sim_raw = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
-    mejor["acceso"]        = (mejor["distancia"] <= umbral
-                               and mejor["zonas_usadas"] >= 2)
+    mejor["acceso"]        = mejor["distancia"] <= umbral
 
-    print(f"[INFO] {mejor['nombre']} | angulo={mejor['angulo']} | "
+    print(f"[RECONO] {mejor['nombre']} | angulo={mejor['angulo']} | "
           f"dist={mejor['distancia']:.4f} | sim={mejor['similitud_pct']}% | "
-          f"zonas={mejor['zonas_usadas']} | "
           f"acceso={'SI' if mejor['acceso'] else 'NO'}")
 
     return mejor
 
 
-# ─── eliminar persona ─────────────────────────────────────────────────────────
+# =============================================================================
+#  ELIMINAR
+# =============================================================================
 
-def eliminar_persona(persona_id: int):
+def eliminar_persona(usuario_id: int):
     conn = conectar()
-    conn.execute("DELETE FROM personas WHERE id = ?", (persona_id,))
+    conn.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
     conn.commit()
     conn.close()
-    print(f"[DEL] Persona ID {persona_id} eliminada.")
+    print(f"[DB] Usuario ID={usuario_id} eliminado.")
+
+eliminar_usuario = eliminar_persona
+
+
+# =============================================================================
+#  CONSULTAS
+# =============================================================================
+
+def listar_usuarios(rol: str = None) -> list:
+    conn   = conectar()
+    cursor = conn.cursor()
+    if rol:
+        cursor.execute(
+            "SELECT id, id_usuario, nombre, apellido_paterno, apellido_materno, "
+            "numero_cuenta, rol FROM usuarios WHERE rol=? ORDER BY apellido_paterno",
+            (rol,))
+    else:
+        cursor.execute(
+            "SELECT id, id_usuario, nombre, apellido_paterno, apellido_materno, "
+            "numero_cuenta, rol FROM usuarios ORDER BY apellido_paterno")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def tiene_vector(usuario_id: int) -> bool:
+    conn = conectar()
+    c    = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?", (usuario_id,))
+    n1 = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM vectores_faciales WHERE usuario_id=?", (usuario_id,))
+    n2 = c.fetchone()[0]
+    conn.close()
+    return (n1 + n2) > 0
+
+
+def angulos_registrados(usuario_id: int) -> list:
+    conn = conectar()
+    c    = conn.cursor()
+    c.execute("SELECT angulo, n_muestras FROM vectores_por_angulo "
+              "WHERE usuario_id=? ORDER BY angulo", (usuario_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
