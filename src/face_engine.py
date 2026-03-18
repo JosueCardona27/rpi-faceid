@@ -35,6 +35,7 @@ _yunet         = None
 _dnn_net       = None
 _haar_frontal  = None
 _haar_perfil   = None
+_dlib_detector = None
 _det_init      = False
 
 
@@ -103,6 +104,15 @@ def _init_detectores():
     else:
         print("[DET] Haar perfil no encontrado (se usara frontal con umbral relajado)")
 
+    # ── Dlib ───────────────────────────────────────────────────────────────────
+    try:
+        import dlib
+        _dlib_detector = dlib.get_frontal_face_detector()
+        print("[DET] Dlib: disponible")
+    except ImportError:
+        _dlib_detector = None
+        print("[DET] Dlib no disponible")
+
 
 def _bbox_mayor(lista):
     """De una lista de (x,y,w,h,conf), retorna la de mayor area."""
@@ -127,8 +137,8 @@ def _detectar_dnn(frame, tipo_esperado=None):
     if _yunet is not None:
         # Ajustar umbrales para perfiles completos
         if es_perfil:
-            _yunet.setScoreThreshold(0.3)
-            _yunet.setTopK(10)
+            _yunet.setScoreThreshold(0.2)
+            _yunet.setTopK(15)
         else:
             _yunet.setScoreThreshold(0.4)
             _yunet.setTopK(5)
@@ -160,7 +170,7 @@ def _detectar_dnn(frame, tipo_esperado=None):
             (300, 300), (104.0, 117.0, 123.0))
         _dnn_net.setInput(blob)
         dets = _dnn_net.forward()
-        umbral_conf = 0.35 if es_perfil else 0.45
+        umbral_conf = 0.25 if es_perfil else 0.45
         for i in range(dets.shape[2]):
             conf = float(dets[0, 0, i, 2])
             if conf < umbral_conf:
@@ -216,6 +226,18 @@ def _detectar_dnn(frame, tipo_esperado=None):
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.8))
             resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
+
+    # ── Dlib — ultimo recurso ──────────────────────────────────────────────────
+    if not resultados and _dlib_detector is not None:
+        gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        dets = _dlib_detector(gris, 1)  # upsample=1
+        for det in dets:
+            x = max(0, det.left())
+            y = max(0, det.top())
+            w = det.right() - det.left()
+            h = det.bottom() - det.top()
+            if w > 20 and h > 20:
+                resultados.append((x, y, w, h, 0.7))
 
     return resultados
 
