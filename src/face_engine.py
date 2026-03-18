@@ -112,9 +112,18 @@ def _detectar_dnn(frame, tipo_esperado=None):
     _init_detectores()
     h_img, w_img = frame.shape[:2]
     resultados   = []
+    es_perfil = tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I)
 
     # ── YuNet (maneja todos los angulos) ──────────────────────────────────────
     if _yunet is not None:
+        # Ajustar umbrales para perfiles completos
+        if es_perfil:
+            _yunet.setScoreThreshold(0.3)
+            _yunet.setTopK(10)
+        else:
+            _yunet.setScoreThreshold(0.4)
+            _yunet.setTopK(5)
+        
         _yunet.setInputSize((w_img, h_img))
         _, faces = _yunet.detect(frame)
         if faces is not None:
@@ -124,7 +133,7 @@ def _detectar_dnn(frame, tipo_esperado=None):
                 w  = int(face[2])
                 h  = int(face[3])
                 cf = float(face[14])
-                if cf >= 0.4 and w > 20 and h > 20:
+                if cf >= (0.3 if es_perfil else 0.4) and w > 20 and h > 20:
                     resultados.append((x, y, min(w_img-x, w), min(h_img-y, h), cf))
         if resultados:
             resultados.sort(key=lambda c: c[2]*c[3], reverse=True)
@@ -142,9 +151,10 @@ def _detectar_dnn(frame, tipo_esperado=None):
             (300, 300), (104.0, 117.0, 123.0))
         _dnn_net.setInput(blob)
         dets = _dnn_net.forward()
+        umbral_conf = 0.35 if es_perfil else 0.45
         for i in range(dets.shape[2]):
             conf = float(dets[0, 0, i, 2])
-            if conf < 0.45:
+            if conf < umbral_conf:
                 continue
             x1 = max(0, int(dets[0, 0, i, 3] * w_img))
             y1 = max(0, int(dets[0, 0, i, 4] * h_img))
@@ -160,8 +170,6 @@ def _detectar_dnn(frame, tipo_esperado=None):
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gris = cv2.equalizeHist(gris)
 
-    es_perfil = tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I)
-
     if es_perfil and _haar_perfil is not None:
         # Para PERFIL_D (usuario gira a su derecha): en el frame ya volteado
         # se ve el perfil izquierdo de la imagen → usar cascade directo
@@ -173,7 +181,7 @@ def _detectar_dnn(frame, tipo_esperado=None):
             gris_det = gris
 
         caras = _haar_perfil.detectMultiScale(
-            gris_det, scaleFactor=1.1, minNeighbors=4, minSize=(50, 50))
+            gris_det, scaleFactor=1.05, minNeighbors=3, minSize=(40, 40))
 
         if len(caras) > 0:
             for (x, y, w, h) in caras:
