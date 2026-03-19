@@ -1,27 +1,19 @@
 """
-face_engine.py - Version MediaPipe
-====================================
-Detector: MediaPipe FaceDetection (reemplaza Haar Cascade)
-Clasificador de angulo: landmarks reales (ojos, orejas, nariz)
-LBP + Chi2: sin cambios, compatible con database.py e interfaz.py
+face_engine.py - Version YuNet
+================================
+Detector principal : YuNet (face_detection_yunet_2023mar.onnx)
+Clasificador angulo: landmarks reales de YuNet (ojo_der, ojo_izq, nariz, boca)
+Fallback           : Haar frontal + perfil si YuNet no carga
+LBP + Chi2         : sin cambios, compatible con database.py e interfaz.py
 
-INSTALACION (una sola vez en Raspberry):
-  pip install mediapipe
+REQUISITOS:
+  - OpenCV >= 4.5.4  (tienes 4.13 ✅)
+  - models/face_detection_yunet_2023mar.onnx  ✅
 """
 
 import os
 import cv2
 import numpy as np
-
-# ── MediaPipe ─────────────────────────────────────────────────────────────────
-try:
-    import mediapipe as mp
-    _mp_face = mp.solutions.face_detection
-    _MP_OK   = True
-except ImportError:
-    _MP_OK = False
-    print("[DET] ⚠️  mediapipe no instalado. Ejecuta:  pip install mediapipe")
-    print("[DET]     Usando Haar Cascade como respaldo.")
 
 # ── Tipos de angulo ───────────────────────────────────────────────────────────
 TIPO_FRONTAL  = "frontal"
@@ -33,200 +25,236 @@ _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
 
 # =============================================================================
-#  DETECTOR  (singleton)
+#  DETECTOR YUNET  (singleton)
 # =============================================================================
 
-_mp_detector   = None
-_haar_fallback = None
+_yunet         = None
+_haar_frontal  = None
+_haar_perfil   = None
 _det_init      = False
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_MODELS   = os.path.join(_BASE_DIR, "..", "models")
 
 
 def _init_detectores():
-    global _mp_detector, _haar_fallback, _det_init
+    global _yunet, _haar_frontal, _haar_perfil, _det_init
+
     if _det_init:
         return
     _det_init = True
 
-    if _MP_OK:
-        _mp_detector = _mp_face.FaceDetection(
-            model_selection=1,
-            min_detection_confidence=0.5
-        )
-        print("[DET] ✅ MediaPipe FaceDetection iniciado (model_selection=1)")
+    # ── YuNet ─────────────────────────────────────────────────────────────────
+    yunet_path = os.path.join(_MODELS, "face_detection_yunet_2023mar.onnx")
+    if not os.path.exists(yunet_path):
+        # intentar con el nombre corto
+        yunet_path = os.path.join(_MODELS, "face_detection_yunet.onnx")
+
+    if os.path.exists(yunet_path):
+        try:
+            _yunet = cv2.FaceDetectorYN.create(
+                yunet_path,
+                "",
+                (640, 480),
+                score_threshold=0.6,
+                nms_threshold=0.3,
+                top_k=5000
+            )
+            print(f"[DET] ✅ YuNet cargado: {yunet_path}")
+        except Exception as e:
+            print(f"[DET] ⚠️  YuNet error al cargar: {e}")
+            _yunet = None
     else:
-        rutas = []
-        base  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-        rutas.append(os.path.join(base, "haarcascade_frontalface_default.xml"))
-        rutas.append(os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "haarcascade_frontalface_default.xml"))
-        if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-            rutas.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        print(f"[DET] ⚠️  YuNet NO encontrado en {yunet_path}")
 
-        for ruta in rutas:
-            if os.path.exists(ruta):
-                _haar_fallback = cv2.CascadeClassifier(ruta)
-                if not _haar_fallback.empty():
-                    print(f"[DET] ⚠️  Haar fallback: {ruta}")
-                    break
+    # ── Haar frontal (fallback) ───────────────────────────────────────────────
+    rutas_frontal = [
+        os.path.join(_MODELS, "haarcascade_frontalface_default.xml"),
+        os.path.join(_BASE_DIR, "haarcascade_frontalface_default.xml"),
+    ]
+    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+        rutas_frontal.append(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+    for ruta in rutas_frontal:
+        if os.path.exists(ruta):
+            clf = cv2.CascadeClassifier(ruta)
+            if not clf.empty():
+                _haar_frontal = clf
+                print(f"[DET] Haar frontal (fallback): {ruta}")
+                break
 
-        if _haar_fallback is None:
-            print("[DET] ❌ Ni MediaPipe ni Haar disponibles.")
+    # ── Haar perfil (fallback) ────────────────────────────────────────────────
+    rutas_perfil = [
+        os.path.join(_MODELS, "haarcascade_profileface.xml"),
+        os.path.join(_BASE_DIR, "haarcascade_profileface.xml"),
+    ]
+    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+        rutas_perfil.append(
+            cv2.data.haarcascades + "haarcascade_profileface.xml"
+        )
+    for ruta in rutas_perfil:
+        if os.path.exists(ruta):
+            clf = cv2.CascadeClassifier(ruta)
+            if not clf.empty():
+                _haar_perfil = clf
+                print(f"[DET] Haar perfil (fallback): {ruta}")
+                break
+
+    if _yunet is None and _haar_frontal is None:
+        print("[DET] ❌ Ningun detector disponible.")
 
 
 # =============================================================================
 #  DETECCION
 # =============================================================================
 
-def _detectar_caras_mediapipe(frame, confianza_min=0.5):
+def _detectar_caras_yunet(frame):
+    """
+    YuNet retorna por cada cara:
+      [x, y, w, h, ojo_der_x, ojo_der_y, ojo_izq_x, ojo_izq_y,
+       nariz_x, nariz_y, boca_izq_x, boca_izq_y, boca_der_x, boca_der_y, score]
+    """
     h_img, w_img = frame.shape[:2]
-    rgb          = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    resultado    = _mp_detector.process(rgb)
-    detecciones  = []
 
-    if not resultado.detections:
+    # Actualizar tamaño de entrada
+    _yunet.setInputSize((w_img, h_img))
+
+    _, faces = _yunet.detect(frame)
+
+    detecciones = []
+    if faces is None:
         return detecciones
 
-    nombres_kp = {
-        0: "ojo_der", 1: "ojo_izq", 2: "nariz",
-        3: "boca",    4: "oreja_der", 5: "oreja_izq",
-    }
+    for face in faces:
+        x, y, w, h = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+        score       = float(face[14])
 
-    for det in resultado.detections:
-        score = det.score[0] if det.score else 0.0
-        if score < confianza_min:
-            continue
-
-        bb = det.location_data.relative_bounding_box
-        x  = int(max(0, bb.xmin * w_img))
-        y  = int(max(0, bb.ymin * h_img))
-        w  = int(min(bb.width  * w_img, w_img - x))
-        h  = int(min(bb.height * h_img, h_img - y))
+        # Clamp al frame
+        x = max(0, x);  y = max(0, y)
+        w = min(w, w_img - x);  h = min(h, h_img - y)
 
         if w < 15 or h < 15:
             continue
 
-        kps = {}
-        for idx, nombre in nombres_kp.items():
-            try:
-                kp          = det.location_data.relative_keypoints[idx]
-                kps[nombre] = (int(kp.x * w_img), int(kp.y * h_img))
-            except Exception:
-                pass
-
+        kps = {
+            "ojo_der": (float(face[4]),  float(face[5])),
+            "ojo_izq": (float(face[6]),  float(face[7])),
+            "nariz":   (float(face[8]),  float(face[9])),
+            "boca_izq":(float(face[10]), float(face[11])),
+            "boca_der":(float(face[12]), float(face[13])),
+        }
         detecciones.append((x, y, w, h, round(score, 3), kps))
 
     detecciones.sort(key=lambda d: d[2] * d[3], reverse=True)
     return detecciones
 
 
-def _detectar_caras_haar(frame):
-    gris  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gris  = _clahe.apply(gris)
-    caras = _haar_fallback.detectMultiScale(
-        gris, scaleFactor=1.03, minNeighbors=3, minSize=(40, 40)
-    )
-    result = []
-    for (x, y, w, h) in caras:
-        result.append((int(x), int(y), int(w), int(h), 0.75, {}))
-    result.sort(key=lambda d: d[2] * d[3], reverse=True)
-    return result
+def _detectar_caras_haar(frame, tipo_esperado=None):
+    """Fallback Haar cuando YuNet no está disponible."""
+    h_img, w_img = frame.shape[:2]
+    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gris = _clahe.apply(gris)
+    resultados = []
+
+    if tipo_esperado == TIPO_FRONTAL or tipo_esperado is None:
+        if _haar_frontal is not None:
+            caras = _haar_frontal.detectMultiScale(
+                gris, scaleFactor=1.03, minNeighbors=3, minSize=(40, 40)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.75, {}))
+
+    if tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I) or tipo_esperado is None:
+        if _haar_perfil is not None:
+            gris_det = cv2.flip(gris, 1) if tipo_esperado == TIPO_PERFIL_I else gris
+            caras = _haar_perfil.detectMultiScale(
+                gris_det, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
+            )
+            for (x, y, w, h) in caras:
+                if tipo_esperado == TIPO_PERFIL_I:
+                    x = w_img - x - w
+                resultados.append((int(x), int(y), int(w), int(h), 0.70, {}))
+
+    resultados.sort(key=lambda d: d[2] * d[3], reverse=True)
+    return resultados
 
 
 def _detectar_caras(frame, tipo_esperado=None):
+    """Interfaz unificada — devuelve (x, y, w, h, score)."""
     _init_detectores()
 
-    if _MP_OK and _mp_detector is not None:
-        dets = _detectar_caras_mediapipe(frame)
-    elif _haar_fallback is not None:
-        dets = _detectar_caras_haar(frame)
+    if _yunet is not None:
+        dets = _detectar_caras_yunet(frame)
     else:
-        return []
+        dets = _detectar_caras_haar(frame, tipo_esperado)
 
     return [(d[0], d[1], d[2], d[3], d[4]) for d in dets]
 
 
 # =============================================================================
-#  CLASIFICACION DE ANGULO CON LANDMARKS
+#  CLASIFICACION DE ANGULO CON LANDMARKS YUNET
 # =============================================================================
 
 _buf_yaw   = []
 _BUF_N_YAW = 8
 
 
-def _clasificar_angulo_mediapipe(frame, bbox):
-    _init_detectores()
+def _clasificar_angulo_yunet(frame, bbox):
+    """
+    Clasifica el angulo usando los landmarks de YuNet.
 
-    if not (_MP_OK and _mp_detector is not None):
+    YuNet da: ojo_der, ojo_izq, nariz, boca_izq, boca_der
+    Estrategia:
+      1. Asimetria de ojos respecto al centro del bbox
+      2. Posicion de nariz respecto al centro
+    """
+    if _yunet is None:
         return None
 
     h_img, w_img = frame.shape[:2]
-    rgb          = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    result       = _mp_detector.process(rgb)
+    _yunet.setInputSize((w_img, h_img))
+    _, faces = _yunet.detect(frame)
 
-    if not result.detections:
+    if faces is None or len(faces) == 0:
         return None
 
-    det     = result.detections[0]
-    bb      = det.location_data.relative_bounding_box
-    cx_cara = (bb.xmin + bb.width / 2) * w_img
+    face    = faces[0]
+    x, y, w = float(face[0]), float(face[1]), float(face[2])
+    cx_cara = x + w / 2.0
 
-    nombres = {
-        0: "ojo_der", 1: "ojo_izq", 2: "nariz",
-        3: "boca",    4: "oreja_der", 5: "oreja_izq",
-    }
-    kps = {}
-    for idx, nombre in nombres.items():
-        try:
-            kp          = det.location_data.relative_keypoints[idx]
-            kps[nombre] = (kp.x * w_img, kp.y * h_img)
-        except Exception:
-            pass
+    x_ojo_der = float(face[4])
+    x_ojo_izq = float(face[6])
+    x_nariz   = float(face[8])
 
-    # 1. Orejas — perfil claro
-    tiene_od = "oreja_der" in kps
-    tiene_oi = "oreja_izq" in kps
+    # ── 1. Asimetria de ojos ──────────────────────────────────────────────────
+    dist_der  = cx_cara - x_ojo_der
+    dist_izq  = x_ojo_izq - cx_cara
+    total     = abs(dist_der) + abs(dist_izq) + 1e-6
+    asimetria = (dist_der - dist_izq) / total
 
-    if tiene_od and not tiene_oi:
+    _buf_yaw.append(asimetria)
+    if len(_buf_yaw) > _BUF_N_YAW:
+        _buf_yaw.pop(0)
+    asimetria_suave = float(np.median(_buf_yaw))
+
+    if asimetria_suave > 0.28:
         return TIPO_PERFIL_I
-    if tiene_oi and not tiene_od:
+    elif asimetria_suave < -0.28:
         return TIPO_PERFIL_D
 
-    # 2. Asimetria de ojos
-    if "ojo_der" in kps and "ojo_izq" in kps:
-        x_od      = kps["ojo_der"][0]
-        x_oi      = kps["ojo_izq"][0]
-        dist_der  = cx_cara - x_od
-        dist_izq  = x_oi - cx_cara
-        total     = abs(dist_der) + abs(dist_izq) + 1e-6
-        asimetria = (dist_der - dist_izq) / total
-
-        _buf_yaw.append(asimetria)
-        if len(_buf_yaw) > _BUF_N_YAW:
-            _buf_yaw.pop(0)
-        asimetria_suave = float(np.median(_buf_yaw))
-
-        if asimetria_suave > 0.25:
-            return TIPO_PERFIL_I
-        elif asimetria_suave < -0.25:
-            return TIPO_PERFIL_D
-        else:
-            return TIPO_FRONTAL
-
-    # 3. Solo nariz
-    if "nariz" in kps:
-        x_nariz = kps["nariz"][0]
-        desv    = (x_nariz - cx_cara) / (bb.width * w_img + 1e-6)
-        if desv > 0.15:
-            return TIPO_PERFIL_D
-        elif desv < -0.15:
-            return TIPO_PERFIL_I
+    # ── 2. Posicion de nariz ──────────────────────────────────────────────────
+    desv_nariz = (x_nariz - cx_cara) / (w + 1e-6)
+    if desv_nariz > 0.12:
+        return TIPO_PERFIL_D
+    elif desv_nariz < -0.12:
+        return TIPO_PERFIL_I
 
     return TIPO_FRONTAL
 
 
 def _calcular_yaw_sobel(frame_gris, bbox):
-    """Fallback Sobel si MediaPipe no esta disponible."""
+    """Fallback Sobel — solo si no hay landmarks disponibles."""
     x, y, w, h = bbox
     x1, y1     = max(0, x), max(0, y)
     x2, y2     = min(frame_gris.shape[1], x + w), min(frame_gris.shape[0], y + h)
@@ -249,14 +277,20 @@ def _calcular_yaw_sobel(frame_gris, bbox):
 
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
+    """
+    Prioridad:
+      1. tipo_esperado (registro guiado) → se respeta siempre
+      2. YuNet landmarks                 → mas preciso
+      3. Fallback Sobel                  → si YuNet no disponible
+    """
     global _buf_yaw
 
     if tipo_esperado in (TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I):
         return tipo_esperado
 
-    tipo_mp = _clasificar_angulo_mediapipe(frame, bbox)
-    if tipo_mp is not None:
-        return tipo_mp
+    tipo_yn = _clasificar_angulo_yunet(frame, bbox)
+    if tipo_yn is not None:
+        return tipo_yn
 
     # Fallback Sobel
     try:
@@ -284,7 +318,7 @@ def _extraer_angulos_lbf(gris, bbox, fw, fh):
 
 
 # =============================================================================
-#  ZONAS LBP
+#  ZONAS LBP  (sin cambios)
 # =============================================================================
 
 ZONAS_FRONTAL = [
@@ -333,7 +367,7 @@ VECTOR_DIM = N_ZONAS * LBP_BINS
 
 
 # =============================================================================
-#  LBP
+#  LBP  (sin cambios)
 # =============================================================================
 
 _UNIFORM_MAP = None
@@ -395,7 +429,7 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
 
 
 # =============================================================================
-#  API PUBLICA
+#  API PUBLICA  (firma identica al original)
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
@@ -404,8 +438,8 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
-    Detecta cara, clasifica angulo y extrae vector LBP.
-    Firma identica al original — compatible con database.py e interfaz.py.
+    Detecta cara con YuNet, clasifica angulo y extrae vector LBP.
+    Firma 100% compatible con database.py e interfaz.py.
     """
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
