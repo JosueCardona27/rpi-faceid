@@ -1,16 +1,26 @@
 """
-face_engine.py - Version YuNet corregida
-==========================================
-CORRECCION PRINCIPAL:
-  - YuNet detectaba dos veces el frame (una en _detectar_caras y otra en
-    _clasificar_angulo_yunet). La segunda vez sin flip → landmarks incorrectos
-    → siempre retornaba None → caía al Sobel → clasificacion erronea.
-  - Ahora la deteccion se hace UNA sola vez y los landmarks se reutilizan.
+face_engine.py - Version YuNet corregida v3
+=============================================
+CORRECCIONES vs version anterior:
 
-Detector : YuNet (face_detection_yunet_2023mar.onnx)
-Angulo   : landmarks reales de YuNet (ojo_der, ojo_izq, nariz)
-Fallback : Haar frontal + perfil si YuNet no carga
-LBP+Chi2 : sin cambios
+  BUG 1 — score_threshold demasiado alto (0.5)
+           → demasiados SIN CARA con camara OV5647
+           FIX: score_threshold = 0.30
+
+  BUG 2 — sin fallback real a Haar cuando YuNet no detecta
+           → si YuNet carga pero no encuentra cara, retornaba []
+           FIX: si YuNet retorna vacio, intenta Haar
+
+  BUG 3 — perfiles invertidos por flip horizontal
+           El frame entra con cv2.flip(raw,1) — imagen espejo.
+           Cuando el usuario gira a su DERECHA, en la imagen
+           aparece girando a su IZQUIERDA. YuNet clasifica segun
+           la imagen, no segun el usuario real.
+           FIX: intercambiar PERFIL_I <-> PERFIL_D en landmarks
+
+  BUG 4 — umbral de asimetria muy ajustado (0.28)
+           → cara frontal levemente ladeada = falso perfil
+           FIX: umbral subido a 0.40
 """
 
 import os
@@ -31,7 +41,7 @@ _MODELS   = os.path.join(_BASE_DIR, "..", "models")
 
 
 # =============================================================================
-#  DETECTOR YUNET  (singleton)
+#  DETECTOR  (singleton)
 # =============================================================================
 
 _yunet        = None
@@ -54,7 +64,7 @@ def _init_detectores():
             try:
                 _yunet = cv2.FaceDetectorYN.create(
                     yunet_path, "", (640, 480),
-                    score_threshold=0.5,
+                    score_threshold=0.30,   # BUG1 FIX: era 0.5, muy alto para OV5647
                     nms_threshold=0.3,
                     top_k=5000
                 )
@@ -67,9 +77,11 @@ def _init_detectores():
     if _yunet is None:
         print(f"[DET] ⚠️  YuNet NO encontrado en {_MODELS}")
 
-    # ── Haar frontal (fallback) ───────────────────────────────────────────────
-    rutas_f = [os.path.join(_MODELS, "haarcascade_frontalface_default.xml"),
-               os.path.join(_BASE_DIR, "haarcascade_frontalface_default.xml")]
+    # ── Haar frontal ──────────────────────────────────────────────────────────
+    rutas_f = [
+        os.path.join(_MODELS, "haarcascade_frontalface_default.xml"),
+        os.path.join(_BASE_DIR, "haarcascade_frontalface_default.xml"),
+    ]
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
         rutas_f.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     for ruta in rutas_f:
@@ -80,9 +92,11 @@ def _init_detectores():
                 print(f"[DET] Haar frontal (fallback): {ruta}")
                 break
 
-    # ── Haar perfil (fallback) ────────────────────────────────────────────────
-    rutas_p = [os.path.join(_MODELS, "haarcascade_profileface.xml"),
-               os.path.join(_BASE_DIR, "haarcascade_profileface.xml")]
+    # ── Haar perfil ───────────────────────────────────────────────────────────
+    rutas_p = [
+        os.path.join(_MODELS, "haarcascade_profileface.xml"),
+        os.path.join(_BASE_DIR, "haarcascade_profileface.xml"),
+    ]
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
         rutas_p.append(cv2.data.haarcascades + "haarcascade_profileface.xml")
     for ruta in rutas_p:
@@ -98,12 +112,10 @@ def _init_detectores():
 
 
 # =============================================================================
-#  CACHE DE ULTIMA DETECCION
-#  Guardamos los landmarks de la ultima deteccion YuNet para no
-#  volver a detectar en _clasificar_angulo → sin doble procesamiento
+#  CACHE DE ULTIMA DETECCION YUNET
 # =============================================================================
 
-_ultimo_face_yunet = None   # fila completa de YuNet: array de 15 valores
+_ultimo_face_yunet = None   # array de 15 valores de YuNet
 
 
 # =============================================================================
@@ -112,25 +124,25 @@ _ultimo_face_yunet = None   # fila completa de YuNet: array de 15 valores
 
 def _detectar_caras_yunet(frame):
     """
-    YuNet retorna por cara:
-      [x, y, w, h, ojo_der_x, ojo_der_y, ojo_izq_x, ojo_izq_y,
-       nariz_x, nariz_y, boca_izq_x, boca_izq_y, boca_der_x, boca_der_y, score]
+    Detecta caras con YuNet.
     Guarda la mejor deteccion en _ultimo_face_yunet para reusar landmarks.
+    Retorna lista de (x, y, w, h, score).
     """
     global _ultimo_face_yunet
 
     h_img, w_img      = frame.shape[:2]
     _yunet.setInputSize((w_img, h_img))
-    _, faces          = _yunet.detect(frame)
-    detecciones       = []
+    _, faces           = _yunet.detect(frame)
     _ultimo_face_yunet = None
 
-    if faces is None:
-        return detecciones
+    if faces is None or len(faces) == 0:
+        return []
 
+    detecciones = []
     for face in faces:
-        x, y, w, h = int(face[0]), int(face[1]), int(face[2]), int(face[3])
-        score       = float(face[14])
+        x = int(face[0]); y = int(face[1])
+        w = int(face[2]); h = int(face[3])
+        score = float(face[14])
 
         x = max(0, x);  y = max(0, y)
         w = min(w, w_img - x);  h = min(h, h_img - y)
@@ -140,25 +152,29 @@ def _detectar_caras_yunet(frame):
 
         detecciones.append((x, y, w, h, round(score, 3), face))
 
+    if not detecciones:
+        return []
+
+    # Ordenar por area — cara mas grande primero
     detecciones.sort(key=lambda d: d[2] * d[3], reverse=True)
 
-    if detecciones:
-        # Guardar landmarks de la cara mas grande
-        _ultimo_face_yunet = detecciones[0][5]
+    # Guardar landmarks de la cara principal
+    _ultimo_face_yunet = detecciones[0][5]
 
     return [(d[0], d[1], d[2], d[3], d[4]) for d in detecciones]
 
 
 def _detectar_caras_haar(frame, tipo_esperado=None):
-    """Fallback Haar."""
+    """Fallback Haar — cuando YuNet no detecta nada."""
     global _ultimo_face_yunet
-    _ultimo_face_yunet = None
+    _ultimo_face_yunet = None   # sin landmarks de YuNet
 
     h_img, w_img = frame.shape[:2]
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gris = _clahe.apply(gris)
     resultados = []
 
+    # Frontal
     if tipo_esperado in (TIPO_FRONTAL, None):
         if _haar_frontal is not None:
             caras = _haar_frontal.detectMultiScale(
@@ -167,15 +183,24 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.75))
 
-    if tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I, None):
+    # Perfil derecho
+    if tipo_esperado in (TIPO_PERFIL_D, None):
         if _haar_perfil is not None:
-            gris_det = cv2.flip(gris, 1) if tipo_esperado == TIPO_PERFIL_I else gris
             caras = _haar_perfil.detectMultiScale(
-                gris_det, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
+                gris, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
             )
             for (x, y, w, h) in caras:
-                if tipo_esperado == TIPO_PERFIL_I:
-                    x = w_img - x - w
+                resultados.append((int(x), int(y), int(w), int(h), 0.70))
+
+    # Perfil izquierdo (imagen invertida)
+    if tipo_esperado in (TIPO_PERFIL_I, None):
+        if _haar_perfil is not None:
+            gris_flip = cv2.flip(gris, 1)
+            caras = _haar_perfil.detectMultiScale(
+                gris_flip, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
+            )
+            for (x, y, w, h) in caras:
+                x = w_img - x - w
                 resultados.append((int(x), int(y), int(w), int(h), 0.70))
 
     resultados.sort(key=lambda d: d[2] * d[3], reverse=True)
@@ -183,18 +208,25 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
 
 
 def _detectar_caras(frame, tipo_esperado=None):
-    """Interfaz unificada. Devuelve (x, y, w, h, score)."""
+    """
+    Interfaz unificada.
+    Intenta YuNet primero. Si no detecta nada, usa Haar como fallback real.
+    Devuelve lista de (x, y, w, h, score).
+    """
     _init_detectores()
 
     if _yunet is not None:
-        return _detectar_caras_yunet(frame)
-    else:
+        dets = _detectar_caras_yunet(frame)
+        if dets:
+            return dets
+        # BUG2 FIX: YuNet cargado pero sin deteccion → intentar Haar
         return _detectar_caras_haar(frame, tipo_esperado)
+
+    return _detectar_caras_haar(frame, tipo_esperado)
 
 
 # =============================================================================
 #  CLASIFICACION DE ANGULO
-#  Usa _ultimo_face_yunet (ya detectado) en lugar de detectar de nuevo
 # =============================================================================
 
 _buf_yaw   = []
@@ -203,49 +235,60 @@ _BUF_N_YAW = 8
 
 def _clasificar_angulo_con_landmarks(face_row):
     """
-    Clasifica el angulo usando la fila de YuNet ya detectada.
-    face_row[0..3] = x,y,w,h
-    face_row[4,5]  = ojo_der x,y
-    face_row[6,7]  = ojo_izq x,y
-    face_row[8,9]  = nariz   x,y
-    """
-    x      = float(face_row[0])
-    w      = float(face_row[2])
-    cx_cara = x + w / 2.0
+    Clasifica el angulo usando landmarks de YuNet ya detectados.
 
-    x_ojo_der = float(face_row[4])
-    x_ojo_izq = float(face_row[6])
-    x_nariz   = float(face_row[8])
+    face_row indices:
+      [0,1,2,3]   = x, y, w, h del bbox
+      [4,5]       = ojo derecho x,y  (derecho en imagen = izquierdo del usuario por flip)
+      [6,7]       = ojo izquierdo x,y
+      [8,9]       = nariz x,y
+      [10,11]     = boca izquierda x,y
+      [12,13]     = boca derecha x,y
+      [14]        = score
+
+    BUG3 FIX — inversion por flip horizontal:
+      El frame viene con cv2.flip(raw,1). Cuando el usuario gira a su DERECHA,
+      en la imagen aparece girando a su IZQUIERDA. Por eso se intercambia
+      PERFIL_I <-> PERFIL_D respecto a lo que indica la asimetria de imagen.
+    """
+    x     = float(face_row[0])
+    w     = float(face_row[2])
+    cx    = x + w / 2.0
+
+    x_od  = float(face_row[4])   # ojo der en imagen
+    x_oi  = float(face_row[6])   # ojo izq en imagen
+    x_n   = float(face_row[8])   # nariz
 
     # ── Asimetria de ojos ─────────────────────────────────────────────────────
-    dist_der  = cx_cara - x_ojo_der
-    dist_izq  = x_ojo_izq - cx_cara
-    total     = abs(dist_der) + abs(dist_izq) + 1e-6
-    asimetria = (dist_der - dist_izq) / total
+    dist_od   = cx - x_od
+    dist_oi   = x_oi - cx
+    total     = abs(dist_od) + abs(dist_oi) + 1e-6
+    asimetria = (dist_od - dist_oi) / total
 
     _buf_yaw.append(asimetria)
     if len(_buf_yaw) > _BUF_N_YAW:
         _buf_yaw.pop(0)
-    asimetria_suave = float(np.median(_buf_yaw))
+    asm = float(np.median(_buf_yaw))
 
-    # Umbral 0.28 → giro claro de cabeza
-    if asimetria_suave > 0.28:
-        return TIPO_PERFIL_I
-    elif asimetria_suave < -0.28:
-        return TIPO_PERFIL_D
+    # BUG3 FIX: intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
+    # BUG4 FIX: umbral subido de 0.28 a 0.40
+    if asm > 0.40:
+        return TIPO_PERFIL_D   # en imagen parece izq, pero usuario giro der
+    elif asm < -0.40:
+        return TIPO_PERFIL_I   # en imagen parece der, pero usuario giro izq
 
-    # ── Posicion de nariz respecto al centro ──────────────────────────────────
-    desv_nariz = (x_nariz - cx_cara) / (w + 1e-6)
-    if desv_nariz > 0.12:
-        return TIPO_PERFIL_D
-    elif desv_nariz < -0.12:
-        return TIPO_PERFIL_I
+    # ── Posicion de nariz (confirmacion) ─────────────────────────────────────
+    desv = (x_n - cx) / (w + 1e-6)
+    if desv > 0.15:
+        return TIPO_PERFIL_I   # intercambiado por flip
+    elif desv < -0.15:
+        return TIPO_PERFIL_D   # intercambiado por flip
 
     return TIPO_FRONTAL
 
 
 def _calcular_yaw_sobel(frame_gris, bbox):
-    """Fallback Sobel — solo si no hay landmarks."""
+    """Fallback Sobel — solo cuando no hay landmarks YuNet."""
     x, y, w, h = bbox
     x1, y1     = max(0, x), max(0, y)
     x2, y2     = min(frame_gris.shape[1], x + w), min(frame_gris.shape[0], y + h)
@@ -254,14 +297,13 @@ def _calcular_yaw_sobel(frame_gris, bbox):
     if recorte.size == 0:
         return 0.0
     try:
-        cara      = cv2.resize(recorte, (128, 128))
-        gx        = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
-        gx_abs    = np.abs(gx)
-        w_col     = cara.shape[1] // 3
-        izq       = np.mean(gx_abs[:, :w_col])
-        der       = np.mean(gx_abs[:, 2 * w_col:])
-        asimetria = (der - izq) / (der + izq + 1e-6)
-        return asimetria * 100.0
+        cara  = cv2.resize(recorte, (128, 128))
+        gx    = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
+        gabs  = np.abs(gx)
+        wc    = cara.shape[1] // 3
+        izq   = np.mean(gabs[:, :wc])
+        der   = np.mean(gabs[:, 2*wc:])
+        return (der - izq) / (der + izq + 1e-6) * 100.0
     except Exception as e:
         print(f"[Sobel] Error: {e}")
         return 0.0
@@ -269,43 +311,43 @@ def _calcular_yaw_sobel(frame_gris, bbox):
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
     """
-    Prioridad:
-      1. tipo_esperado (registro guiado) → se respeta siempre
-      2. Landmarks YuNet del cache       → preciso, sin doble deteccion
-      3. Fallback Sobel                  → si YuNet no disponible
+    Prioridad de clasificacion:
+      1. tipo_esperado  → registro guiado, siempre se respeta
+      2. YuNet landmarks del cache → precision real sin doble deteccion
+      3. Sobel fallback → si YuNet no detecto nada
     """
     global _buf_yaw
 
-    # Registro guiado: respetar siempre el tipo indicado
+    # Registro guiado: respetar siempre
     if tipo_esperado in (TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I):
         return tipo_esperado
 
-    # Usar landmarks del cache (misma deteccion ya hecha)
+    # YuNet: usar cache de la deteccion ya hecha
     if _ultimo_face_yunet is not None:
         return _clasificar_angulo_con_landmarks(_ultimo_face_yunet)
 
-    # Fallback Sobel
+    # Fallback Sobel (Haar no dio landmarks)
     try:
-        frame_gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        yaw        = _calcular_yaw_sobel(frame_gris, bbox)
+        fg  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        yaw = _calcular_yaw_sobel(fg, bbox)
     except Exception:
         yaw = 0.0
 
     _buf_yaw.append(yaw)
     if len(_buf_yaw) > _BUF_N_YAW:
         _buf_yaw.pop(0)
-    yaw_suavizado = float(np.median(_buf_yaw)) if _buf_yaw else yaw
+    ys = float(np.median(_buf_yaw)) if _buf_yaw else yaw
 
-    if yaw_suavizado > 40.0:
+    if ys > 40.0:
         return TIPO_PERFIL_D
-    elif yaw_suavizado < -40.0:
+    elif ys < -40.0:
         return TIPO_PERFIL_I
     else:
         return TIPO_FRONTAL
 
 
 def _extraer_angulos_lbf(gris, bbox, fw, fh):
-    """Compatibilidad con diagnostico.py"""
+    """Compatibilidad con diagnostico.py — siempre retorna None."""
     return None, None
 
 
@@ -421,7 +463,7 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
 
 
 # =============================================================================
-#  API PUBLICA
+#  API PUBLICA  (firma identica al original)
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
@@ -431,7 +473,7 @@ def preprocesar_cara(gris_zona):
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
     Detecta cara, clasifica angulo y extrae vector LBP.
-    Firma identica al original.
+    Compatible con database.py e interfaz.py sin cambios.
     """
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
@@ -452,7 +494,6 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
     recorte = preprocesar_cara(recorte)
     cara128 = cv2.resize(recorte, (128, 128))
 
-    # _ultimo_face_yunet ya fue guardado en _detectar_caras_yunet
     tipo = _clasificar_angulo(
         frame,
         (x1, y1, x2 - x1, y2 - y1),
