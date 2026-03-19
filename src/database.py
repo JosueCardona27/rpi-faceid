@@ -9,19 +9,7 @@ Tablas:
   vectores_por_angulo — nuevo, un vector por angulo por usuario (512 dims)
                         angulos: 'frontal', 'perfil_der', 'perfil_izq'
 
-Los 4 pasos del registro producen 3 entradas en vectores_por_angulo:
-  Paso 1 (frente)     → angulo 'frontal'     (se promedia con paso 4)
-  Paso 2 (derecha)    → angulo 'perfil_der'
-  Paso 3 (izquierda)  → angulo 'perfil_izq'
-  Paso 4 (frente)     → angulo 'frontal'     (se promedia con paso 1)
-
-En el reconocimiento, se evaluan los 3 angulos del usuario y se toma
-el de menor distancia chi2 como su mejor match.
-
-CORRECCIONES APLICADAS:
-  - UMBRAL: 1.5 → 2.2  (LBP puro necesita más tolerancia; antes rechazaba
-                         al usuario legítimo por variaciones de iluminación/pose)
-  - MAX_DIST: 8.0 → 10.0 (rango de similitud más amplio para mejor %display)
+UMBRAL corregido: 1.5 → 2.2 (LBP necesita mas tolerancia)
 """
 
 import sqlite3
@@ -35,10 +23,6 @@ _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-# CORRECCIÓN: umbral subido de 1.5 → 2.2
-# Con LBP puro (sin deep learning), una distancia chi2 de 1.5 era demasiado
-# exigente. Pequeños cambios de iluminación o postura generaban distancias
-# de 1.6–2.0 para la misma persona, bloqueando acceso legítimo.
 UMBRAL   = 2.2
 MAX_DIST = 10.0
 
@@ -154,16 +138,12 @@ def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
 
 def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
     """
-    Guarda un vector promediado por angulo.
-
     vectores_por_paso:
       {
         "frontal":    {"vectores": [array(512), ...]},
         "perfil_der": {"vectores": [array(512), ...]},
         "perfil_izq": {"vectores": [array(512), ...]},
       }
-
-    Los pasos 1 y 4 (ambos frontales) se promedian juntos en 'frontal'.
     """
     conn   = conectar()
     cursor = conn.cursor()
@@ -214,11 +194,6 @@ def guardar_vector_unico(usuario_id: int, vectores: list, pesos_lista=None):
 # =============================================================================
 
 def cargar_vectores_por_angulo() -> list:
-    """
-    Carga todos los vectores.
-    Los angulos de un mismo usuario comparten usuario_id.
-    Solo carga vectores con dims == VECTOR_DIM.
-    """
     conn      = conectar()
     cursor    = conn.cursor()
     resultado = []
@@ -285,11 +260,6 @@ def cargar_vectores_por_angulo() -> list:
 
 def reconocer_persona(vector_nuevo: np.ndarray,
                        umbral: float = UMBRAL) -> dict | None:
-    """
-    Compara vector_nuevo contra todos los angulos de todos los usuarios.
-    Por cada usuario toma su angulo con menor distancia chi2.
-    Retorna el usuario con menor distancia global.
-    """
     registros = cargar_vectores_por_angulo()
     if not registros:
         return None
