@@ -1,507 +1,382 @@
 """
-face_engine.py - Versión optimizada sin face_recognition
-Sistema de detección frontal + lateral con Haar + Sobel puro
+database.py
+===========
+Base de datos SQLite para el sistema de acceso facial.
+
+Tablas:
+  usuarios            — datos del usuario (nombre, apellidos, cuenta, rol)
+  vectores_faciales   — legacy, un vector por usuario (512 dims)
+  vectores_por_angulo — nuevo, un vector por angulo por usuario (512 dims)
+                        angulos: 'frontal', 'perfil_der', 'perfil_izq'
+
+Los 4 pasos del registro producen 3 entradas en vectores_por_angulo:
+  Paso 1 (frente)     → angulo 'frontal'     (se promedia con paso 4)
+  Paso 2 (derecha)    → angulo 'perfil_der'
+  Paso 3 (izquierda)  → angulo 'perfil_izq'
+  Paso 4 (frente)     → angulo 'frontal'     (se promedia con paso 1)
+
+En el reconocimiento, se evaluan los 3 angulos del usuario y se toma
+el de menor distancia chi2 como su mejor match.
+
+CORRECCIONES APLICADAS:
+  - UMBRAL: 1.5 → 2.2  (LBP puro necesita más tolerancia; antes rechazaba
+                         al usuario legítimo por variaciones de iluminación/pose)
+  - MAX_DIST: 8.0 → 10.0 (rango de similitud más amplio para mejor %display)
 """
+
+import sqlite3
+import json
 import os
-import cv2
 import numpy as np
+from face_engine import distancia_chi2, VECTOR_DIM
 
-TIPO_FRONTAL = "frontal"
-TIPO_PERFIL_D = "perfil_der"
-TIPO_PERFIL_I = "perfil_izq"
+_DIR_ESTE_ARCHIVO = os.path.dirname(os.path.abspath(__file__))
+_DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
+os.makedirs(_DIR_DB, exist_ok=True)
+DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-_clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+# CORRECCIÓN: umbral subido de 1.5 → 2.2
+# Con LBP puro (sin deep learning), una distancia chi2 de 1.5 era demasiado
+# exigente. Pequeños cambios de iluminación o postura generaban distancias
+# de 1.6–2.0 para la misma persona, bloqueando acceso legítimo.
+UMBRAL   = 2.2
+MAX_DIST = 10.0
+
+ROLES_VALIDOS = ("admin", "maestro", "estudiante")
+
+
+def conectar():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _crear_tablas():
+    conn = conectar()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_usuario       TEXT    NOT NULL UNIQUE,
+            nombre           TEXT    NOT NULL,
+            apellido_paterno TEXT    NOT NULL,
+            apellido_materno TEXT    NOT NULL,
+            numero_cuenta    TEXT    UNIQUE,
+            rol              TEXT    NOT NULL
+                             CHECK(rol IN ('admin','maestro','estudiante')),
+            fecha_registro   TEXT    DEFAULT (datetime('now','localtime')),
+            registrado_por   INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS vectores_faciales (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id    INTEGER NOT NULL UNIQUE,
+            vector        TEXT    NOT NULL,
+            dimensiones   INTEGER DEFAULT 512,
+            fecha_captura TEXT    DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS vectores_por_angulo (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id  INTEGER NOT NULL,
+            angulo      TEXT    NOT NULL,
+            vector      TEXT    NOT NULL,
+            n_muestras  INTEGER DEFAULT 1,
+            UNIQUE(usuario_id, angulo),
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        );
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usuarios_rol ON usuarios(rol)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vf_usuario ON vectores_faciales(usuario_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vpa_usuario ON vectores_por_angulo(usuario_id)")
+    conn.commit()
+    conn.close()
+
+_crear_tablas()
+
 
 # =============================================================================
-#  DETECTORES HAAR
+#  CRUD USUARIOS
 # =============================================================================
 
-_haar_frontal = None
-_haar_perfil = None
-_det_init = False
+def registrar_usuario(
+        numero_cuenta:    str,
+        nombre:           str,
+        apellido_paterno: str,
+        apellido_materno: str = "",
+        rol:              str = "estudiante",
+        telefono:         int = None,
+        registrado_por:   int = None,
+) -> int:
+    if rol not in ROLES_VALIDOS:
+        print(f"[ERROR] Rol '{rol}' no valido.")
+        return -1
+
+    id_usuario = f"{rol[:3].upper()}-{numero_cuenta}"
+    ap_mat     = apellido_materno.strip() if apellido_materno.strip() else "."
+
+    try:
+        conn   = conectar()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO usuarios
+                (id_usuario, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, telefono, rol, registrado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id_usuario, nombre, apellido_paterno, ap_mat,
+              numero_cuenta, telefono, rol, registrado_por))
+        conn.commit()
+        uid = cursor.lastrowid
+        print(f"[DB] Usuario registrado ID={uid}: {nombre} {apellido_paterno} "
+              f"({rol}) cuenta={numero_cuenta}")
+        return uid
+    except sqlite3.IntegrityError as e:
+        print(f"[DB] Cuenta '{numero_cuenta}' ya existe: {e}")
+        return -1
+    finally:
+        conn.close()
 
 
-def _init_detectores():
-    """Inicializa cascadas Haar."""
-    global _haar_frontal, _haar_perfil, _det_init
+def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
+    partes = nombre_completo.strip().split()
+    if len(partes) >= 3:
+        nombre = " ".join(partes[:-2]); ap_pat = partes[-2]; ap_mat = partes[-1]
+    elif len(partes) == 2:
+        nombre = partes[0]; ap_pat = partes[1]; ap_mat = ""
+    else:
+        nombre = nombre_completo.strip(); ap_pat = "."; ap_mat = ""
+    return registrar_usuario(numero_cuenta, nombre, ap_pat, ap_mat)
 
-    if _det_init:
+
+# =============================================================================
+#  GUARDAR VECTORES POR ANGULO
+# =============================================================================
+
+def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
+    """
+    Guarda un vector promediado por angulo.
+
+    vectores_por_paso:
+      {
+        "frontal":    {"vectores": [array(512), ...]},
+        "perfil_der": {"vectores": [array(512), ...]},
+        "perfil_izq": {"vectores": [array(512), ...]},
+      }
+
+    Los pasos 1 y 4 (ambos frontales) se promedian juntos en 'frontal'.
+    """
+    conn   = conectar()
+    cursor = conn.cursor()
+    total  = 0
+
+    for angulo, datos in vectores_por_paso.items():
+        vecs = datos.get("vectores", [])
+        if not vecs:
+            print(f"[DB] Angulo '{angulo}' sin muestras.")
+            continue
+
+        v_prom = np.mean(vecs, axis=0).astype(np.float32)
+
+        if len(v_prom) != VECTOR_DIM:
+            print(f"[DB] Angulo '{angulo}': {len(v_prom)} dims != {VECTOR_DIM}. Omitido.")
+            continue
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO vectores_por_angulo
+                (usuario_id, angulo, vector, n_muestras)
+            VALUES (?, ?, ?, ?)
+        """, (usuario_id, angulo, json.dumps(v_prom.tolist()), len(vecs)))
+
+        print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
+        total += 1
+
+    conn.commit()
+    conn.close()
+    print(f"[DB] {total} angulos guardados para usuario ID={usuario_id}.")
+
+
+def guardar_vector_unico(usuario_id: int, vectores: list, pesos_lista=None):
+    if not vectores:
         return
-    _det_init = True
-
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-
-    # Frontal
-    rutas_frontal = [
-        os.path.join(base, "haarcascade_frontalface_default.xml"),
-    ]
-    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-        rutas_frontal.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
-    for ruta in rutas_frontal:
-        if os.path.exists(ruta):
-            _haar_frontal = cv2.CascadeClassifier(ruta)
-            if not _haar_frontal.empty():
-                print(f"[DET] Haar frontal: {ruta}")
-                break
-
-    # Perfil
-    rutas_perfil = [
-        os.path.join(base, "haarcascade_profileface.xml"),
-    ]
-    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-        rutas_perfil.append(cv2.data.haarcascades + "haarcascade_profileface.xml")
-
-    for ruta in rutas_perfil:
-        if os.path.exists(ruta):
-            _haar_perfil = cv2.CascadeClassifier(ruta)
-            if not _haar_perfil.empty():
-                print(f"[DET] Haar perfil: {ruta}")
-                break
-
-    if _haar_frontal is None:
-        print("[DET] ⚠️  Haar frontal NO ENCONTRADO")
-    if _haar_perfil is None:
-        print("[DET] ⚠️  Haar perfil NO ENCONTRADO - usando frontal relajado")
+    v_prom = np.mean(vectores, axis=0).astype(np.float32)
+    conn   = conectar()
+    conn.execute("""
+        INSERT OR REPLACE INTO vectores_faciales (usuario_id, vector, dimensiones)
+        VALUES (?, ?, ?)
+    """, (usuario_id, json.dumps(v_prom.tolist()), len(v_prom)))
+    conn.commit()
+    conn.close()
+    print(f"[DB] Vector legacy ({len(v_prom)} dims) ID={usuario_id}.")
 
 
-def _detectar_caras(frame, tipo_esperado=None):
+# =============================================================================
+#  CARGAR VECTORES
+# =============================================================================
+
+def cargar_vectores_por_angulo() -> list:
     """
-    Detecta caras con estrategia adaptativa.
-    - Si tipo_esperado es FRONTAL: prioriza frontal
-    - Si tipo_esperado es PERFIL_*: prioriza perfiles
+    Carga todos los vectores.
+    Los angulos de un mismo usuario comparten usuario_id.
+    Solo carga vectores con dims == VECTOR_DIM.
     """
-    _init_detectores()
-    
-    h_img, w_img = frame.shape[:2]
-    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gris = _clahe.apply(gris)
-    
-    resultados = []
-    
-    # ESTRATEGIA: Si esperamos FRONTAL
-    if tipo_esperado == TIPO_FRONTAL:
-        if _haar_frontal is not None:
-            caras = _haar_frontal.detectMultiScale(
-                gris,
-                scaleFactor=1.05,
-                minNeighbors=4,
-                minSize=(50, 50)
-            )
-            for (x, y, w, h) in caras:
-                resultados.append((int(x), int(y), int(w), int(h), 0.85))
-        
-        # Fallback: perfiles como último recurso
-        if not resultados and _haar_perfil is not None:
-            caras = _haar_perfil.detectMultiScale(
-                gris,
-                scaleFactor=1.02,
-                minNeighbors=2,
-                minSize=(30, 30)
-            )
-            for (x, y, w, h) in caras:
-                resultados.append((int(x), int(y), int(w), int(h), 0.70))
-    
-    # ESTRATEGIA: Si esperamos PERFIL
-    elif tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I):
-        # Intentar perfil directo
-        if _haar_perfil is not None:
-            gris_det = cv2.flip(gris, 1) if tipo_esperado == TIPO_PERFIL_I else gris
-            
-            caras = _haar_perfil.detectMultiScale(
-                gris_det,
-                scaleFactor=1.02,
-                minNeighbors=2,
-                minSize=(30, 30)
-            )
-            
-            for (x, y, w, h) in caras:
-                if tipo_esperado == TIPO_PERFIL_I:
-                    x = w_img - x - w
-                resultados.append((int(x), int(y), int(w), int(h), 0.90))
-        
-        # Fallback: frontal relajado
-        if not resultados and _haar_frontal is not None:
-            caras = _haar_frontal.detectMultiScale(
-                gris,
-                scaleFactor=1.03,
-                minNeighbors=3,
-                minSize=(40, 40)
-            )
-            for (x, y, w, h) in caras:
-                resultados.append((int(x), int(y), int(w), int(h), 0.75))
-    
-    # SIN TIPO ESPERADO: Buscar ambos
+    conn      = conectar()
+    cursor    = conn.cursor()
+    resultado = []
+
+    cursor.execute("""
+        SELECT u.id,
+               u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
+               u.numero_cuenta, u.rol,
+               va.angulo, va.vector, va.n_muestras
+        FROM vectores_por_angulo va
+        JOIN usuarios u ON u.id = va.usuario_id
+        ORDER BY u.id, va.angulo
+    """)
+    for uid, nombre, cuenta, rol, angulo, vjson, n in cursor.fetchall():
+        v = np.array(json.loads(vjson), dtype=np.float32)
+        if len(v) == VECTOR_DIM:
+            resultado.append({
+                "usuario_id":    uid,
+                "nombre":        nombre.strip(),
+                "numero_cuenta": cuenta,
+                "rol":           rol,
+                "angulo":        angulo,
+                "vector":        v,
+                "n_muestras":    n,
+            })
+        else:
+            print(f"[DB] SKIP usuario_id={uid} angulo='{angulo}' "
+                  f"{len(v)} dims != {VECTOR_DIM}")
+
+    ids_nuevos = {r["usuario_id"] for r in resultado}
+
+    cursor.execute("""
+        SELECT u.id,
+               u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
+               u.numero_cuenta, u.rol,
+               vf.vector, vf.dimensiones
+        FROM vectores_faciales vf
+        JOIN usuarios u ON u.id = vf.usuario_id
+    """)
+    for uid, nombre, cuenta, rol, vjson, dims in cursor.fetchall():
+        if uid in ids_nuevos:
+            continue
+        if dims != VECTOR_DIM:
+            print(f"[DB] SKIP legacy ID={uid}: {dims} dims. Re-registrar.")
+            continue
+        v = np.array(json.loads(vjson), dtype=np.float32)
+        resultado.append({
+            "usuario_id":    uid,
+            "nombre":        nombre.strip(),
+            "numero_cuenta": cuenta,
+            "rol":           rol,
+            "angulo":        "legacy",
+            "vector":        v,
+            "n_muestras":    1,
+        })
+
+    conn.close()
+    return resultado
+
+
+# =============================================================================
+#  RECONOCIMIENTO
+# =============================================================================
+
+def reconocer_persona(vector_nuevo: np.ndarray,
+                       umbral: float = UMBRAL) -> dict | None:
+    """
+    Compara vector_nuevo contra todos los angulos de todos los usuarios.
+    Por cada usuario toma su angulo con menor distancia chi2.
+    Retorna el usuario con menor distancia global.
+    """
+    registros = cargar_vectores_por_angulo()
+    if not registros:
+        return None
+
+    mejores: dict[int, dict] = {}
+
+    for reg in registros:
+        uid  = reg["usuario_id"]
+        dist = distancia_chi2(vector_nuevo, reg["vector"])
+
+        if uid not in mejores or dist < mejores[uid]["distancia"]:
+            mejores[uid] = {
+                "usuario_id":    uid,
+                "nombre":        reg["nombre"],
+                "numero_cuenta": reg["numero_cuenta"],
+                "rol":           reg["rol"],
+                "angulo":        reg["angulo"],
+                "distancia":     round(dist, 4),
+            }
+
+    if not mejores:
+        return None
+
+    mejor = min(mejores.values(), key=lambda x: x["distancia"])
+
+    sim_raw = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
+    mejor["similitud_pct"] = round(sim_raw * 100, 1)
+    mejor["acceso"]        = mejor["distancia"] <= umbral
+
+    print(f"[RECONO] {mejor['nombre']} | angulo={mejor['angulo']} | "
+          f"dist={mejor['distancia']:.4f} | sim={mejor['similitud_pct']}% | "
+          f"acceso={'SI' if mejor['acceso'] else 'NO'}")
+
+    return mejor
+
+
+# =============================================================================
+#  ELIMINAR
+# =============================================================================
+
+def eliminar_persona(usuario_id: int):
+    conn = conectar()
+    conn.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+    conn.commit()
+    conn.close()
+    print(f"[DB] Usuario ID={usuario_id} eliminado.")
+
+eliminar_usuario = eliminar_persona
+
+
+# =============================================================================
+#  CONSULTAS
+# =============================================================================
+
+def listar_usuarios(rol: str = None) -> list:
+    conn   = conectar()
+    cursor = conn.cursor()
+    if rol:
+        cursor.execute(
+            "SELECT id, id_usuario, nombre, apellido_paterno, apellido_materno, "
+            "numero_cuenta, rol FROM usuarios WHERE rol=? ORDER BY apellido_paterno",
+            (rol,))
     else:
-        if _haar_frontal is not None:
-            caras = _haar_frontal.detectMultiScale(
-                gris,
-                scaleFactor=1.05,
-                minNeighbors=4,
-                minSize=(50, 50)
-            )
-            for (x, y, w, h) in caras:
-                resultados.append((int(x), int(y), int(w), int(h), 0.85))
-        
-        if _haar_perfil is not None:
-            caras = _haar_perfil.detectMultiScale(
-                gris,
-                scaleFactor=1.02,
-                minNeighbors=2,
-                minSize=(30, 30)
-            )
-            for (x, y, w, h) in caras:
-                resultados.append((int(x), int(y), int(w), int(h), 0.80))
-            
-            # Perfil invertido
-            gris_flip = cv2.flip(gris, 1)
-            caras = _haar_perfil.detectMultiScale(
-                gris_flip,
-                scaleFactor=1.02,
-                minNeighbors=2,
-                minSize=(30, 30)
-            )
-            for (x, y, w, h) in caras:
-                x = w_img - x - w
-                resultados.append((int(x), int(y), int(w), int(h), 0.80))
-    
-    # Filtrar y ordenar por tamaño
-    resultados = [c for c in resultados if c[2] > 15 and c[3] > 15]
-    resultados = sorted(resultados, key=lambda c: c[2] * c[3], reverse=True)
-    
-    return resultados
+        cursor.execute(
+            "SELECT id, id_usuario, nombre, apellido_paterno, apellido_materno, "
+            "numero_cuenta, rol FROM usuarios ORDER BY apellido_paterno")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 
-# =============================================================================
-#  CLASIFICACIÓN DE ÁNGULO - SOBEL MEJORADO
-# =============================================================================
-
-_buf_yaw = []
-_BUF_N_YAW = 5
-
-
-def _calcular_yaw_sobel(frame_gris, bbox):
-    """
-    Calcula YAW (rotación horizontal) usando Sobel en 3 regiones.
-    - Izquierda, Centro, Derecha
-    - Compara densidad de bordes
-    """
-    x, y, w, h = bbox
-    x1 = max(0, x)
-    y1 = max(0, y)
-    x2 = min(frame_gris.shape[1], x + w)
-    y2 = min(frame_gris.shape[0], y + h)
-    
-    recorte = frame_gris[y1:y2, x1:x2]
-    if recorte.size == 0:
-        return 0.0
-    
-    try:
-        # Redimensionar a 128x128 para consistencia
-        cara = cv2.resize(recorte, (128, 128))
-        
-        # Aplicar Sobel X (detecta cambios horizontales = perfil)
-        gx = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
-        gx_abs = np.abs(gx)
-        
-        # Dividir en 3 columnas
-        w_col = cara.shape[1] // 3
-        
-        izq = np.mean(gx_abs[:, :w_col])
-        cen = np.mean(gx_abs[:, w_col:2*w_col])
-        der = np.mean(gx_abs[:, 2*w_col:])
-        
-        # Si izquierda tiene más bordes: usuario mira a la izquierda (PERFIL_IZQ)
-        # Si derecha tiene más bordes: usuario mira a la derecha (PERFIL_DER)
-        asimetria = (der - izq) / (der + izq + 1e-6)
-        
-        # Escalar a ±120
-        yaw = asimetria * 100.0
-        
-        return yaw
-    except Exception as e:
-        print(f"[Sobel] Error: {e}")
-        return 0.0
+def tiene_vector(usuario_id: int) -> bool:
+    conn = conectar()
+    c    = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?", (usuario_id,))
+    n1 = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM vectores_faciales WHERE usuario_id=?", (usuario_id,))
+    n2 = c.fetchone()[0]
+    conn.close()
+    return (n1 + n2) > 0
 
 
-def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
-    """
-    Clasifica si es FRONTAL o PERFIL_D o PERFIL_I.
-    Si tipo_esperado está dado, lo respeta.
-    """
-    global _buf_yaw
-    
-    # Si ya se indicó el tipo, respetarlo
-    if tipo_esperado in (TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I):
-        return tipo_esperado
-    
-    try:
-        frame_gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        yaw = _calcular_yaw_sobel(frame_gris, bbox)
-    except Exception:
-        yaw = 0.0
-    
-    # Buffer con mediana
-    _buf_yaw.append(yaw)
-    if len(_buf_yaw) > _BUF_N_YAW:
-        _buf_yaw.pop(0)
-    
-    yaw_suavizado = float(np.median(_buf_yaw)) if _buf_yaw else yaw
-    
-    # Umbrales: ±25 es bastante generoso para perfiles
-    if yaw_suavizado > 25.0:
-        return TIPO_PERFIL_D
-    elif yaw_suavizado < -25.0:
-        return TIPO_PERFIL_I
-    else:
-        return TIPO_FRONTAL
-
-
-def _extraer_angulos_lbf(gris, bbox, fw, fh):
-    """Compatibilidad - retorna None (no disponible sin landmarks)"""
-    return None, None
-
-
-# =============================================================================
-#  ZONAS LBP
-# =============================================================================
-
-ZONAS_FRONTAL = [
-    (0, 40, 0, 128, "frente"),
-    (28, 65, 0, 58, "ojo_izq"),
-    (28, 65, 70, 128, "ojo_der"),
-    (55, 92, 28, 100, "nariz"),
-    (62, 100, 0, 50, "mejilla_izq"),
-    (62, 100, 78, 128, "mejilla_der"),
-    (88, 128, 14, 114, "boca_menton"),
-    (20, 100, 0, 128, "cara_media"),
-]
-
-ZONAS_PERFIL_D = [
-    (0, 40, 0, 128, "frente"),
-    (20, 60, 0, 60, "ojo"),
-    (45, 85, 0, 65, "nariz_lat"),
-    (55, 95, 0, 55, "mejilla"),
-    (65, 110, 0, 50, "mandibula"),
-    (25, 75, 0, 40, "pomulo"),
-    (82, 128, 0, 75, "menton"),
-    (15, 105, 0, 80, "perfil_media"),
-]
-
-ZONAS_PERFIL_I = [
-    (0, 40, 0, 128, "frente"),
-    (20, 60, 68, 128, "ojo"),
-    (45, 85, 63, 128, "nariz_lat"),
-    (55, 95, 73, 128, "mejilla"),
-    (65, 110, 78, 128, "mandibula"),
-    (25, 75, 88, 128, "pomulo"),
-    (82, 128, 53, 128, "menton"),
-    (15, 105, 48, 128, "perfil_media"),
-]
-
-ZONAS_POR_TIPO = {
-    TIPO_FRONTAL: ZONAS_FRONTAL,
-    TIPO_PERFIL_D: ZONAS_PERFIL_D,
-    TIPO_PERFIL_I: ZONAS_PERFIL_I,
-}
-
-ZONAS = ZONAS_FRONTAL
-N_ZONAS = 8
-LBP_BINS = 64
-VECTOR_DIM = N_ZONAS * LBP_BINS
-
-
-# =============================================================================
-#  LBP
-# =============================================================================
-
-_UNIFORM_MAP = None
-
-
-def _build_uniform_map():
-    umap = np.full(256, 58, dtype=np.int32)
-    idx = 0
-    for code in range(256):
-        b = format(code, "08b")
-        trans = sum(b[i] != b[(i + 1) % 8] for i in range(8))
-        if trans <= 2:
-            umap[code] = idx
-            idx += 1
-    return umap
-
-
-def _get_uniform_map():
-    global _UNIFORM_MAP
-    if _UNIFORM_MAP is None:
-        _UNIFORM_MAP = _build_uniform_map()
-    return _UNIFORM_MAP
-
-
-def _lbp_imagen(gris):
-    img = gris.astype(np.int32)
-    pad = np.pad(img, 1, mode="edge")
-    h, w = gris.shape
-    center = pad[1:-1, 1:-1]
-    nbrs = [
-        pad[0:-2, 0:-2], pad[0:-2, 1:-1], pad[0:-2, 2:],
-        pad[1:-1, 2:], pad[2:, 2:], pad[2:, 1:-1],
-        pad[2:, 0:-2], pad[1:-1, 0:-2],
-    ]
-    lbp = np.zeros((h, w), dtype=np.uint8)
-    for bit, nbr in enumerate(nbrs):
-        lbp |= ((nbr >= center).astype(np.uint8) << bit)
-    return lbp
-
-
-def _histograma_zona(cara128, r0, r1, c0, c1):
-    zona = cara128[r0:r1, c0:c1]
-    if zona.size == 0:
-        return np.zeros(LBP_BINS, dtype=np.float32)
-    
-    lbp_map = _lbp_imagen(zona)
-    umap = _get_uniform_map()
-    hist59 = np.bincount(
-        umap[lbp_map.flatten()],
-        minlength=59
-    ).astype(np.float32)
-    
-    total = hist59.sum()
-    if total > 0:
-        hist59 /= total
-    
-    hist64 = np.zeros(LBP_BINS, dtype=np.float32)
-    hist64[:59] = hist59
-    return hist64
-
-
-# =============================================================================
-#  API PÚBLICA
-# =============================================================================
-
-def preprocesar_cara(gris_zona):
-    return cv2.GaussianBlur(_clahe.apply(gris_zona), (3, 3), 0)
-
-
-def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
-    """
-    Detecta cara, clasifica ángulo y extrae vector LBP.
-    """
-    caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
-    if not caras:
-        return None, None, None
-    
-    x, y, w, h, _ = caras[0]
-    h_img, w_img = frame.shape[:2]
-    
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(w_img, x + w), min(h_img, y + h)
-    
-    gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    recorte = gris_full[y1:y2, x1:x2]
-    
-    if recorte.size == 0:
-        return None, None, None
-    
-    recorte = preprocesar_cara(recorte)
-    cara128 = cv2.resize(recorte, (128, 128))
-    
-    tipo = _clasificar_angulo(
-        frame,
-        (x1, y1, x2 - x1, y2 - y1),
-        frame.shape,
-        tipo_esperado=tipo_esperado
-    )
-    
-    zonas = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
-    
-    vector = np.concatenate([
-        _histograma_zona(cara128, r0, r1, c0, c1)
-        for r0, r1, c0, c1, _ in zonas
-    ]).astype(np.float32)
-    
-    return vector, (x1, y1, x2 - x1, y2 - y1), tipo
-
-
-def distancia_chi2(v1, v2):
-    denom = v1 + v2 + 1e-7
-    return float(np.sum((v1 - v2) ** 2 / denom))
-
-
-def dibujar_overlay(frame, coords, color, texto="", tipo=None):
-    x, y, w, h = coords
-    L = max(18, w // 4)
-    
-    colores_tipo = {
-        TIPO_FRONTAL: (0, 212, 255),
-        TIPO_PERFIL_D: (255, 165, 0),
-        TIPO_PERFIL_I: (0, 165, 255),
-    }
-    c = colores_tipo.get(tipo, color)
-    
-    for p1, p2 in [
-        ((x, y), (x + L, y)), ((x, y), (x, y + L)),
-        ((x + w, y), (x + w - L, y)), ((x + w, y), (x + w, y + L)),
-        ((x, y + h), (x + L, y + h)), ((x, y + h), (x, y + h - L)),
-        ((x + w, y + h), (x + w - L, y + h)), ((x + w, y + h), (x + w, y + h - L)),
-    ]:
-        cv2.line(frame, p1, p2, c, 2)
-    
-    etiquetas = {
-        TIPO_FRONTAL: "FRONTAL",
-        TIPO_PERFIL_D: "PERFIL DER",
-        TIPO_PERFIL_I: "PERFIL IZQ",
-    }
-    
-    if tipo in etiquetas:
-        cv2.putText(
-            frame,
-            etiquetas[tipo],
-            (x, y + h + 16),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            c,
-            1
-        )
-    
-    if texto:
-        cv2.putText(
-            frame,
-            texto,
-            (x, max(14, y - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2
-        )
-    
-    return frame
-
-
-def guardar_rostro_recortado(frame, nombre="persona", carpeta_base="dataset", tipo_esperado=None):
-    """Guarda rostro recortado en dataset/nombre/"""
-    from datetime import datetime
-    
-    vector, bbox, tipo = extraer_caracteristicas(frame, tipo_esperado=tipo_esperado)
-    
-    if bbox is None:
-        return None, None, None, None
-    
-    x, y, w, h = bbox
-    h_img, w_img = frame.shape[:2]
-    
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(w_img, x + w), min(h_img, y + h)
-    
-    rostro = frame[y1:y2, x1:x2]
-    if rostro.size == 0:
-        return None, None, None, None
-    
-    ruta_dir = os.path.join(carpeta_base, nombre)
-    os.makedirs(ruta_dir, exist_ok=True)
-    
-    marca = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    archivo = f"{nombre}_{tipo}_{marca}.png"
-    ruta = os.path.join(ruta_dir, archivo)
-    
-    cv2.imwrite(ruta, rostro)
-    return ruta, vector, bbox, tipo
+def angulos_registrados(usuario_id: int) -> list:
+    conn = conectar()
+    c    = conn.cursor()
+    c.execute("SELECT angulo, n_muestras FROM vectores_por_angulo "
+              "WHERE usuario_id=? ORDER BY angulo", (usuario_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows

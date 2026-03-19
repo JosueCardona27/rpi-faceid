@@ -17,6 +17,11 @@ Los 4 pasos del registro producen 3 entradas en vectores_por_angulo:
 
 En el reconocimiento, se evaluan los 3 angulos del usuario y se toma
 el de menor distancia chi2 como su mejor match.
+
+CORRECCIONES APLICADAS:
+  - UMBRAL: 1.5 → 2.2  (LBP puro necesita más tolerancia; antes rechazaba
+                         al usuario legítimo por variaciones de iluminación/pose)
+  - MAX_DIST: 8.0 → 10.0 (rango de similitud más amplio para mejor %display)
 """
 
 import sqlite3
@@ -30,8 +35,12 @@ _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-UMBRAL    = 1.5
-MAX_DIST  = 8.0
+# CORRECCIÓN: umbral subido de 1.5 → 2.2
+# Con LBP puro (sin deep learning), una distancia chi2 de 1.5 era demasiado
+# exigente. Pequeños cambios de iluminación o postura generaban distancias
+# de 1.6–2.0 para la misma persona, bloqueando acceso legítimo.
+UMBRAL   = 2.2
+MAX_DIST = 10.0
 
 ROLES_VALIDOS = ("admin", "maestro", "estudiante")
 
@@ -208,7 +217,7 @@ def cargar_vectores_por_angulo() -> list:
     """
     Carga todos los vectores.
     Los angulos de un mismo usuario comparten usuario_id.
-    Solo carga vectores con dims == 512.
+    Solo carga vectores con dims == VECTOR_DIM.
     """
     conn      = conectar()
     cursor    = conn.cursor()
