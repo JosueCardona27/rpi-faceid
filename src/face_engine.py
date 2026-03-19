@@ -1,22 +1,19 @@
+"""
+face_engine.py - Versión optimizada sin face_recognition
+Sistema de detección frontal + lateral con Haar + Sobel puro
+"""
 import os
-from datetime import datetime
-
 import cv2
 import numpy as np
-
-try:
-    import face_recognition
-except Exception:
-    face_recognition = None
 
 TIPO_FRONTAL = "frontal"
 TIPO_PERFIL_D = "perfil_der"
 TIPO_PERFIL_I = "perfil_izq"
 
-_clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+_clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
 # =============================================================================
-#  DETECTORES
+#  DETECTORES HAAR
 # =============================================================================
 
 _haar_frontal = None
@@ -34,223 +31,234 @@ def _init_detectores():
 
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
 
+    # Frontal
     rutas_frontal = [
         os.path.join(base, "haarcascade_frontalface_default.xml"),
     ]
-
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
         rutas_frontal.append(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
     for ruta in rutas_frontal:
         if os.path.exists(ruta):
-            casc = cv2.CascadeClassifier(ruta)
-            if not casc.empty():
-                _haar_frontal = casc
+            _haar_frontal = cv2.CascadeClassifier(ruta)
+            if not _haar_frontal.empty():
                 print(f"[DET] Haar frontal: {ruta}")
                 break
 
+    # Perfil
     rutas_perfil = [
         os.path.join(base, "haarcascade_profileface.xml"),
     ]
-
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
         rutas_perfil.append(cv2.data.haarcascades + "haarcascade_profileface.xml")
 
     for ruta in rutas_perfil:
         if os.path.exists(ruta):
-            casc = cv2.CascadeClassifier(ruta)
-            if not casc.empty():
-                _haar_perfil = casc
+            _haar_perfil = cv2.CascadeClassifier(ruta)
+            if not _haar_perfil.empty():
                 print(f"[DET] Haar perfil: {ruta}")
                 break
 
-
-def _detectar_face_recognition(frame):
-    """Detecta rostros frontales con face_recognition."""
-    if face_recognition is None:
-        return []
-
-    try:
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(rgb, model="hog")
-        resultados = []
-
-        for top, right, bottom, left in boxes:
-            x = int(left)
-            y = int(top)
-            w = int(right - left)
-            h = int(bottom - top)
-            if w > 15 and h > 15:
-                resultados.append((x, y, w, h, 1.0))
-
-        return sorted(resultados, key=lambda c: c[2] * c[3], reverse=True)
-    except Exception as e:
-        print(f"[face_recognition] Error: {e}")
-        return []
-
-
-def _detectar_haar_frontal(frame):
-    """Detecta rostros frontales con Haar."""
-    _init_detectores()
     if _haar_frontal is None:
-        return []
-
-    try:
-        gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gris = _clahe.apply(gris)
-
-        caras = _haar_frontal.detectMultiScale(
-            gris,
-            scaleFactor=1.08,
-            minNeighbors=5,
-            minSize=(60, 60),
-        )
-
-        resultados = []
-        for (x, y, w, h) in caras:
-            resultados.append((int(x), int(y), int(w), int(h), 0.80))
-
-        return sorted(resultados, key=lambda c: c[2] * c[3], reverse=True)
-    except Exception as e:
-        print(f"[Haar frontal] Error: {e}")
-        return []
-
-
-def _detectar_haar_perfil(frame, espejo=False):
-    """
-    Detecta perfiles con Haar.
-    - espejo=False -> perfil original
-    - espejo=True  -> para capturar el perfil opuesto
-    """
-    _init_detectores()
+        print("[DET] ⚠️  Haar frontal NO ENCONTRADO")
     if _haar_perfil is None:
-        return []
-
-    try:
-        gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gris = _clahe.apply(gris)
-
-        h_img, w_img = gris.shape[:2]
-
-        if espejo:
-            gris = cv2.flip(gris, 1)
-
-        caras = _haar_perfil.detectMultiScale(
-            gris,
-            scaleFactor=1.02,
-            minNeighbors=2,
-            minSize=(30, 30),
-        )
-
-        resultados = []
-        for (x, y, w, h) in caras:
-            if espejo:
-                x = w_img - x - w
-            resultados.append((int(x), int(y), int(w), int(h), 0.90))
-
-        return sorted(resultados, key=lambda c: c[2] * c[3], reverse=True)
-    except Exception as e:
-        print(f"[Haar perfil] Error: {e}")
-        return []
+        print("[DET] ⚠️  Haar perfil NO ENCONTRADO - usando frontal relajado")
 
 
 def _detectar_caras(frame, tipo_esperado=None):
     """
-    Devuelve una lista de candidatos (x, y, w, h, conf).
-    Priorización:
-      - Si se espera perfil, busca primero perfiles.
-      - Si no, busca primero frontal.
+    Detecta caras con estrategia adaptativa.
+    - Si tipo_esperado es FRONTAL: prioriza frontal
+    - Si tipo_esperado es PERFIL_*: prioriza perfiles
     """
+    _init_detectores()
+    
+    h_img, w_img = frame.shape[:2]
+    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gris = _clahe.apply(gris)
+    
     resultados = []
-
-    if tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I):
-        resultados.extend(_detectar_haar_perfil(frame, espejo=False))
-        resultados.extend(_detectar_haar_perfil(frame, espejo=True))
-        resultados.extend(_detectar_face_recognition(frame))
-        resultados.extend(_detectar_haar_frontal(frame))
+    
+    # ESTRATEGIA: Si esperamos FRONTAL
+    if tipo_esperado == TIPO_FRONTAL:
+        if _haar_frontal is not None:
+            caras = _haar_frontal.detectMultiScale(
+                gris,
+                scaleFactor=1.05,
+                minNeighbors=4,
+                minSize=(50, 50)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.85))
+        
+        # Fallback: perfiles como último recurso
+        if not resultados and _haar_perfil is not None:
+            caras = _haar_perfil.detectMultiScale(
+                gris,
+                scaleFactor=1.02,
+                minNeighbors=2,
+                minSize=(30, 30)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.70))
+    
+    # ESTRATEGIA: Si esperamos PERFIL
+    elif tipo_esperado in (TIPO_PERFIL_D, TIPO_PERFIL_I):
+        # Intentar perfil directo
+        if _haar_perfil is not None:
+            gris_det = cv2.flip(gris, 1) if tipo_esperado == TIPO_PERFIL_I else gris
+            
+            caras = _haar_perfil.detectMultiScale(
+                gris_det,
+                scaleFactor=1.02,
+                minNeighbors=2,
+                minSize=(30, 30)
+            )
+            
+            for (x, y, w, h) in caras:
+                if tipo_esperado == TIPO_PERFIL_I:
+                    x = w_img - x - w
+                resultados.append((int(x), int(y), int(w), int(h), 0.90))
+        
+        # Fallback: frontal relajado
+        if not resultados and _haar_frontal is not None:
+            caras = _haar_frontal.detectMultiScale(
+                gris,
+                scaleFactor=1.03,
+                minNeighbors=3,
+                minSize=(40, 40)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.75))
+    
+    # SIN TIPO ESPERADO: Buscar ambos
     else:
-        resultados.extend(_detectar_face_recognition(frame))
-        resultados.extend(_detectar_haar_frontal(frame))
-        resultados.extend(_detectar_haar_perfil(frame, espejo=False))
-        resultados.extend(_detectar_haar_perfil(frame, espejo=True))
-
-    resultados = [c for c in resultados if c[2] > 10 and c[3] > 10]
-    resultados.sort(key=lambda c: c[2] * c[3], reverse=True)
+        if _haar_frontal is not None:
+            caras = _haar_frontal.detectMultiScale(
+                gris,
+                scaleFactor=1.05,
+                minNeighbors=4,
+                minSize=(50, 50)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.85))
+        
+        if _haar_perfil is not None:
+            caras = _haar_perfil.detectMultiScale(
+                gris,
+                scaleFactor=1.02,
+                minNeighbors=2,
+                minSize=(30, 30)
+            )
+            for (x, y, w, h) in caras:
+                resultados.append((int(x), int(y), int(w), int(h), 0.80))
+            
+            # Perfil invertido
+            gris_flip = cv2.flip(gris, 1)
+            caras = _haar_perfil.detectMultiScale(
+                gris_flip,
+                scaleFactor=1.02,
+                minNeighbors=2,
+                minSize=(30, 30)
+            )
+            for (x, y, w, h) in caras:
+                x = w_img - x - w
+                resultados.append((int(x), int(y), int(w), int(h), 0.80))
+    
+    # Filtrar y ordenar por tamaño
+    resultados = [c for c in resultados if c[2] > 15 and c[3] > 15]
+    resultados = sorted(resultados, key=lambda c: c[2] * c[3], reverse=True)
+    
     return resultados
 
 
 # =============================================================================
-#  CLASIFICACIÓN DE ÁNGULO
+#  CLASIFICACIÓN DE ÁNGULO - SOBEL MEJORADO
 # =============================================================================
 
 _buf_yaw = []
 _BUF_N_YAW = 5
 
 
-def _calcular_yaw_sobel(frame_gris, bbox, frame_shape):
-    """Fallback: estima yaw con Sobel usando el recorte de la cara."""
+def _calcular_yaw_sobel(frame_gris, bbox):
+    """
+    Calcula YAW (rotación horizontal) usando Sobel en 3 regiones.
+    - Izquierda, Centro, Derecha
+    - Compara densidad de bordes
+    """
     x, y, w, h = bbox
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(frame_shape[1], x + w), min(frame_shape[0], y + h)
-
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(frame_gris.shape[1], x + w)
+    y2 = min(frame_gris.shape[0], y + h)
+    
     recorte = frame_gris[y1:y2, x1:x2]
     if recorte.size == 0:
         return 0.0
-
+    
     try:
+        # Redimensionar a 128x128 para consistencia
         cara = cv2.resize(recorte, (128, 128))
-        gx = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=5)
-        gy = cv2.Sobel(cara, cv2.CV_32F, 0, 1, ksize=5)
-        grad = np.sqrt(gx ** 2 + gy ** 2)
-
-        w_ = grad.shape[1]
-        m = int(w_ * 0.12)
-
-        izq = float(np.mean(grad[:, : max(1, w_ // 2 - m)]))
-        der = float(np.mean(grad[:, min(w_ - 1, w_ // 2 + m):]))
-
-        return -((der - izq) / (der + izq + 1e-6)) * 120.0
-    except Exception:
+        
+        # Aplicar Sobel X (detecta cambios horizontales = perfil)
+        gx = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
+        gx_abs = np.abs(gx)
+        
+        # Dividir en 3 columnas
+        w_col = cara.shape[1] // 3
+        
+        izq = np.mean(gx_abs[:, :w_col])
+        cen = np.mean(gx_abs[:, w_col:2*w_col])
+        der = np.mean(gx_abs[:, 2*w_col:])
+        
+        # Si izquierda tiene más bordes: usuario mira a la izquierda (PERFIL_IZQ)
+        # Si derecha tiene más bordes: usuario mira a la derecha (PERFIL_DER)
+        asimetria = (der - izq) / (der + izq + 1e-6)
+        
+        # Escalar a ±120
+        yaw = asimetria * 100.0
+        
+        return yaw
+    except Exception as e:
+        print(f"[Sobel] Error: {e}")
         return 0.0
 
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
     """
-    Clasifica si la cara es frontal o perfil.
-    Si ya se indicó tipo_esperado, lo respeta.
+    Clasifica si es FRONTAL o PERFIL_D o PERFIL_I.
+    Si tipo_esperado está dado, lo respeta.
     """
     global _buf_yaw
-
+    
+    # Si ya se indicó el tipo, respetarlo
     if tipo_esperado in (TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I):
         return tipo_esperado
-
+    
     try:
         frame_gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        yaw = _calcular_yaw_sobel(frame_gris, bbox, frame_shape)
+        yaw = _calcular_yaw_sobel(frame_gris, bbox)
     except Exception:
         yaw = 0.0
-
+    
+    # Buffer con mediana
     _buf_yaw.append(yaw)
     if len(_buf_yaw) > _BUF_N_YAW:
         _buf_yaw.pop(0)
-
-    yaw_s = float(np.median(_buf_yaw)) if _buf_yaw else yaw
-
-    umbral_perfil = 12.0
-    umbral_frontal = 20.0
-
-    if yaw_s > umbral_perfil:
+    
+    yaw_suavizado = float(np.median(_buf_yaw)) if _buf_yaw else yaw
+    
+    # Umbrales: ±25 es bastante generoso para perfiles
+    if yaw_suavizado > 25.0:
         return TIPO_PERFIL_D
-    elif yaw_s < -umbral_perfil:
+    elif yaw_suavizado < -25.0:
         return TIPO_PERFIL_I
-    elif abs(yaw_s) <= umbral_frontal:
-        return TIPO_FRONTAL
     else:
         return TIPO_FRONTAL
 
 
 def _extraer_angulos_lbf(gris, bbox, fw, fh):
-    """Compatibilidad con versiones anteriores."""
+    """Compatibilidad - retorna None (no disponible sin landmarks)"""
     return None, None
 
 
@@ -271,9 +279,9 @@ ZONAS_FRONTAL = [
 
 ZONAS_PERFIL_D = [
     (0, 40, 0, 128, "frente"),
-    (20, 60, 0, 60, "ojo_izq"),
+    (20, 60, 0, 60, "ojo"),
     (45, 85, 0, 65, "nariz_lat"),
-    (55, 95, 0, 55, "mejilla_izq"),
+    (55, 95, 0, 55, "mejilla"),
     (65, 110, 0, 50, "mandibula"),
     (25, 75, 0, 40, "pomulo"),
     (82, 128, 0, 75, "menton"),
@@ -282,9 +290,9 @@ ZONAS_PERFIL_D = [
 
 ZONAS_PERFIL_I = [
     (0, 40, 0, 128, "frente"),
-    (20, 60, 68, 128, "ojo_der"),
+    (20, 60, 68, 128, "ojo"),
     (45, 85, 63, 128, "nariz_lat"),
-    (55, 95, 73, 128, "mejilla_der"),
+    (55, 95, 73, 128, "mejilla"),
     (65, 110, 78, 128, "mandibula"),
     (25, 75, 88, 128, "pomulo"),
     (82, 128, 53, 128, "menton"),
@@ -315,8 +323,8 @@ def _build_uniform_map():
     idx = 0
     for code in range(256):
         b = format(code, "08b")
-        transiciones = sum(b[i] != b[(i + 1) % 8] for i in range(8))
-        if transiciones <= 2:
+        trans = sum(b[i] != b[(i + 1) % 8] for i in range(8))
+        if trans <= 2:
             umap[code] = idx
             idx += 1
     return umap
@@ -349,19 +357,18 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
     zona = cara128[r0:r1, c0:c1]
     if zona.size == 0:
         return np.zeros(LBP_BINS, dtype=np.float32)
-
+    
     lbp_map = _lbp_imagen(zona)
     umap = _get_uniform_map()
-
     hist59 = np.bincount(
         umap[lbp_map.flatten()],
         minlength=59
     ).astype(np.float32)
-
+    
     total = hist59.sum()
     if total > 0:
         hist59 /= total
-
+    
     hist64 = np.zeros(LBP_BINS, dtype=np.float32)
     hist64[:59] = hist59
     return hist64
@@ -377,48 +384,41 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
-    Detecta la cara y extrae el vector LBP.
-
-    Retorna:
-        vector, bbox, tipo
-    donde:
-        vector = np.ndarray o None
-        bbox   = (x, y, w, h) o None
-        tipo   = frontal / perfil_der / perfil_izq o None
+    Detecta cara, clasifica ángulo y extrae vector LBP.
     """
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
         return None, None, None
-
+    
     x, y, w, h, _ = caras[0]
     h_img, w_img = frame.shape[:2]
-
+    
     x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x + w), min(h_img, y + h)
-
+    
     gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     recorte = gris_full[y1:y2, x1:x2]
-
+    
     if recorte.size == 0:
         return None, None, None
-
+    
     recorte = preprocesar_cara(recorte)
     cara128 = cv2.resize(recorte, (128, 128))
-
+    
     tipo = _clasificar_angulo(
         frame,
         (x1, y1, x2 - x1, y2 - y1),
         frame.shape,
         tipo_esperado=tipo_esperado
     )
-
+    
     zonas = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
-
+    
     vector = np.concatenate([
         _histograma_zona(cara128, r0, r1, c0, c1)
         for r0, r1, c0, c1, _ in zonas
     ]).astype(np.float32)
-
+    
     return vector, (x1, y1, x2 - x1, y2 - y1), tipo
 
 
@@ -430,14 +430,14 @@ def distancia_chi2(v1, v2):
 def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     x, y, w, h = coords
     L = max(18, w // 4)
-
+    
     colores_tipo = {
         TIPO_FRONTAL: (0, 212, 255),
         TIPO_PERFIL_D: (255, 165, 0),
         TIPO_PERFIL_I: (0, 165, 255),
     }
     c = colores_tipo.get(tipo, color)
-
+    
     for p1, p2 in [
         ((x, y), (x + L, y)), ((x, y), (x, y + L)),
         ((x + w, y), (x + w - L, y)), ((x + w, y), (x + w, y + L)),
@@ -445,13 +445,13 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
         ((x + w, y + h), (x + w - L, y + h)), ((x + w, y + h), (x + w, y + h - L)),
     ]:
         cv2.line(frame, p1, p2, c, 2)
-
+    
     etiquetas = {
         TIPO_FRONTAL: "FRONTAL",
         TIPO_PERFIL_D: "PERFIL DER",
         TIPO_PERFIL_I: "PERFIL IZQ",
     }
-
+    
     if tipo in etiquetas:
         cv2.putText(
             frame,
@@ -462,7 +462,7 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
             c,
             1
         )
-
+    
     if texto:
         cv2.putText(
             frame,
@@ -473,39 +473,35 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
             color,
             2
         )
-
+    
     return frame
 
 
 def guardar_rostro_recortado(frame, nombre="persona", carpeta_base="dataset", tipo_esperado=None):
-    """
-    Guarda el recorte del rostro detectado en:
-        dataset/nombre/
-    """
-    vector, bbox, tipo = extraer_caracteristicas(
-        frame,
-        tipo_esperado=tipo_esperado
-    )
-
+    """Guarda rostro recortado en dataset/nombre/"""
+    from datetime import datetime
+    
+    vector, bbox, tipo = extraer_caracteristicas(frame, tipo_esperado=tipo_esperado)
+    
     if bbox is None:
         return None, None, None, None
-
+    
     x, y, w, h = bbox
     h_img, w_img = frame.shape[:2]
-
+    
     x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x + w), min(h_img, y + h)
-
+    
     rostro = frame[y1:y2, x1:x2]
     if rostro.size == 0:
         return None, None, None, None
-
+    
     ruta_dir = os.path.join(carpeta_base, nombre)
     os.makedirs(ruta_dir, exist_ok=True)
-
+    
     marca = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     archivo = f"{nombre}_{tipo}_{marca}.png"
     ruta = os.path.join(ruta_dir, archivo)
-
+    
     cv2.imwrite(ruta, rostro)
     return ruta, vector, bbox, tipo
