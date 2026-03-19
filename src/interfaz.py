@@ -4,13 +4,12 @@ interfaz.py
 Interfaz grafica del sistema de acceso facial.
 Pantalla tactil 7" 1024x600.
 
-Pasos de registro (en orden):
-  1. De frente        — TIPO_FRONTAL
-  2. Lado derecho     — TIPO_PERFIL_D  (usuario gira a su derecha)
-  3. Lado izquierdo   — TIPO_PERFIL_I  (usuario gira a su izquierda)
-  4. De frente        — TIPO_FRONTAL   (se promedia con paso 1)
-
-Maximo de muestras por paso: MAX_MUESTRAS_PASO (evita recolectar cientos)
+CAMBIOS:
+  - Eliminado campo "Numero de cuenta" del formulario de registro
+  - Eliminado campo "Telefono"
+  - Validacion mas estricta en pasos: requiere angulo correcto para avanzar
+  - MUESTRAS_MIN_PASO aumentado a 5 para forzar que el usuario mantenga el angulo
+  - Mensaje de instruccion mas claro en cada paso
 """
 
 import tkinter as tk
@@ -57,23 +56,21 @@ CAM_W   = W - PANEL_W
 
 HAAR_PATH = None
 
-# ─── Pasos de registro ────────────────────────────────────────────────────────
-# (id, icono, instruccion_camara, etiqueta, duracion_s,
-#  modo_deteccion, tipo_esperado, msg_correccion)
+# ── Pasos de registro ─────────────────────────────────────────────────────────
 PASOS_REGISTRO = [
     (0, "●", "Mira directo a la camara",
-     "FRENTE",     5.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
-    (1, "◀", "Gira la cabeza a tu DERECHA",
-     "DERECHA",    5.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
-    (2, "▶", "Gira la cabeza a tu IZQUIERDA",
-     "IZQUIERDA",  5.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+    (1, "◀", "Gira tu cabeza a la DERECHA",
+     "DERECHA",   6.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
+    (2, "▶", "Gira tu cabeza a la IZQUIERDA",
+     "IZQUIERDA", 6.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
     (3, "●", "Vuelve al frente",
-     "FRENTE",     5.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS           = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 20 s
-MAX_MUESTRAS_PASO = 25   # maximo de muestras por paso (evita las ~125 que se tomaban antes)
-MUESTRAS_MIN_PASO = 3    # minimo para que un paso sea valido
+TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 24 s
+MAX_MUESTRAS_PASO = 20
+MUESTRAS_MIN_PASO = 5   # minimo para que un paso sea valido
 
 
 def _imgtk(frame, max_w, max_h):
@@ -117,11 +114,8 @@ class App(tk.Tk):
         self.nombre_var   = tk.StringVar()
         self.ap_pat_var   = tk.StringVar()
         self.ap_mat_var   = tk.StringVar()
-        self.cuenta_var   = tk.StringVar()
-        self.telefono_var = tk.StringVar()
         self.rol_var      = tk.StringVar(value="estudiante")
-
-        self.status_var = tk.StringVar(value="Listo")
+        self.status_var   = tk.StringVar(value="Listo")
 
         self._ov_color = None
         self._ov_texto = ""
@@ -303,7 +297,7 @@ class App(tk.Tk):
 
         cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
         tk.Label(self,
-                 text=f"v5.4  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
+                 text=f"v5.5  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
                       f"max {MAX_MUESTRAS_PASO} muestras/paso  |  {modo_txt}",
                  font=self.f_zona, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=H-13, anchor="center")
@@ -326,7 +320,7 @@ class App(tk.Tk):
         btn.bind("<Leave>", lambda e,b=btn,c=color: b.config(bg=c))
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  PANTALLA REGISTRO
+    #  PANTALLA REGISTRO  (sin numero de cuenta ni telefono)
     # ══════════════════════════════════════════════════════════════════════════
     def _show_registro(self):
         self._clear()
@@ -340,15 +334,14 @@ class App(tk.Tk):
         tk.Label(left, text="Nuevo usuario", font=self.f_sub,   fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
 
-        self._field(left, "Nombre(s)",           self.nombre_var,   58)
-        self._field(left, "Apellido paterno",     self.ap_pat_var,   96)
-        self._field(left, "Apellido materno",     self.ap_mat_var,   134)
-        self._field(left, "Numero de cuenta",     self.cuenta_var,   172)
-        self._field(left, "Telefono (opcional)",  self.telefono_var, 210)
+        # Solo 3 campos: nombre, apellido paterno, apellido materno
+        self._field(left, "Nombre(s)",       self.nombre_var,  58)
+        self._field(left, "Apellido paterno", self.ap_pat_var, 106)
+        self._field(left, "Apellido materno", self.ap_mat_var, 154)
 
-        tk.Label(left, text="Rol", font=self.f_label, fg=SUBTEXT, bg=PANEL).place(x=18, y=250)
+        tk.Label(left, text="Rol", font=self.f_label, fg=SUBTEXT, bg=PANEL).place(x=18, y=204)
         rf = tk.Frame(left, bg=PANEL)
-        rf.place(x=18, y=264, width=284)
+        rf.place(x=18, y=218, width=284)
         for i, rol in enumerate(ROLES_VALIDOS):
             c = COLOR_ROL.get(rol, ACCENT)
             tk.Radiobutton(rf, text=rol.capitalize(),
@@ -358,18 +351,18 @@ class App(tk.Tk):
                            activeforeground=c, cursor="hand2"
                            ).grid(row=0, column=i, padx=8)
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=290)
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=244)
 
         # ── Indicadores de los 4 pasos ────────────────────────────────────────
-        tk.Label(left, text="PASOS:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=296)
+        tk.Label(left, text="PASOS DE ESCANEO:", font=self.f_zona,
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=250)
 
         self._paso_frames = []
         paso_w = 56
         for i, (_, icono, _, etiq, _, _, _, _) in enumerate(PASOS_REGISTRO):
             fx = 18 + i * (paso_w + 6)
             pf = tk.Frame(left, bg=BORDER, width=paso_w, height=52)
-            pf.place(x=fx, y=308)
+            pf.place(x=fx, y=262)
             li = tk.Label(pf, text=str(i+1), font=self.f_btn,  fg=SUBTEXT, bg=BORDER)
             li.place(relx=.5, y=10, anchor="center")
             ln = tk.Label(pf, text=icono,    font=self.f_label, fg=SUBTEXT, bg=BORDER)
@@ -384,53 +377,52 @@ class App(tk.Tk):
         tk.Label(left, textvariable=self.paso_desc_var,
                  font=self.f_label, fg=ACCENT, bg=PANEL,
                  wraplength=284, justify="center"
-                 ).place(x=18, y=368, width=284)
+                 ).place(x=18, y=322, width=284)
 
         self.cap_btn = tk.Button(
             left, text="INICIAR ESCANEO", font=self.f_btn,
             fg=BG, bg=ACCENT, relief="flat", cursor="hand2",
             padx=8, pady=7, command=self._iniciar_registro)
-        self.cap_btn.place(x=18, y=392, width=284)
+        self.cap_btn.place(x=18, y=348, width=284)
         self.cap_btn.bind("<Enter>", lambda e: self.cap_btn.config(bg=self._lighten(ACCENT)))
         self.cap_btn.bind("<Leave>", lambda e: self.cap_btn.config(bg=ACCENT))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=434)
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=390)
 
-        # ── Contadores de muestras por paso ───────────────────────────────────
         tk.Label(left, text="MUESTRAS POR PASO:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=440)
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=396)
 
-        self._barra_pasos    = []   # barras de progreso de muestras
-        etiquetas_pasos = ["Frente", "Derecha", "Izquierda", "Frente"]
+        self._barra_pasos = []
+        etiquetas_pasos   = ["Frente", "Derecha", "Izquierda", "Frente"]
         barra_w = 56
         for i, etiq in enumerate(etiquetas_pasos):
             fx = 18 + i * (barra_w + 6)
             tk.Label(left, text=etiq[:5], font=self.f_zona,
-                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=454)
+                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=410)
             bg_b = tk.Frame(left, bg=BORDER, width=barra_w, height=8)
-            bg_b.place(x=fx, y=466)
+            bg_b.place(x=fx, y=422)
             bar  = tk.Frame(bg_b, bg=BORDER, width=0, height=8)
             bar.place(x=0, y=0)
             lbl  = tk.Label(left, text="0", font=self.f_zona, fg=SUBTEXT, bg=PANEL)
-            lbl.place(x=fx + barra_w//2, y=476, anchor="center")
+            lbl.place(x=fx + barra_w//2, y=432, anchor="center")
             self._barra_pasos.append((bar, lbl, barra_w))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=490)
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=446)
 
         self.progreso_var = tk.StringVar(value="")
         self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
                                      font=self.f_status, fg=WARNING, bg=PANEL,
                                      justify="center", wraplength=284)
-        self.prog_label.place(x=18, y=498, width=284)
+        self.prog_label.place(x=18, y=454, width=284)
 
         self.timer_var    = tk.StringVar(value="")
         self.paso_txt_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.timer_var,
                  font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=530, anchor="nw")
+                 ).place(x=18, y=500, anchor="nw")
         tk.Label(left, textvariable=self.paso_txt_var,
                  font=self.f_zona, fg=SUBTEXT, bg=PANEL,
-                 wraplength=160).place(x=62, y=538, anchor="nw")
+                 wraplength=160).place(x=62, y=508, anchor="nw")
 
         tk.Button(left, text="<  Volver", font=self.f_label,
                   fg=SUBTEXT, bg=PANEL, relief="flat",
@@ -463,7 +455,7 @@ class App(tk.Tk):
                  fg=TEXT, bg=CARD, insertbackground=ACCENT,
                  relief="flat", highlightthickness=1,
                  highlightcolor=ACCENT, highlightbackground=BORDER
-                 ).place(x=18, y=y+13, width=284, height=22)
+                 ).place(x=18, y=y+14, width=284, height=24)
 
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
         if not hasattr(self, "_paso_frames") or not self.cam_running:
@@ -510,28 +502,17 @@ class App(tk.Tk):
         except:
             pass
 
-    # ── registro ──────────────────────────────────────────────────────────────
+    # ── validacion e inicio del registro ─────────────────────────────────────
     def _iniciar_registro(self):
-        nombre   = self.nombre_var.get().strip()
-        ap_pat   = self.ap_pat_var.get().strip()
-        ap_mat   = self.ap_mat_var.get().strip()
-        cuenta   = self.cuenta_var.get().strip()
-        telefono = self.telefono_var.get().strip()
-        rol      = self.rol_var.get()
+        nombre = self.nombre_var.get().strip()
+        ap_pat = self.ap_pat_var.get().strip()
+        ap_mat = self.ap_mat_var.get().strip()
+        rol    = self.rol_var.get()
 
-        if not nombre or not ap_pat or not cuenta:
-            self.progreso_var.set("Nombre, apellido paterno y cuenta son obligatorios.")
+        if not nombre or not ap_pat:
+            self.progreso_var.set("Nombre y apellido paterno son obligatorios.")
             self.prog_label.config(fg=DANGER)
             return
-
-        tel_int = None
-        if telefono:
-            try:
-                tel_int = int(telefono)
-            except ValueError:
-                self.progreso_var.set("Telefono debe ser numerico.")
-                self.prog_label.config(fg=DANGER)
-                return
 
         self.cap_btn.config(state="disabled", bg=BORDER, text="Escaneando...")
         self.progreso_var.set("Preparando...")
@@ -541,31 +522,29 @@ class App(tk.Tk):
 
         threading.Thread(
             target=self._capturar_registro,
-            args=(nombre, ap_pat, ap_mat, cuenta, rol, tel_int),
+            args=(nombre, ap_pat, ap_mat, rol),
             daemon=True).start()
 
-    def _capturar_registro(self, nombre, ap_pat, ap_mat, cuenta, rol, telefono):
+    def _capturar_registro(self, nombre, ap_pat, ap_mat, rol):
         BAR_W = CAM_W - 16
 
         uid = registrar_usuario(
-            numero_cuenta=cuenta, nombre=nombre,
-            apellido_paterno=ap_pat, apellido_materno=ap_mat,
-            rol=rol, telefono=telefono)
+            nombre=nombre,
+            apellido_paterno=ap_pat,
+            apellido_materno=ap_mat,
+            rol=rol)
 
         if uid == -1:
             self.after(0, lambda: self._safe(
-                lambda: self.progreso_var.set("Numero de cuenta ya existe.")))
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_label.config(fg=DANGER)))
+                lambda: self.progreso_var.set("Error al registrar. Intentalo de nuevo.")))
+            self.after(0, lambda: self._safe(lambda: self.prog_label.config(fg=DANGER)))
             self.after(0, lambda: self._safe(
                 lambda: self.cap_btn.config(state="normal", bg=ACCENT,
                                             text="INICIAR ESCANEO")))
             return
 
-        # Estructura: { tipo_angulo: {"vectores": []} }
-        # Los dos pasos frontales acumulan en la misma clave TIPO_FRONTAL
         vectores_angulo: dict = {}
-        n_muestras_paso = [0] * N_PASOS   # contador por paso para la UI
+        n_muestras_paso = [0] * N_PASOS
 
         t_offsets = []
         acum = 0.0
@@ -576,26 +555,21 @@ class App(tk.Tk):
                        duracion, modo_det,
                        tipo_esperado, msg_correccion) in enumerate(PASOS_REGISTRO):
 
-            vectores_paso  = []
-            t_paso_activo  = 0.0
-            t_ultimo_tick  = None
-            ultimo_id      = -1
+            vectores_paso = []
+            t_paso_activo = 0.0
+            t_ultimo_tick = None
+            ultimo_id     = -1
 
             self._modo_deteccion = modo_det
             self._tipo_esperado  = tipo_esperado
 
             self.after(0, lambda i=instruccion: self._safe(
                 lambda: self.status_var.set(i)))
-            self.after(0, lambda e=f"PASO {paso_idx+1}/{N_PASOS} — {etiqueta}": self._safe(
-                lambda: self.paso_desc_var.set(e)
-                if hasattr(self, "paso_desc_var") else None))
             self.after(0, lambda pi=paso_idx: self._activar_paso_ui(pi, 0.0))
-            self._set_overlay((255, 184, 48),
-                              f"{paso_idx+1}/{N_PASOS}: {instruccion}")
+            self._set_overlay((255, 184, 48), f"{paso_idx+1}/{N_PASOS}: {instruccion}")
 
             while t_paso_activo < duracion and self.cam_running:
 
-                # Si ya alcanzamos el maximo de muestras, completar el paso
                 if len(vectores_paso) >= MAX_MUESTRAS_PASO:
                     t_paso_activo = duracion
                     break
@@ -605,6 +579,7 @@ class App(tk.Tk):
                     v        = self._analisis["vector"]
                     tipo_det = self._analisis["tipo"]
 
+                # RESTRICCION: solo avanza si el angulo detectado es el correcto
                 angulo_ok     = (tipo_det == tipo_esperado) and (v is not None)
                 cara_presente = (v is not None)
 
@@ -614,6 +589,7 @@ class App(tk.Tk):
                         t_paso_activo += ahora - t_ultimo_tick
                     t_ultimo_tick = ahora
                 else:
+                    # Si el angulo no es correcto, el tiempo NO avanza
                     t_ultimo_tick = None
 
                 restante      = max(0.0, duracion - t_paso_activo)
@@ -627,9 +603,6 @@ class App(tk.Tk):
                     lambda: self.prog_bar.config(width=pt)))
                 self.after(0, lambda pi=paso_idx, pp=progreso_paso:
                            self._activar_paso_ui(pi, pp))
-                self.after(0, lambda pi=paso_idx, e=etiqueta: self._safe(
-                    lambda: self.paso_txt_var.set(f"{pi+1}/{N_PASOS} — {e}")
-                    if hasattr(self, "paso_txt_var") else None))
 
                 if frame_id != ultimo_id:
                     ultimo_id = frame_id
@@ -648,22 +621,22 @@ class App(tk.Tk):
                             (0, 255, 136),
                             f"{paso_idx+1}/{N_PASOS} {etiqueta} [{n}/{MAX_MUESTRAS_PASO}]")
                         self.after(0, lambda nt=tot: self._safe(
-                            lambda: self.progreso_var.set(
-                                f"Total: {nt} muestras")))
+                            lambda: self.progreso_var.set(f"Total: {nt} muestras")))
                         self.after(0, lambda: self._safe(
                             lambda: self.prog_label.config(fg=SUCCESS)))
-                        nm = n_muestras_paso[paso_idx]
-                        self.after(0, lambda pi=paso_idx, nm=nm:
+                        self.after(0, lambda pi=paso_idx, nm=n_muestras_paso[paso_idx]:
                                    self._update_barra_paso(pi, nm))
 
                     elif cara_presente and not angulo_ok:
+                        # Cara detectada pero angulo incorrecto — mostrar instruccion
                         self._set_overlay((255, 59, 92),
-                                          f"PAUSADO — {msg_correccion}")
+                                          f"ESPERANDO — {msg_correccion}")
                         self.after(0, lambda mc=msg_correccion: self._safe(
                             lambda: self.status_var.set(mc)))
                         self.after(0, lambda: self._safe(
                             lambda: self.prog_label.config(fg=DANGER)))
                     else:
+                        # Sin cara
                         self._set_overlay((255, 184, 48),
                                           f"{paso_idx+1}/{N_PASOS}: {instruccion}")
                         self.after(0, lambda i=instruccion: self._safe(
@@ -689,20 +662,16 @@ class App(tk.Tk):
 
         if pasos_ok == N_PASOS:
             guardar_vectores_por_angulo(uid, vectores_angulo)
-
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_bar.config(bg=SUCCESS)))
+            self.after(0, lambda: self._safe(lambda: self.prog_bar.config(bg=SUCCESS)))
             self.after(0, lambda: self._safe(lambda: self.status_var.set(
                 f"Registro completo — {total_muestras} muestras, {pasos_ok} pasos")))
             self.after(0, lambda nv=nombre_completo, nt=total_muestras: self._safe(
                 lambda: self.progreso_var.set(
                     f"Listo. {nv}\n{nt} muestras en {N_PASOS} pasos.")))
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_label.config(fg=SUCCESS)))
+            self.after(0, lambda: self._safe(lambda: self.prog_label.config(fg=SUCCESS)))
             self.after(0, lambda: self._safe(lambda: self.cap_btn.config(
                 state="normal", bg=SUCCESS, text="REGISTRO COMPLETO")))
-            for var in (self.nombre_var, self.ap_pat_var, self.ap_mat_var,
-                        self.cuenta_var, self.telefono_var):
+            for var in (self.nombre_var, self.ap_pat_var, self.ap_mat_var):
                 self.after(0, lambda v=var: self._safe(lambda: v.set("")))
             self.after(0, lambda: self._safe(lambda: self.rol_var.set("estudiante")))
             self.after(3500, lambda: self._safe(lambda: self.cap_btn.config(
@@ -717,10 +686,9 @@ class App(tk.Tk):
                               if n < MUESTRAS_MIN_PASO]
             self.after(0, lambda pf=pasos_fallidos: self._safe(
                 lambda: self.progreso_var.set(
-                    f"Pasos con pocas muestras:\n{', '.join(pf)}\n"
+                    f"Pasos incompletos:\n{', '.join(pf)}\n"
                     f"Intentalo de nuevo.")))
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_label.config(fg=DANGER)))
+            self.after(0, lambda: self._safe(lambda: self.prog_label.config(fg=DANGER)))
             self.after(0, lambda: self._safe(lambda: self.status_var.set(
                 "Intentalo de nuevo. Acercate mas a la camara.")))
             self.after(0, lambda: self._safe(lambda: self.cap_btn.config(
@@ -810,7 +778,6 @@ class App(tk.Tk):
         self.sim_lbl.config(text=f" {pct}%", bg=color,
                             fg=BG if w > 30 else color)
 
-    # ── ciclo verificacion ────────────────────────────────────────────────────
     def _lanzar_verificacion(self):
         if not self.cam_running:
             return
@@ -852,20 +819,18 @@ class App(tk.Tk):
         if not vectores:
             self.after(0, lambda: self.resultado_var.set("Sin rostro"))
             self.after(0, lambda: self.resultado_label.config(fg=WARNING))
-            self.after(0, lambda: self.candidato_var.set(
-                "Ponte frente a la camara."))
+            self.after(0, lambda: self.candidato_var.set("Ponte frente a la camara."))
             self.after(0, lambda: self._set_sim_bar(0, BORDER))
             self.after(3000, self._lanzar_verificacion)
             return
 
-        v_final  = np.mean(vectores, axis=0).astype(np.float32)
+        v_final   = np.mean(vectores, axis=0).astype(np.float32)
         resultado = reconocer_persona(v_final)
 
         if resultado is None:
             self.after(0, lambda: self.resultado_var.set("Sin registros"))
             self.after(0, lambda: self.resultado_label.config(fg=WARNING))
-            self.after(0, lambda: self.candidato_var.set(
-                "No hay usuarios registrados."))
+            self.after(0, lambda: self.candidato_var.set("No hay usuarios registrados."))
             self.after(0, lambda: self._set_sim_bar(0, BORDER))
             self.after(4000, self._lanzar_verificacion)
             return
@@ -887,7 +852,6 @@ class App(tk.Tk):
         self.resultado_label.config(fg=SUCCESS)
         self.candidato_var.set(
             f"{r['nombre']}\n"
-            f"Cuenta: {r['numero_cuenta']}\n"
             f"Rol: {r.get('rol','---').upper()}\n"
             f"Similitud: {r['similitud_pct']}%")
         self.after(4000, self._lanzar_verificacion)

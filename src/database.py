@@ -3,13 +3,10 @@ database.py
 ===========
 Base de datos SQLite para el sistema de acceso facial.
 
-Tablas:
-  usuarios            — datos del usuario (nombre, apellidos, cuenta, rol)
-  vectores_faciales   — legacy, un vector por usuario (512 dims)
-  vectores_por_angulo — nuevo, un vector por angulo por usuario (512 dims)
-                        angulos: 'frontal', 'perfil_der', 'perfil_izq'
-
-UMBRAL corregido: 1.5 → 2.2 (LBP necesita mas tolerancia)
+CAMBIOS:
+  - numero_cuenta ya NO es obligatorio (puede ser NULL)
+  - UMBRAL: 2.2  (LBP necesita tolerancia)
+  - MAX_DIST: 10.0
 """
 
 import sqlite3
@@ -43,8 +40,8 @@ def _crear_tablas():
             id_usuario       TEXT    NOT NULL UNIQUE,
             nombre           TEXT    NOT NULL,
             apellido_paterno TEXT    NOT NULL,
-            apellido_materno TEXT    NOT NULL,
-            numero_cuenta    TEXT    UNIQUE,
+            apellido_materno TEXT    NOT NULL DEFAULT '.',
+            numero_cuenta    TEXT,
             rol              TEXT    NOT NULL
                              CHECK(rol IN ('admin','maestro','estudiante')),
             fecha_registro   TEXT    DEFAULT (datetime('now','localtime')),
@@ -84,11 +81,11 @@ _crear_tablas()
 # =============================================================================
 
 def registrar_usuario(
-        numero_cuenta:    str,
         nombre:           str,
         apellido_paterno: str,
         apellido_materno: str = "",
         rol:              str = "estudiante",
+        numero_cuenta:    str = None,
         telefono:         int = None,
         registrado_por:   int = None,
 ) -> int:
@@ -96,7 +93,10 @@ def registrar_usuario(
         print(f"[ERROR] Rol '{rol}' no valido.")
         return -1
 
-    id_usuario = f"{rol[:3].upper()}-{numero_cuenta}"
+    # Generar id_usuario unico sin depender de numero_cuenta
+    import time as _time
+    sufijo     = numero_cuenta if numero_cuenta else str(int(_time.time() * 1000))[-8:]
+    id_usuario = f"{rol[:3].upper()}-{sufijo}"
     ap_mat     = apellido_materno.strip() if apellido_materno.strip() else "."
 
     try:
@@ -105,23 +105,22 @@ def registrar_usuario(
         cursor.execute("""
             INSERT INTO usuarios
                 (id_usuario, nombre, apellido_paterno, apellido_materno,
-                 numero_cuenta, telefono, rol, registrado_por)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 numero_cuenta, rol, registrado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (id_usuario, nombre, apellido_paterno, ap_mat,
-              numero_cuenta, telefono, rol, registrado_por))
+              numero_cuenta, rol, registrado_por))
         conn.commit()
         uid = cursor.lastrowid
-        print(f"[DB] Usuario registrado ID={uid}: {nombre} {apellido_paterno} "
-              f"({rol}) cuenta={numero_cuenta}")
+        print(f"[DB] Usuario registrado ID={uid}: {nombre} {apellido_paterno} ({rol})")
         return uid
     except sqlite3.IntegrityError as e:
-        print(f"[DB] Cuenta '{numero_cuenta}' ya existe: {e}")
+        print(f"[DB] Error de integridad: {e}")
         return -1
     finally:
         conn.close()
 
 
-def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
+def registrar_persona(nombre_completo: str, numero_cuenta: str = None) -> int:
     partes = nombre_completo.strip().split()
     if len(partes) >= 3:
         nombre = " ".join(partes[:-2]); ap_pat = partes[-2]; ap_mat = partes[-1]
@@ -129,7 +128,7 @@ def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
         nombre = partes[0]; ap_pat = partes[1]; ap_mat = ""
     else:
         nombre = nombre_completo.strip(); ap_pat = "."; ap_mat = ""
-    return registrar_usuario(numero_cuenta, nombre, ap_pat, ap_mat)
+    return registrar_usuario(nombre, ap_pat, ap_mat, numero_cuenta=numero_cuenta)
 
 
 # =============================================================================
@@ -137,14 +136,6 @@ def registrar_persona(numero_cuenta: str, nombre_completo: str) -> int:
 # =============================================================================
 
 def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
-    """
-    vectores_por_paso:
-      {
-        "frontal":    {"vectores": [array(512), ...]},
-        "perfil_der": {"vectores": [array(512), ...]},
-        "perfil_izq": {"vectores": [array(512), ...]},
-      }
-    """
     conn   = conectar()
     cursor = conn.cursor()
     total  = 0
@@ -156,7 +147,6 @@ def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
             continue
 
         v_prom = np.mean(vecs, axis=0).astype(np.float32)
-
         if len(v_prom) != VECTOR_DIM:
             print(f"[DB] Angulo '{angulo}': {len(v_prom)} dims != {VECTOR_DIM}. Omitido.")
             continue
@@ -166,7 +156,6 @@ def guardar_vectores_por_angulo(usuario_id: int, vectores_por_paso: dict):
                 (usuario_id, angulo, vector, n_muestras)
             VALUES (?, ?, ?, ?)
         """, (usuario_id, angulo, json.dumps(v_prom.tolist()), len(vecs)))
-
         print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
         total += 1
 
@@ -186,7 +175,6 @@ def guardar_vector_unico(usuario_id: int, vectores: list, pesos_lista=None):
     """, (usuario_id, json.dumps(v_prom.tolist()), len(v_prom)))
     conn.commit()
     conn.close()
-    print(f"[DB] Vector legacy ({len(v_prom)} dims) ID={usuario_id}.")
 
 
 # =============================================================================
@@ -213,37 +201,30 @@ def cargar_vectores_por_angulo() -> list:
             resultado.append({
                 "usuario_id":    uid,
                 "nombre":        nombre.strip(),
-                "numero_cuenta": cuenta,
+                "numero_cuenta": cuenta or "",
                 "rol":           rol,
                 "angulo":        angulo,
                 "vector":        v,
                 "n_muestras":    n,
             })
-        else:
-            print(f"[DB] SKIP usuario_id={uid} angulo='{angulo}' "
-                  f"{len(v)} dims != {VECTOR_DIM}")
 
     ids_nuevos = {r["usuario_id"] for r in resultado}
 
     cursor.execute("""
         SELECT u.id,
                u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
-               u.numero_cuenta, u.rol,
-               vf.vector, vf.dimensiones
+               u.numero_cuenta, u.rol, vf.vector, vf.dimensiones
         FROM vectores_faciales vf
         JOIN usuarios u ON u.id = vf.usuario_id
     """)
     for uid, nombre, cuenta, rol, vjson, dims in cursor.fetchall():
-        if uid in ids_nuevos:
-            continue
-        if dims != VECTOR_DIM:
-            print(f"[DB] SKIP legacy ID={uid}: {dims} dims. Re-registrar.")
+        if uid in ids_nuevos or dims != VECTOR_DIM:
             continue
         v = np.array(json.loads(vjson), dtype=np.float32)
         resultado.append({
             "usuario_id":    uid,
             "nombre":        nombre.strip(),
-            "numero_cuenta": cuenta,
+            "numero_cuenta": cuenta or "",
             "rol":           rol,
             "angulo":        "legacy",
             "vector":        v,
@@ -265,11 +246,9 @@ def reconocer_persona(vector_nuevo: np.ndarray,
         return None
 
     mejores: dict[int, dict] = {}
-
     for reg in registros:
         uid  = reg["usuario_id"]
         dist = distancia_chi2(vector_nuevo, reg["vector"])
-
         if uid not in mejores or dist < mejores[uid]["distancia"]:
             mejores[uid] = {
                 "usuario_id":    uid,
@@ -283,21 +262,19 @@ def reconocer_persona(vector_nuevo: np.ndarray,
     if not mejores:
         return None
 
-    mejor = min(mejores.values(), key=lambda x: x["distancia"])
-
-    sim_raw = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
+    mejor       = min(mejores.values(), key=lambda x: x["distancia"])
+    sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral
 
     print(f"[RECONO] {mejor['nombre']} | angulo={mejor['angulo']} | "
           f"dist={mejor['distancia']:.4f} | sim={mejor['similitud_pct']}% | "
           f"acceso={'SI' if mejor['acceso'] else 'NO'}")
-
     return mejor
 
 
 # =============================================================================
-#  ELIMINAR
+#  ELIMINAR / CONSULTAS
 # =============================================================================
 
 def eliminar_persona(usuario_id: int):
@@ -309,10 +286,6 @@ def eliminar_persona(usuario_id: int):
 
 eliminar_usuario = eliminar_persona
 
-
-# =============================================================================
-#  CONSULTAS
-# =============================================================================
 
 def listar_usuarios(rol: str = None) -> list:
     conn   = conectar()
