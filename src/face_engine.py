@@ -178,7 +178,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
     if tipo_esperado in (TIPO_FRONTAL, None):
         if _haar_frontal is not None:
             caras = _haar_frontal.detectMultiScale(
-                gris, scaleFactor=1.03, minNeighbors=8, minSize=(60, 60)
+                gris, scaleFactor=1.03, minNeighbors=3, minSize=(40, 40)
             )
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.75))
@@ -187,7 +187,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
     if tipo_esperado in (TIPO_PERFIL_D, None):
         if _haar_perfil is not None:
             caras = _haar_perfil.detectMultiScale(
-                gris, scaleFactor=1.02, minNeighbors=5, minSize=(50, 50)
+                gris, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
             )
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.70))
@@ -197,7 +197,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
         if _haar_perfil is not None:
             gris_flip = cv2.flip(gris, 1)
             caras = _haar_perfil.detectMultiScale(
-                gris_flip, scaleFactor=1.02, minNeighbors=5, minSize=(50, 50)
+                gris_flip, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
             )
             for (x, y, w, h) in caras:
                 x = w_img - x - w
@@ -210,18 +210,21 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
 def _detectar_caras(frame, tipo_esperado=None):
     """
     Interfaz unificada.
-    Intenta YuNet primero. Si no detecta nada, usa Haar como fallback real.
-    Devuelve lista de (x, y, w, h, score).
+
+    Cuando YuNet esta disponible (siempre en esta RasPi), se usa YuNet
+    exclusivamente. Si YuNet no encuentra cara, se retorna [] sin recurrir
+    a Haar. Haar genera demasiados falsos positivos con la camara OV5647
+    (fondo morado / ruido de baja iluminacion) y no aporta valor cuando
+    YuNet ya esta cargado correctamente.
+
+    Haar solo se usa si YuNet no pudo cargarse del todo.
     """
     _init_detectores()
 
     if _yunet is not None:
-        dets = _detectar_caras_yunet(frame)
-        if dets:
-            return dets
-        # BUG2 FIX: YuNet cargado pero sin deteccion → intentar Haar
-        return _detectar_caras_haar(frame, tipo_esperado)
+        return _detectar_caras_yunet(frame)
 
+    # Solo llega aqui si YuNet no cargo (sin modelo .onnx)
     return _detectar_caras_haar(frame, tipo_esperado)
 
 
@@ -317,7 +320,6 @@ def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
       3. Sobel fallback → si YuNet no detecto nada
     """
     global _buf_yaw
-
 
     # YuNet: usar cache de la deteccion ya hecha
     if _ultimo_face_yunet is not None:
