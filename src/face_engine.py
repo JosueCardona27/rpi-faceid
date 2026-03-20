@@ -1,26 +1,23 @@
 """
-face_engine.py - Version YuNet corregida v3
+face_engine.py - Version YuNet corregida v4
 =============================================
-CORRECCIONES vs version anterior:
+CORRECCIONES vs version anterior (v3):
 
-  BUG 1 — score_threshold demasiado alto (0.5)
-           → demasiados SIN CARA con camara OV5647
-           FIX: score_threshold = 0.30
+  BUG 5 — score_threshold demasiado bajo (0.30)
+           → ruido / texturas / brillos eran detectados como cara
+           → reconocer_persona() siempre encuentra al "más cercano",
+             produciendo falsos positivos en verificación sin rostro
+           FIX: score_threshold = 0.45
 
-  BUG 2 — sin fallback real a Haar cuando YuNet no detecta
-           → si YuNet carga pero no encuentra cara, retornaba []
-           FIX: si YuNet retorna vacio, intenta Haar
-
-  BUG 3 — perfiles invertidos por flip horizontal
-           El frame entra con cv2.flip(raw,1) — imagen espejo.
-           Cuando el usuario gira a su DERECHA, en la imagen
-           aparece girando a su IZQUIERDA. YuNet clasifica segun
-           la imagen, no segun el usuario real.
-           FIX: intercambiar PERFIL_I <-> PERFIL_D en landmarks
-
-  BUG 4 — umbral de asimetria muy ajustado (0.28)
-           → cara frontal levemente ladeada = falso perfil
-           FIX: umbral subido a 0.40
+  BUG 6 — cortocircuito en _clasificar_angulo con tipo_esperado
+           → cuando tipo_esperado está definido, la función devolvía
+             ese tipo SIN verificar el ángulo real de la cámara
+           → durante el registro, cualquier cara detectada en un paso
+             lateral era aceptada aunque el usuario mirara de frente
+           FIX: eliminar el bloque "Registro guiado: respetar siempre"
+                y pasar tipo_esperado=None a _clasificar_angulo desde
+                extraer_caracteristicas. La comparación real vs esperado
+                la hace el llamador (interfaz.py → _capturar_registro).
 """
 
 import os
@@ -64,7 +61,7 @@ def _init_detectores():
             try:
                 _yunet = cv2.FaceDetectorYN.create(
                     yunet_path, "", (640, 480),
-                    score_threshold=0.30,   # BUG1 FIX: era 0.5, muy alto para OV5647
+                    score_threshold=0.45,   # BUG5 FIX: era 0.30, muy permisivo
                     nms_threshold=0.3,
                     top_k=5000
                 )
@@ -219,7 +216,7 @@ def _detectar_caras(frame, tipo_esperado=None):
         dets = _detectar_caras_yunet(frame)
         if dets:
             return dets
-        # BUG2 FIX: YuNet cargado pero sin deteccion → intentar Haar
+        # YuNet cargado pero sin deteccion → intentar Haar
         return _detectar_caras_haar(frame, tipo_esperado)
 
     return _detectar_caras_haar(frame, tipo_esperado)
@@ -246,7 +243,7 @@ def _clasificar_angulo_con_landmarks(face_row):
       [12,13]     = boca derecha x,y
       [14]        = score
 
-    BUG3 FIX — inversion por flip horizontal:
+    Inversion por flip horizontal:
       El frame viene con cv2.flip(raw,1). Cuando el usuario gira a su DERECHA,
       en la imagen aparece girando a su IZQUIERDA. Por eso se intercambia
       PERFIL_I <-> PERFIL_D respecto a lo que indica la asimetria de imagen.
@@ -270,12 +267,11 @@ def _clasificar_angulo_con_landmarks(face_row):
         _buf_yaw.pop(0)
     asm = float(np.median(_buf_yaw))
 
-    # BUG3 FIX: intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
-    # BUG4 FIX: umbral subido de 0.28 a 0.40
+    # Intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
     if asm > 0.40:
-        return TIPO_PERFIL_D   # en imagen parece izq, pero usuario giro der
+        return TIPO_PERFIL_D
     elif asm < -0.40:
-        return TIPO_PERFIL_I   # en imagen parece der, pero usuario giro izq
+        return TIPO_PERFIL_I
 
     # ── Posicion de nariz (confirmacion) ─────────────────────────────────────
     desv = (x_n - cx) / (w + 1e-6)
@@ -311,16 +307,22 @@ def _calcular_yaw_sobel(frame_gris, bbox):
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
     """
-    Prioridad de clasificacion:
-      1. tipo_esperado  → registro guiado, siempre se respeta
-      2. YuNet landmarks del cache → precision real sin doble deteccion
-      3. Sobel fallback → si YuNet no detecto nada
+    Clasifica el angulo REAL de la cara detectada.
+
+    BUG6 FIX: Se elimino el bloque que devolvía tipo_esperado
+    directamente sin verificar el angulo real. Ahora la funcion
+    SIEMPRE calcula el angulo usando landmarks o Sobel.
+
+    tipo_esperado se ignora aqui — la comparacion angulo_real vs
+    angulo_esperado la realiza el llamador (_capturar_registro en
+    interfaz.py), lo que permite rechazar muestras del angulo
+    incorrecto aunque se haya detectado una cara.
+
+    Prioridad:
+      1. YuNet landmarks del cache → precision real sin doble deteccion
+      2. Sobel fallback → si YuNet no detecto nada
     """
     global _buf_yaw
-
-    # Registro guiado: respetar siempre
-    if tipo_esperado in (TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I):
-        return tipo_esperado
 
     # YuNet: usar cache de la deteccion ya hecha
     if _ultimo_face_yunet is not None:
@@ -463,7 +465,7 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
 
 
 # =============================================================================
-#  API PUBLICA  (firma identica al original)
+#  API PUBLICA
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
@@ -472,8 +474,14 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
-    Detecta cara, clasifica angulo y extrae vector LBP.
-    Compatible con database.py e interfaz.py sin cambios.
+    Detecta cara, clasifica angulo REAL y extrae vector LBP.
+
+    BUG6 FIX: tipo_esperado se pasa al detector Haar (para orientar
+    el cascade), pero NO se pasa a _clasificar_angulo. Esto garantiza
+    que el angulo devuelto siempre refleja la postura real de la cara.
+
+    El llamador (interfaz.py) compara tipo_det == tipo_esperado para
+    decidir si la muestra es valida.
     """
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
@@ -494,11 +502,12 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
     recorte = preprocesar_cara(recorte)
     cara128 = cv2.resize(recorte, (128, 128))
 
+    # BUG6 FIX: tipo_esperado=None → siempre clasifica el angulo real
     tipo = _clasificar_angulo(
         frame,
         (x1, y1, x2 - x1, y2 - y1),
         frame.shape,
-        tipo_esperado=tipo_esperado
+        tipo_esperado=None
     )
 
     zonas  = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)

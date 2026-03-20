@@ -10,6 +10,16 @@ CAMBIOS:
   - Validacion mas estricta en pasos: requiere angulo correcto para avanzar
   - MUESTRAS_MIN_PASO aumentado a 5 para forzar que el usuario mantenga el angulo
   - Mensaje de instruccion mas claro en cada paso
+
+BUG5 FIX (falsos positivos en verificacion):
+  - _verificar ahora exige MIN_CONSECUTIVOS (3) frames seguidos con cara
+    antes de aceptar cualquier vector. Si la cara desaparece, el contador
+    se reinicia. Esto evita que ruido o destellos fugaces acumulen muestras.
+
+BUG6 FIX (angulo ignorado al registrar):
+  - extraer_caracteristicas ya no hace cortocircuito con tipo_esperado.
+    El angulo devuelto en tipo_det es el angulo REAL de la camara.
+    La comparacion angulo_ok = (tipo_det == tipo_esperado) es correcta.
 """
 
 import tkinter as tk
@@ -297,7 +307,7 @@ class App(tk.Tk):
 
         cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
         tk.Label(self,
-                 text=f"v5.5  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
+                 text=f"v5.6  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
                       f"max {MAX_MUESTRAS_PASO} muestras/paso  |  {modo_txt}",
                  font=self.f_zona, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=H-13, anchor="center")
@@ -320,7 +330,7 @@ class App(tk.Tk):
         btn.bind("<Leave>", lambda e,b=btn,c=color: b.config(bg=c))
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  PANTALLA REGISTRO  (sin numero de cuenta ni telefono)
+    #  PANTALLA REGISTRO
     # ══════════════════════════════════════════════════════════════════════════
     def _show_registro(self):
         self._clear()
@@ -334,7 +344,6 @@ class App(tk.Tk):
         tk.Label(left, text="Nuevo usuario", font=self.f_sub,   fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
 
-        # Solo 3 campos: nombre, apellido paterno, apellido materno
         self._field(left, "Nombre(s)",       self.nombre_var,  58)
         self._field(left, "Apellido paterno", self.ap_pat_var, 106)
         self._field(left, "Apellido materno", self.ap_mat_var, 154)
@@ -353,7 +362,6 @@ class App(tk.Tk):
 
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=244)
 
-        # ── Indicadores de los 4 pasos ────────────────────────────────────────
         tk.Label(left, text="PASOS DE ESCANEO:", font=self.f_zona,
                  fg=SUBTEXT, bg=PANEL).place(x=18, y=250)
 
@@ -579,7 +587,8 @@ class App(tk.Tk):
                     v        = self._analisis["vector"]
                     tipo_det = self._analisis["tipo"]
 
-                # RESTRICCION: solo avanza si el angulo detectado es el correcto
+                # BUG6 FIX: tipo_det es el angulo REAL (ya no hace cortocircuito).
+                # Solo avanza si la persona tiene el angulo correcto.
                 angulo_ok     = (tipo_det == tipo_esperado) and (v is not None)
                 cara_presente = (v is not None)
 
@@ -589,7 +598,7 @@ class App(tk.Tk):
                         t_paso_activo += ahora - t_ultimo_tick
                     t_ultimo_tick = ahora
                 else:
-                    # Si el angulo no es correcto, el tiempo NO avanza
+                    # El tiempo NO avanza si el angulo es incorrecto
                     t_ultimo_tick = None
 
                 restante      = max(0.0, duracion - t_paso_activo)
@@ -793,21 +802,38 @@ class App(tk.Tk):
         threading.Thread(target=self._verificar, daemon=True).start()
 
     def _verificar(self):
-        vectores = []
-        intentos = 0
-        ultimo   = -1
+        """
+        BUG5 FIX: exige MIN_CONSECUTIVOS frames seguidos con cara antes
+        de aceptar cualquier vector. Si la deteccion se pierde, el
+        contador se reinicia. Esto filtra ruido, destellos y detecciones
+        espurias que generaban falsos positivos sin rostro presente.
+        """
+        MIN_CONSECUTIVOS = 3   # frames seguidos necesarios para aceptar
+        vectores     = []
+        intentos     = 0
+        ultimo       = -1
+        consecutivos = 0
 
-        while len(vectores) < 8 and intentos < 120 and self.cam_running:
+        while len(vectores) < 8 and intentos < 150 and self.cam_running:
             intentos += 1
             with self._analisis_lock:
                 frame_id = self._analisis["frame_id"]
                 v        = self._analisis["vector"]
+
             if frame_id == ultimo:
                 time.sleep(0.04)
                 continue
             ultimo = frame_id
+
             if v is not None:
-                vectores.append(v)
+                consecutivos += 1
+                # Solo acumula si la cara es estable (varios frames seguidos)
+                if consecutivos >= MIN_CONSECUTIVOS:
+                    vectores.append(v)
+            else:
+                # Sin cara → resetear estabilidad
+                consecutivos = 0
+
             time.sleep(0.04)
 
         self._set_overlay(None, "")
