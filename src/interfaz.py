@@ -297,7 +297,7 @@ class App(tk.Tk):
 
         cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
         tk.Label(self,
-                 text=f"v5.6  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
+                 text=f"v5.5  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
                       f"max {MAX_MUESTRAS_PASO} muestras/paso  |  {modo_txt}",
                  font=self.f_zona, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=H-13, anchor="center")
@@ -793,18 +793,11 @@ class App(tk.Tk):
         threading.Thread(target=self._verificar, daemon=True).start()
 
     def _verificar(self):
-        # BUG5 FIX (capa extra): exige MIN_CONSECUTIVOS frames seguidos
-        # con cara antes de aceptar cualquier vector. Si la deteccion
-        # se pierde entre frames, el contador se reinicia. Esto filtra
-        # destellos o detecciones espurias de un solo frame que escaparan
-        # la validacion geometrica de face_engine.
-        MIN_CONSECUTIVOS = 3
-        vectores     = []
-        intentos     = 0
-        ultimo       = -1
-        consecutivos = 0
+        vectores = []
+        intentos = 0
+        ultimo   = -1
 
-        while len(vectores) < 8 and intentos < 150 and self.cam_running:
+        while len(vectores) < 8 and intentos < 120 and self.cam_running:
             intentos += 1
             with self._analisis_lock:
                 frame_id = self._analisis["frame_id"]
@@ -814,11 +807,7 @@ class App(tk.Tk):
                 continue
             ultimo = frame_id
             if v is not None:
-                consecutivos += 1
-                if consecutivos >= MIN_CONSECUTIVOS:
-                    vectores.append(v)
-            else:
-                consecutivos = 0   # reset si se pierde la deteccion
+                vectores.append(v)
             time.sleep(0.04)
 
         self._set_overlay(None, "")

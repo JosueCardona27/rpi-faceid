@@ -1,30 +1,26 @@
 """
-face_engine.py - Version YuNet corregida v4
+face_engine.py - Version YuNet corregida v3
 =============================================
-CORRECCIONES vs v3:
+CORRECCIONES vs version anterior:
 
-  BUG 5 — Falsos positivos en fondo sin rostro
-           score_threshold=0.30 es necesario para OV5647, NO se cambia.
-           El problema real: YuNet reporta detecciones cuyas landmarks
-           tienen posiciones geometricamente imposibles para una cara
-           humana (ojos debajo de la boca, nariz fuera del bbox, etc.).
-           FIX: funcion _validar_landmarks() que descarta detecciones
-                espurias DESPUES del threshold usando restricciones
-                geometricas de caras humanas reales:
-                - tamaño minimo 60x60 px (era 15x15, demasiado permisivo)
-                - proporcion ancho/alto entre 0.45 y 1.85
-                - ojos en el tercio superior del bbox
-                - nariz entre ojos y boca verticalmente
-                - boca debajo de los ojos con separacion minima
-                - distancia interocular 20-72% del ancho del bbox
-                - todos los landmarks dentro del bbox (+20% margen)
+  BUG 1 — score_threshold demasiado alto (0.5)
+           → demasiados SIN CARA con camara OV5647
+           FIX: score_threshold = 0.30
 
-  BUG 6 — Angulo ignorado durante el registro guiado
-           _clasificar_angulo devolvía tipo_esperado sin medir el
-           angulo real → cualquier cara pasaba sin importar la pose.
-           FIX: eliminar cortocircuito. extraer_caracteristicas pasa
-                tipo_esperado=None a _clasificar_angulo. La comparacion
-                angulo_real vs angulo_esperado la hace interfaz.py.
+  BUG 2 — sin fallback real a Haar cuando YuNet no detecta
+           → si YuNet carga pero no encuentra cara, retornaba []
+           FIX: si YuNet retorna vacio, intenta Haar
+
+  BUG 3 — perfiles invertidos por flip horizontal
+           El frame entra con cv2.flip(raw,1) — imagen espejo.
+           Cuando el usuario gira a su DERECHA, en la imagen
+           aparece girando a su IZQUIERDA. YuNet clasifica segun
+           la imagen, no segun el usuario real.
+           FIX: intercambiar PERFIL_I <-> PERFIL_D en landmarks
+
+  BUG 4 — umbral de asimetria muy ajustado (0.28)
+           → cara frontal levemente ladeada = falso perfil
+           FIX: umbral subido a 0.40
 """
 
 import os
@@ -68,7 +64,7 @@ def _init_detectores():
             try:
                 _yunet = cv2.FaceDetectorYN.create(
                     yunet_path, "", (640, 480),
-                    score_threshold=0.30,   # NO se cambia — OV5647 lo necesita bajo
+                    score_threshold=0.30,   # BUG1 FIX: era 0.5, muy alto para OV5647
                     nms_threshold=0.3,
                     top_k=5000
                 )
@@ -123,119 +119,21 @@ _ultimo_face_yunet = None   # array de 15 valores de YuNet
 
 
 # =============================================================================
-#  VALIDACION GEOMETRICA DE LANDMARKS  (BUG5 FIX)
-# =============================================================================
-
-def _validar_landmarks(face_row):
-    """
-    Valida que los landmarks de YuNet sean geometricamente consistentes
-    con una cara humana real.
-
-    Rechaza detecciones espurias producidas por ruido de camara,
-    texturas, o fondos con colores uniformes (como el fondo morado
-    de OV5647 con poca iluminacion). El score_threshold=0.30 se
-    mantiene bajo para no perder caras reales, pero este filtro
-    geometrico actua como segunda barrera de calidad.
-
-    face_row layout (15 valores de YuNet):
-      [0,1,2,3]   = x, y, w, h  del bounding box
-      [4,5]       = ojo derecho x, y  (en imagen con flip horizontal)
-      [6,7]       = ojo izquierdo x, y
-      [8,9]       = nariz x, y
-      [10,11]     = boca izquierda x, y
-      [12,13]     = boca derecha x, y
-      [14]        = score de confianza
-
-    Retorna True si la deteccion parece una cara real.
-    """
-    fx = float(face_row[0])
-    fy = float(face_row[1])
-    fw = float(face_row[2])
-    fh = float(face_row[3])
-
-    # ── 1. Tamaño minimo ─────────────────────────────────────────────────────
-    # 15x15 era demasiado permisivo. A 640x480, una cara real a
-    # distancia util tiene al menos 60x60 px.
-    if fw < 60 or fh < 60:
-        return False
-
-    # ── 2. Proporcion ancho/alto de la cara ──────────────────────────────────
-    # Una cara humana vista de frente o perfil tiene ratio ~0.5-1.8.
-    # Valores fuera de ese rango son ruido o artefactos.
-    ratio = fw / (fh + 1e-6)
-    if ratio < 0.45 or ratio > 1.85:
-        return False
-
-    # ── 3. Extraer landmarks ─────────────────────────────────────────────────
-    x_od, y_od = float(face_row[4]),  float(face_row[5])   # ojo derecho (imagen)
-    x_oi, y_oi = float(face_row[6]),  float(face_row[7])   # ojo izquierdo (imagen)
-    x_n,  y_n  = float(face_row[8]),  float(face_row[9])   # nariz
-    x_bl, y_bl = float(face_row[10]), float(face_row[11])  # boca izquierda
-    x_br, y_br = float(face_row[12]), float(face_row[13])  # boca derecha
-
-    y_ojos = (y_od + y_oi) / 2.0
-    y_boca = (y_bl + y_br) / 2.0
-
-    # ── 4. Ojos en el tercio superior del bbox ───────────────────────────────
-    # En cualquier pose de cara humana los ojos estan en la mitad superior.
-    if y_ojos > fy + fh * 0.65:
-        return False
-
-    # ── 5. Nariz entre ojos y boca (verticalmente) ──────────────────────────
-    # Margen del 5% del alto para tolerar inclinaciones.
-    margen_v = fh * 0.05
-    if y_n < y_ojos - margen_v:
-        return False
-    if y_n > y_boca + margen_v:
-        return False
-
-    # ── 6. Boca debajo de los ojos con separacion minima ─────────────────────
-    if y_boca <= y_ojos + fh * 0.10:
-        return False
-
-    # ── 7. Distancia interocular razonable ──────────────────────────────────
-    # Para cara frontal: ~40-60% del ancho.
-    # Para perfiles: puede bajar hasta ~20% (solo se ve un ojo).
-    dist_ojos = abs(x_oi - x_od)
-    if dist_ojos < fw * 0.20 or dist_ojos > fw * 0.72:
-        return False
-
-    # ── 8. Todos los landmarks dentro del bbox (margen 20%) ─────────────────
-    # Un falso positivo tipico tiene landmarks muy fuera del bbox detecto.
-    mx = fw * 0.20
-    my = fh * 0.20
-    for lx, ly in [(x_od, y_od), (x_oi, y_oi),
-                   (x_n,  y_n),
-                   (x_bl, y_bl), (x_br, y_br)]:
-        if lx < fx - mx or lx > fx + fw + mx:
-            return False
-        if ly < fy - my or ly > fy + fh + my:
-            return False
-
-    return True
-
-
-# =============================================================================
 #  DETECCION
 # =============================================================================
 
 def _detectar_caras_yunet(frame):
     """
-    Detecta caras con YuNet y aplica validacion geometrica de landmarks.
-
-    BUG5 FIX: cada deteccion pasa por _validar_landmarks() antes de
-    ser aceptada. El fondo morado/ruidoso de OV5647 produce detecciones
-    con landmarks en posiciones imposibles para una cara real, que
-    ahora son descartadas aqui.
-
+    Detecta caras con YuNet.
+    Guarda la mejor deteccion en _ultimo_face_yunet para reusar landmarks.
     Retorna lista de (x, y, w, h, score).
     """
     global _ultimo_face_yunet
 
-    h_img, w_img       = frame.shape[:2]
+    h_img, w_img      = frame.shape[:2]
     _yunet.setInputSize((w_img, h_img))
-    _, faces            = _yunet.detect(frame)
-    _ultimo_face_yunet  = None
+    _, faces           = _yunet.detect(frame)
+    _ultimo_face_yunet = None
 
     if faces is None or len(faces) == 0:
         return []
@@ -249,8 +147,7 @@ def _detectar_caras_yunet(frame):
         x = max(0, x);  y = max(0, y)
         w = min(w, w_img - x);  h = min(h, h_img - y)
 
-        # BUG5 FIX: rechazar detecciones geometricamente invalidas
-        if not _validar_landmarks(face):
+        if w < 15 or h < 15:
             continue
 
         detecciones.append((x, y, w, h, round(score, 3), face))
@@ -261,16 +158,16 @@ def _detectar_caras_yunet(frame):
     # Ordenar por area — cara mas grande primero
     detecciones.sort(key=lambda d: d[2] * d[3], reverse=True)
 
-    # Guardar landmarks de la cara principal para clasificacion de angulo
+    # Guardar landmarks de la cara principal
     _ultimo_face_yunet = detecciones[0][5]
 
     return [(d[0], d[1], d[2], d[3], d[4]) for d in detecciones]
 
 
 def _detectar_caras_haar(frame, tipo_esperado=None):
-    """Fallback Haar — cuando YuNet no detecta nada valido."""
+    """Fallback Haar — cuando YuNet no detecta nada."""
     global _ultimo_face_yunet
-    _ultimo_face_yunet = None
+    _ultimo_face_yunet = None   # sin landmarks de YuNet
 
     h_img, w_img = frame.shape[:2]
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -281,7 +178,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
     if tipo_esperado in (TIPO_FRONTAL, None):
         if _haar_frontal is not None:
             caras = _haar_frontal.detectMultiScale(
-                gris, scaleFactor=1.03, minNeighbors=3, minSize=(40, 40)
+                gris, scaleFactor=1.03, minNeighbors=8, minSize=(60, 60)
             )
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.75))
@@ -290,7 +187,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
     if tipo_esperado in (TIPO_PERFIL_D, None):
         if _haar_perfil is not None:
             caras = _haar_perfil.detectMultiScale(
-                gris, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
+                gris, scaleFactor=1.02, minNeighbors=5, minSize=(50, 50)
             )
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.70))
@@ -300,7 +197,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
         if _haar_perfil is not None:
             gris_flip = cv2.flip(gris, 1)
             caras = _haar_perfil.detectMultiScale(
-                gris_flip, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30)
+                gris_flip, scaleFactor=1.02, minNeighbors=5, minSize=(50, 50)
             )
             for (x, y, w, h) in caras:
                 x = w_img - x - w
@@ -313,8 +210,7 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
 def _detectar_caras(frame, tipo_esperado=None):
     """
     Interfaz unificada.
-    Intenta YuNet primero (con validacion geometrica de landmarks).
-    Si no detecta nada valido, usa Haar como fallback.
+    Intenta YuNet primero. Si no detecta nada, usa Haar como fallback real.
     Devuelve lista de (x, y, w, h, score).
     """
     _init_detectores()
@@ -323,6 +219,7 @@ def _detectar_caras(frame, tipo_esperado=None):
         dets = _detectar_caras_yunet(frame)
         if dets:
             return dets
+        # BUG2 FIX: YuNet cargado pero sin deteccion → intentar Haar
         return _detectar_caras_haar(frame, tipo_esperado)
 
     return _detectar_caras_haar(frame, tipo_esperado)
@@ -349,7 +246,7 @@ def _clasificar_angulo_con_landmarks(face_row):
       [12,13]     = boca derecha x,y
       [14]        = score
 
-    Inversion por flip horizontal:
+    BUG3 FIX — inversion por flip horizontal:
       El frame viene con cv2.flip(raw,1). Cuando el usuario gira a su DERECHA,
       en la imagen aparece girando a su IZQUIERDA. Por eso se intercambia
       PERFIL_I <-> PERFIL_D respecto a lo que indica la asimetria de imagen.
@@ -373,11 +270,12 @@ def _clasificar_angulo_con_landmarks(face_row):
         _buf_yaw.pop(0)
     asm = float(np.median(_buf_yaw))
 
-    # Intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
+    # BUG3 FIX: intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
+    # BUG4 FIX: umbral subido de 0.28 a 0.40
     if asm > 0.40:
-        return TIPO_PERFIL_D
+        return TIPO_PERFIL_D   # en imagen parece izq, pero usuario giro der
     elif asm < -0.40:
-        return TIPO_PERFIL_I
+        return TIPO_PERFIL_I   # en imagen parece der, pero usuario giro izq
 
     # ── Posicion de nariz (confirmacion) ─────────────────────────────────────
     desv = (x_n - cx) / (w + 1e-6)
@@ -413,26 +311,19 @@ def _calcular_yaw_sobel(frame_gris, bbox):
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
     """
-    Clasifica el angulo REAL de la cara detectada.
-
-    BUG6 FIX: se elimino el bloque que devolvía tipo_esperado sin
-    medir el angulo real. Ahora siempre se mide usando landmarks
-    (YuNet, si hay cache) o Sobel (fallback Haar).
-
-    tipo_esperado se ignora aqui. La comparacion angulo_real vs
-    angulo_esperado la hace el llamador (interfaz._capturar_registro).
-
-    Prioridad:
-      1. YuNet landmarks del cache → precision con geometria real
-      2. Sobel fallback → cuando YuNet no detecto nada valido
+    Prioridad de clasificacion:
+      1. tipo_esperado  → registro guiado, siempre se respeta
+      2. YuNet landmarks del cache → precision real sin doble deteccion
+      3. Sobel fallback → si YuNet no detecto nada
     """
     global _buf_yaw
 
-    # YuNet: usar cache de la deteccion ya hecha (ya paso validacion)
+
+    # YuNet: usar cache de la deteccion ya hecha
     if _ultimo_face_yunet is not None:
         return _clasificar_angulo_con_landmarks(_ultimo_face_yunet)
 
-    # Fallback Sobel (Haar no da landmarks)
+    # Fallback Sobel (Haar no dio landmarks)
     try:
         fg  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         yaw = _calcular_yaw_sobel(fg, bbox)
@@ -458,7 +349,7 @@ def _extraer_angulos_lbf(gris, bbox, fw, fh):
 
 
 # =============================================================================
-#  ZONAS LBP
+#  ZONAS LBP  (sin cambios)
 # =============================================================================
 
 ZONAS_FRONTAL = [
@@ -507,7 +398,7 @@ VECTOR_DIM = N_ZONAS * LBP_BINS
 
 
 # =============================================================================
-#  LBP
+#  LBP  (sin cambios)
 # =============================================================================
 
 _UNIFORM_MAP = None
@@ -569,7 +460,7 @@ def _histograma_zona(cara128, r0, r1, c0, c1):
 
 
 # =============================================================================
-#  API PUBLICA
+#  API PUBLICA  (firma identica al original)
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
@@ -578,15 +469,8 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
-    Detecta cara (con validacion geometrica), clasifica angulo REAL
-    y extrae vector LBP.
-
-    BUG5 FIX: _detectar_caras ya aplica _validar_landmarks(), asi que
-    aqui solo llegan detecciones geometricamente validas.
-
-    BUG6 FIX: tipo_esperado se pasa al detector Haar (para orientar
-    el cascade), pero _clasificar_angulo recibe tipo_esperado=None
-    para que siempre mida el angulo real de la camara.
+    Detecta cara, clasifica angulo y extrae vector LBP.
+    Compatible con database.py e interfaz.py sin cambios.
     """
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
@@ -607,7 +491,6 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
     recorte = preprocesar_cara(recorte)
     cara128 = cv2.resize(recorte, (128, 128))
 
-    # BUG6 FIX: tipo_esperado=None — siempre clasifica el angulo real
     tipo = _clasificar_angulo(
         frame,
         (x1, y1, x2 - x1, y2 - y1),
