@@ -91,12 +91,12 @@ try:
                         raw_detecciones.append((rx, ry, rw, rh, rs, lap, face))
                 raw_detecciones.sort(key=lambda d: d[2]*d[3], reverse=True)
 
-        # ── Si YuNet no encontro nada, intentar Haar raw ─────────────────
+        # ── Si YuNet no encontro nada, intentar Haar raw (frontal + perfiles) ──
         fuente = "YuNet"
         if not raw_detecciones:
             fuente = "Haar"
             gris_d = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            from face_engine import _clahe as _clahe_d, _haar_frontal
+            from face_engine import _clahe as _clahe_d, _haar_frontal, _haar_perfil
             gris_d = _clahe_d.apply(gris_d)
             if _haar_frontal is not None:
                 caras_h = _haar_frontal.detectMultiScale(
@@ -104,7 +104,20 @@ try:
                 for (rx, ry, rw, rh) in caras_h:
                     lap = _varianza_laplaciano(frame, rx, ry, rw, rh)
                     raw_detecciones.append((rx, ry, rw, rh, 0.0, lap, None))
-                raw_detecciones.sort(key=lambda d: d[2]*d[3], reverse=True)
+            if _haar_perfil is not None:
+                caras_h = _haar_perfil.detectMultiScale(
+                    gris_d, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30))
+                for (rx, ry, rw, rh) in caras_h:
+                    lap = _varianza_laplaciano(frame, rx, ry, rw, rh)
+                    raw_detecciones.append((rx, ry, rw, rh, 0.0, lap, None))
+                gris_flip = cv2.flip(gris_d, 1)
+                caras_h = _haar_perfil.detectMultiScale(
+                    gris_flip, scaleFactor=1.02, minNeighbors=2, minSize=(30, 30))
+                for (rx, ry, rw, rh) in caras_h:
+                    rx = w_img - rx - rw
+                    lap = _varianza_laplaciano(frame, rx, ry, rw, rh)
+                    raw_detecciones.append((rx, ry, rw, rh, 0.0, lap, None))
+            raw_detecciones.sort(key=lambda d: d[2]*d[3], reverse=True)
 
         if not raw_detecciones:
             print(f"  {'SIN CARA':<12} {'---':>7} {'---':>7} "

@@ -132,7 +132,7 @@ _SCORE_MINIMO_CARA = 0.38
 # Superficie IR iluminada uniforme: varianza ~5-40.
 # Cara humana con rasgos (ojos, nariz, boca): varianza tipicamente > 60.
 # Bajar si se rechazan caras reales; subir si siguen los falsos positivos.
-_LAPLACIAN_MIN = 18.0
+_LAPLACIAN_MIN = 13.0
 
 
 def _varianza_laplaciano(frame, x, y, w, h):
