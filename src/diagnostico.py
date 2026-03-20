@@ -76,6 +76,7 @@ try:
         h_img, w_img = frame.shape[:2]
         raw_detecciones = []
 
+        # ── Deteccion YuNet raw ──────────────────────────────────────────
         if _yunet is not None:
             _yunet.setInputSize((w_img, h_img))
             _, faces = _yunet.detect(frame)
@@ -90,35 +91,48 @@ try:
                         raw_detecciones.append((rx, ry, rw, rh, rs, lap, face))
                 raw_detecciones.sort(key=lambda d: d[2]*d[3], reverse=True)
 
+        # ── Si YuNet no encontro nada, intentar Haar raw ─────────────────
+        fuente = "YuNet"
         if not raw_detecciones:
-            # Tampoco detecto nada YuNet raw → SIN CARA real
+            fuente = "Haar"
+            gris_d = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            from face_engine import _clahe as _clahe_d, _haar_frontal
+            gris_d = _clahe_d.apply(gris_d)
+            if _haar_frontal is not None:
+                caras_h = _haar_frontal.detectMultiScale(
+                    gris_d, scaleFactor=1.03, minNeighbors=3, minSize=(40, 40))
+                for (rx, ry, rw, rh) in caras_h:
+                    lap = _varianza_laplaciano(frame, rx, ry, rw, rh)
+                    raw_detecciones.append((rx, ry, rw, rh, 0.0, lap, None))
+                raw_detecciones.sort(key=lambda d: d[2]*d[3], reverse=True)
+
+        if not raw_detecciones:
             print(f"  {'SIN CARA':<12} {'---':>7} {'---':>7} "
                   f"{_SCORE_MINIMO_CARA:>9.2f} {_LAPLACIAN_MIN:>9.1f}")
             time.sleep(0.15)
             continue
 
-        # Mostrar la deteccion mas grande (aunque no pase los filtros)
         rx, ry, rw, rh, rs, lap, face = raw_detecciones[0]
 
-        pasa_score = rs   >= _SCORE_MINIMO_CARA
-        pasa_lap   = lap  >= _LAPLACIAN_MIN
+        pasa_lap   = lap >= _LAPLACIAN_MIN
+        pasa_score = (rs >= _SCORE_MINIMO_CARA) if fuente == "YuNet" else True
         pasa_ambos = pasa_score and pasa_lap
 
-        # Clasificar angulo con esa deteccion
-        _fe._ultimo_face_yunet = face
+        if face is not None:
+            _fe._ultimo_face_yunet = face
         bbox = (rx, ry, rw, rh)
         tipo = _clasificar_angulo(frame, bbox, frame.shape)
 
-        if pasa_ambos:
-            nota = "✓ ACEPTA"
-        elif not pasa_score and not pasa_lap:
-            nota = "✗ score+lap bajos"
-        elif not pasa_score:
-            nota = f"✗ score bajo  (necesita >={_SCORE_MINIMO_CARA:.2f})"
-        else:
-            nota = f"✗ lap baja    (necesita >={_LAPLACIAN_MIN:.1f})"
+        score_str = f"{rs:.3f}" if fuente == "YuNet" else "Haar"
 
-        print(f"  {tipo:<12} {rs:>7.3f} {lap:>7.1f} "
+        if pasa_ambos:
+            nota = f"✓ ACEPTA [{fuente}]"
+        elif not pasa_lap:
+            nota = f"✗ lap baja (necesita >={_LAPLACIAN_MIN:.1f}) [{fuente}]"
+        else:
+            nota = f"✗ score bajo (>={_SCORE_MINIMO_CARA:.2f}) [{fuente}]"
+
+        print(f"  {tipo:<12} {score_str:>7} {lap:>7.1f} "
               f"{_SCORE_MINIMO_CARA:>9.2f} {_LAPLACIAN_MIN:>9.1f}  {nota}")
 
         time.sleep(0.15)
