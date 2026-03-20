@@ -126,13 +126,13 @@ _ultimo_face_yunet = None   # array de 15 valores de YuNet
 # Con iluminacion IR, YuNet acepta con score bajo patrones de superficies.
 # SCORE_MINIMO: score individual por debajo del cual se descarta la deteccion.
 #   0.55 es seguro para caras reales en IR; bajar si se rechazan caras reales.
-_SCORE_MINIMO_CARA = 0.55
+_SCORE_MINIMO_CARA = 0.38
 
 # Varianza de Laplaciano minima del recorte para aceptarlo como cara.
 # Superficie IR iluminada uniforme: varianza ~5-40.
 # Cara humana con rasgos (ojos, nariz, boca): varianza tipicamente > 60.
 # Bajar si se rechazan caras reales; subir si siguen los falsos positivos.
-_LAPLACIAN_MIN = 60.0
+_LAPLACIAN_MIN = 18.0
 
 
 def _varianza_laplaciano(frame, x, y, w, h):
