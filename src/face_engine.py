@@ -122,51 +122,10 @@ _ultimo_face_yunet = None   # array de 15 valores de YuNet
 #  DETECCION
 # =============================================================================
 
-# ── Umbrales para camara de vision nocturna OV5647 ───────────────────────────
-# Con iluminacion IR, YuNet acepta con score bajo patrones de superficies.
-# SCORE_MINIMO: score individual por debajo del cual se descarta la deteccion.
-#   0.55 es seguro para caras reales en IR; bajar si se rechazan caras reales.
-_SCORE_MINIMO_CARA = 0.38
-
-# Varianza de Laplaciano minima del recorte para aceptarlo como cara.
-# Superficie IR iluminada uniforme: varianza ~5-40.
-# Cara humana con rasgos (ojos, nariz, boca): varianza tipicamente > 60.
-# Bajar si se rechazan caras reales; subir si siguen los falsos positivos.
-_LAPLACIAN_MIN = 18.0
-
-
-def _varianza_laplaciano(frame, x, y, w, h):
-    """
-    Calcula la varianza del Laplaciano del recorte detectado.
-    Mide cuanta textura/detalle tiene la region: alta = cara real,
-    baja = fondo uniforme o superficie IR iluminada sin rasgos.
-    Solo usa OpenCV, sin librerias extra.
-    """
-    x1 = max(0, x);                y1 = max(0, y)
-    x2 = min(frame.shape[1], x+w); y2 = min(frame.shape[0], y+h)
-    recorte = frame[y1:y2, x1:x2]
-    if recorte.size == 0:
-        return 0.0
-    gris = cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY)
-    return cv2.Laplacian(gris, cv2.CV_64F).var()
-
-
 def _detectar_caras_yunet(frame):
     """
-    Detecta caras con YuNet aplicando dos filtros adicionales pensados
-    para camara de vision nocturna OV5647 con iluminacion IR:
-
-    Filtro 1 — Score individual >= _SCORE_MINIMO_CARA (0.55):
-      El score_threshold global se mantiene en 0.30 para no perder
-      caras reales, pero cada deteccion individual debe superar 0.55.
-      Los falsos positivos por IR suelen tener score 0.30-0.52.
-
-    Filtro 2 — Varianza de Laplaciano >= _LAPLACIAN_MIN (60):
-      Una cara real tiene ojos, nariz, boca y textura de piel que
-      generan alta varianza en el Laplaciano. Una superficie iluminada
-      por IR sin rasgos tiene varianza muy baja (~5-40).
-
-    Si ambos filtros pasan, la deteccion es aceptada.
+    Detecta caras con YuNet.
+    Guarda la mejor deteccion en _ultimo_face_yunet para reusar landmarks.
     Retorna lista de (x, y, w, h, score).
     """
     global _ultimo_face_yunet
@@ -188,15 +147,7 @@ def _detectar_caras_yunet(frame):
         x = max(0, x);  y = max(0, y)
         w = min(w, w_img - x);  h = min(h, h_img - y)
 
-        if w < 30 or h < 30:
-            continue
-
-        # Filtro 1: score individual
-        if score < _SCORE_MINIMO_CARA:
-            continue
-
-        # Filtro 2: textura del recorte (varianza de Laplaciano)
-        if _varianza_laplaciano(frame, x, y, w, h) < _LAPLACIAN_MIN:
+        if w < 15 or h < 15:
             continue
 
         detecciones.append((x, y, w, h, round(score, 3), face))
@@ -259,18 +210,21 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
 def _detectar_caras(frame, tipo_esperado=None):
     """
     Interfaz unificada.
-    Intenta YuNet primero. Si no detecta nada, usa Haar como fallback real.
-    Devuelve lista de (x, y, w, h, score).
+
+    Cuando YuNet esta disponible (siempre en esta RasPi), se usa YuNet
+    exclusivamente. Si YuNet no encuentra cara, se retorna [] sin recurrir
+    a Haar. Haar genera demasiados falsos positivos con la camara OV5647
+    (fondo morado / ruido de baja iluminacion) y no aporta valor cuando
+    YuNet ya esta cargado correctamente.
+
+    Haar solo se usa si YuNet no pudo cargarse del todo.
     """
     _init_detectores()
 
     if _yunet is not None:
-        # Camara de vision nocturna OV5647: Haar genera demasiados falsos
-        # positivos con iluminacion IR. YuNet es el unico detector fiable.
-        # Si YuNet no encuentra cara, retorna [] directamente.
         return _detectar_caras_yunet(frame)
 
-    # Solo si YuNet no cargo (sin archivo .onnx)
+    # Solo llega aqui si YuNet no cargo (sin modelo .onnx)
     return _detectar_caras_haar(frame, tipo_esperado)
 
 
