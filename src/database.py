@@ -20,8 +20,18 @@ _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-UMBRAL        = 1.0   # Acceso permitido si distancia <= 1.0
-UMBRAL_RECHAZO = 2.0   # Si distancia > 2.0 → persona desconocida (retorna None)
+# Calibrado con datos reales de camara IR OV5647:
+#   Persona registrada (mejor angulo):  distancia 0.15 - 0.45
+#   Persona NO registrada:              distancia 0.48 - 0.80
+#   Angulo incorrecto / movimiento:     distancia 1.00 - 1.80
+#
+# UMBRAL = 0.45  → solo acepta cuando la cara esta bien posicionada
+#                  y coincide con alta confianza. El usuario registrado
+#                  debe mirar directo a la camara para obtener acceso.
+# UMBRAL_RECHAZO = 0.80 → si la distancia minima supera 0.80,
+#                  la persona definitivamente NO esta registrada.
+UMBRAL        = 0.45
+UMBRAL_RECHAZO = 0.80
 MAX_DIST      = 10.0
 
 ROLES_VALIDOS = ("admin", "maestro", "estudiante")
