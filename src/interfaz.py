@@ -834,8 +834,7 @@ class App(tk.Tk):
             if hay_registros:
                 self.after(0, lambda: self.resultado_var.set("ACCESO DENEGADO"))
                 self.after(0, lambda: self.resultado_label.config(fg=DANGER))
-                self.after(0, lambda: self.candidato_var.set("Persona no reconocida.
-No esta en la base de datos."))
+                self.after(0, lambda: self.candidato_var.set("Persona no reconocida. No esta registrada."))
                 self._set_overlay((255, 59, 92), "Desconocido")
             else:
                 self.after(0, lambda: self.resultado_var.set("Sin registros"))
