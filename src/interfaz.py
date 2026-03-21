@@ -766,10 +766,12 @@ class App(tk.Tk):
 
         self._start_cam()
         self.cam_running = True
+        self._ultima_cara_t = time.time()   # timestamp ultima deteccion
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
+        threading.Thread(target=self._monitor_cara, daemon=True).start()
         self.after(1800, self._lanzar_verificacion)
 
     def _set_sim_bar(self, pct, color):
@@ -876,6 +878,47 @@ class App(tk.Tk):
             f"Mas parecido a:\n{r['nombre']}\n"
             f"Similitud: {r['similitud_pct']}%")
         self.after(4000, self._lanzar_verificacion)
+
+    def _monitor_cara(self):
+        """
+        Monitor continuo durante la pantalla de acceso.
+        Si no se detecta cara por TIMEOUT_SIN_CARA segundos:
+          - Resetea la pantalla a estado inicial
+          - Cancela cualquier resultado anterior
+          - Fuerza un nuevo ciclo de verificacion
+        Evita que el resultado de una persona quede en pantalla
+        cuando ya se fue y apareció otra persona.
+        """
+        TIMEOUT_SIN_CARA = 1.5   # segundos sin cara para resetear
+        ultimo_vector    = -1
+
+        while self.cam_running:
+            with self._analisis_lock:
+                frame_id = self._analisis["frame_id"]
+                v        = self._analisis["vector"]
+
+            if v is not None:
+                self._ultima_cara_t = time.time()
+                ultimo_vector       = frame_id
+            else:
+                sin_cara = time.time() - self._ultima_cara_t
+                if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
+                    # No hay cara — limpiar pantalla
+                    self.after(0, self._resetear_pantalla_acceso)
+
+            time.sleep(0.15)
+
+    def _resetear_pantalla_acceso(self):
+        """Limpia la pantalla de acceso al estado inicial de espera."""
+        try:
+            self.resultado_var.set("Esperando...")
+            self.resultado_label.config(fg=ACCENT)
+            self.candidato_var.set("")
+            self.detalle_var.set("")
+            self._set_sim_bar(0, BORDER)
+            self._set_overlay(None, "")
+        except Exception:
+            pass
 
     def on_close(self):
         self._stop_cam()

@@ -285,9 +285,9 @@ def reconocer_persona(vector_nuevo: np.ndarray,
               f"dist={mejor['distancia']:.4f} > rechazo={UMBRAL_RECHAZO}")
         return None
 
-    # Similitud relativa a UMBRAL_RECHAZO para que sea significativa:
-    # distancia=0   → 100%, distancia=UMBRAL_RECHAZO → 0%
-    sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / UMBRAL_RECHAZO))
+    # Similitud relativa a MAX_DIST para escala intuitiva:
+    # distancia=0 → 100%,  distancia=0.45 → 77%,  distancia=0.80 → 60%
+    sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral
 
