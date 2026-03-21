@@ -20,7 +20,7 @@ _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-UMBRAL   = 2.2
+UMBRAL   = 1.5   # Bajado de 2.2 — con LBP chi2, misma persona < 1.4, diferente > 1.8
 MAX_DIST = 10.0
 
 ROLES_VALIDOS = ("admin", "maestro", "estudiante")

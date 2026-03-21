@@ -841,7 +841,10 @@ class App(tk.Tk):
         self.after(0, lambda r=resultado: self.detalle_var.set(
             f"Angulo match: {r['angulo']}"))
 
-        if resultado["acceso"]:
+        # Doble validacion: acceso=True Y similitud minima del 70%
+        # Evita que una persona no registrada acceda por ser "la mas cercana"
+        # aunque su distancia supere el umbral (por redondeos o vectores cortos)
+        if resultado["acceso"] and resultado["similitud_pct"] >= 70:
             self.after(0, lambda r=resultado: self._resultado_ok(r))
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
