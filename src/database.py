@@ -23,7 +23,7 @@ DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 # Calibrado con datos reales de camara IR OV5647:
 #   Persona registrada:     distancia 0.13 - 0.51 (mayoria < 0.35)
 #   Persona NO registrada:  distancia 0.47 - 0.99 (nunca baja de 0.46)
-UMBRAL        = 0.45   # Acceso si distancia <= 0.45
+UMBRAL        = 0.52   # Acceso si distancia <= 0.52
 UMBRAL_RECHAZO = 0.80   # Desconocido si distancia > 0.80
 MAX_DIST      = 10.0
 
@@ -285,7 +285,9 @@ def reconocer_persona(vector_nuevo: np.ndarray,
               f"dist={mejor['distancia']:.4f} > rechazo={UMBRAL_RECHAZO}")
         return None
 
-    sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
+    # Similitud relativa a UMBRAL_RECHAZO para que sea significativa:
+    # distancia=0   → 100%, distancia=UMBRAL_RECHAZO → 0%
+    sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / UMBRAL_RECHAZO))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral
 
