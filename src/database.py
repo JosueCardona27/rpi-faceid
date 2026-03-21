@@ -20,8 +20,9 @@ _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
 os.makedirs(_DIR_DB, exist_ok=True)
 DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
-UMBRAL   = 1.5   # Bajado de 2.2 — con LBP chi2, misma persona < 1.4, diferente > 1.8
-MAX_DIST = 10.0
+UMBRAL        = 1.0   # Acceso permitido si distancia <= 1.0
+UMBRAL_RECHAZO = 2.0   # Si distancia > 2.0 → persona desconocida (retorna None)
+MAX_DIST      = 10.0
 
 ROLES_VALIDOS = ("admin", "maestro", "estudiante")
 
@@ -241,6 +242,16 @@ def cargar_vectores_por_angulo() -> list:
 
 def reconocer_persona(vector_nuevo: np.ndarray,
                        umbral: float = UMBRAL) -> dict | None:
+    """
+    Compara vector_nuevo contra todos los registrados.
+
+    Retorna None en dos casos:
+      1. No hay registros en la base de datos.
+      2. La distancia minima supera UMBRAL_RECHAZO — significa que la
+         persona escaneada no esta en la base de datos (desconocida).
+         Esto evita que siempre se devuelva "el mas cercano" aunque sea
+         una persona completamente diferente.
+    """
     registros = cargar_vectores_por_angulo()
     if not registros:
         return None
@@ -262,7 +273,15 @@ def reconocer_persona(vector_nuevo: np.ndarray,
     if not mejores:
         return None
 
-    mejor       = min(mejores.values(), key=lambda x: x["distancia"])
+    mejor = min(mejores.values(), key=lambda x: x["distancia"])
+
+    # Si la mejor distancia supera UMBRAL_RECHAZO, la persona no esta
+    # registrada — retornar None en lugar de dar un falso positivo.
+    if mejor["distancia"] > UMBRAL_RECHAZO:
+        print(f"[RECONO] DESCONOCIDO | mejor candidato: {mejor['nombre']} | "
+              f"dist={mejor['distancia']:.4f} > rechazo={UMBRAL_RECHAZO}")
+        return None
+
     sim_raw     = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral

@@ -828,9 +828,19 @@ class App(tk.Tk):
         resultado = reconocer_persona(v_final)
 
         if resultado is None:
-            self.after(0, lambda: self.resultado_var.set("Sin registros"))
-            self.after(0, lambda: self.resultado_label.config(fg=WARNING))
-            self.after(0, lambda: self.candidato_var.set("No hay usuarios registrados."))
+            # None = sin registros O persona desconocida (distancia > UMBRAL_RECHAZO)
+            from database import cargar_vectores_por_angulo as _cvpa
+            hay_registros = len(_cvpa()) > 0
+            if hay_registros:
+                self.after(0, lambda: self.resultado_var.set("ACCESO DENEGADO"))
+                self.after(0, lambda: self.resultado_label.config(fg=DANGER))
+                self.after(0, lambda: self.candidato_var.set("Persona no reconocida.
+No esta en la base de datos."))
+                self._set_overlay((255, 59, 92), "Desconocido")
+            else:
+                self.after(0, lambda: self.resultado_var.set("Sin registros"))
+                self.after(0, lambda: self.resultado_label.config(fg=WARNING))
+                self.after(0, lambda: self.candidato_var.set("No hay usuarios registrados."))
             self.after(0, lambda: self._set_sim_bar(0, BORDER))
             self.after(4000, self._lanzar_verificacion)
             return
@@ -844,7 +854,7 @@ class App(tk.Tk):
         # Doble validacion: acceso=True Y similitud minima del 70%
         # Evita que una persona no registrada acceda por ser "la mas cercana"
         # aunque su distancia supere el umbral (por redondeos o vectores cortos)
-        if resultado["acceso"] and resultado["similitud_pct"] >= 70:
+        if resultado["acceso"]:
             self.after(0, lambda r=resultado: self._resultado_ok(r))
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
