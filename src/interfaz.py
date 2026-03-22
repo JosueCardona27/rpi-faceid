@@ -881,17 +881,18 @@ class App(tk.Tk):
 
     def _monitor_cara(self):
         """
-        Re-escanea SOLO cuando el angulo detectado cambia de forma consistente.
-        Requiere FRAMES_CONFIRMACION frames consecutivos con el mismo angulo
-        nuevo antes de disparar — equivale a lo que ya muestra el overlay.
+        Re-escanea solo cuando el angulo cambia de forma SOSTENIDA.
+        Recoge lecturas cada 0.15s y solo dispara si las ultimas
+        VENTANA lecturas son TODAS el mismo angulo nuevo.
+        Un movimiento rapido o de paso interrumpe la ventana y reinicia.
         Sin cara por 1.5s → resetea pantalla.
         """
-        TIMEOUT_SIN_CARA    = 1.5
-        FRAMES_CONFIRMACION = 10   # frames consecutivos para confirmar cambio
+        TIMEOUT_SIN_CARA = 1.5
+        VENTANA          = 15   # lecturas consecutivas identicas requeridas
+                                # 15 x 0.15s = ~2.25 segundos sostenidos
 
-        angulo_confirmado = None   # angulo que disparo el ultimo escaneo
-        angulo_candidato  = None   # angulo que se esta contando
-        contador          = 0
+        angulo_confirmado = None
+        historial         = []   # ultimas lecturas de tipo
 
         while self.cam_running:
             with self._analisis_lock:
@@ -901,19 +902,18 @@ class App(tk.Tk):
             if v is not None:
                 self._ultima_cara_t = time.time()
 
-                if tipo == angulo_candidato:
-                    contador += 1
-                else:
-                    # Cambio de angulo — reiniciar contador
-                    angulo_candidato = tipo
-                    contador         = 1
+                historial.append(tipo)
+                if len(historial) > VENTANA:
+                    historial.pop(0)
 
-                # Solo dispara si el angulo es NUEVO y ya lleva suficientes frames
-                if (contador >= FRAMES_CONFIRMACION
-                        and angulo_candidato != angulo_confirmado
+                # Disparar solo si TODOS los valores del historial son iguales
+                # y distintos al angulo que ya confirmamos
+                if (len(historial) == VENTANA
+                        and len(set(historial)) == 1
+                        and historial[0] != angulo_confirmado
                         and not self.verificando):
-                    angulo_confirmado = angulo_candidato
-                    contador          = 0
+                    angulo_confirmado = historial[0]
+                    historial.clear()
                     self.after(0, self._resetear_pantalla_acceso)
                     self.after(150, self._lanzar_verificacion)
 
@@ -921,11 +921,10 @@ class App(tk.Tk):
                 sin_cara = time.time() - self._ultima_cara_t
                 if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
                     angulo_confirmado = None
-                    angulo_candidato  = None
-                    contador          = 0
+                    historial.clear()
                     self.after(0, self._resetear_pantalla_acceso)
 
-            time.sleep(0.10)
+            time.sleep(0.15)
 
     def _resetear_pantalla_acceso(self):
         """Limpia la pantalla de acceso al estado inicial de espera."""

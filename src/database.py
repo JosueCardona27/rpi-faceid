@@ -78,11 +78,11 @@ def _crear_tablas():
         -- ── Tabla principal de usuarios ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS usuarios (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_usuario       TEXT    NOT NULL UNIQUE,
             nombre           TEXT    NOT NULL,
             apellido_paterno TEXT    NOT NULL,
             apellido_materno TEXT    NOT NULL DEFAULT '.',
             numero_cuenta    TEXT    UNIQUE,
-            correo           TEXT    UNIQUE,
             rol              TEXT    NOT NULL
                              CHECK(rol IN ('admin','maestro','estudiante')),
             registrado_por   INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
@@ -146,8 +146,6 @@ def _crear_tablas():
         CREATE INDEX  IF NOT EXISTS idx_acceso_tipo       ON registro_acceso(tipo_evento);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_uq_cuenta   ON usuarios(numero_cuenta)
             WHERE numero_cuenta IS NOT NULL;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_uq_correo   ON usuarios(correo)
-            WHERE correo IS NOT NULL;
 
         -- ── Triggers de proteccion ────────────────────────────────────────────
 
@@ -171,29 +169,6 @@ def _crear_tablas():
             WHERE EXISTS (
                 SELECT 1 FROM usuarios
                 WHERE numero_cuenta = NEW.numero_cuenta AND id != NEW.id
-            );
-        END;
-
-        -- Bloquear correo duplicado en INSERT
-        CREATE TRIGGER IF NOT EXISTS trg_correo_dup_insert
-        BEFORE INSERT ON usuarios
-        WHEN NEW.correo IS NOT NULL
-        BEGIN
-            SELECT RAISE(ABORT,'DUPLICADO: El correo ya esta registrado.')
-            WHERE EXISTS (
-                SELECT 1 FROM usuarios WHERE correo = NEW.correo
-            );
-        END;
-
-        -- Bloquear correo duplicado en UPDATE
-        CREATE TRIGGER IF NOT EXISTS trg_correo_dup_update
-        BEFORE UPDATE OF correo ON usuarios
-        WHEN NEW.correo IS NOT NULL
-        BEGIN
-            SELECT RAISE(ABORT,'DUPLICADO: El correo pertenece a otro usuario.')
-            WHERE EXISTS (
-                SELECT 1 FROM usuarios
-                WHERE correo = NEW.correo AND id != NEW.id
             );
         END;
 
@@ -229,11 +204,6 @@ def _crear_tablas():
                    OLD.numero_cuenta,NEW.numero_cuenta
             WHERE OLD.numero_cuenta IS NOT NEW.numero_cuenta;
 
-            INSERT INTO auditoria_cambios
-                (tabla, operacion, registro_id, campo_modificado,
-                 valor_anterior, valor_nuevo)
-            SELECT 'usuarios','UPDATE',NEW.id,'correo',OLD.correo,NEW.correo
-            WHERE OLD.correo IS NOT NEW.correo;
         END;
 
         -- Auditoria automatica en DELETE de usuarios
@@ -285,7 +255,6 @@ def _crear_tablas():
             u.apellido_paterno,
             u.apellido_materno,
             u.numero_cuenta,
-            u.correo,
             u.rol,
             u.registrado_por,
             u.fecha_registro,
@@ -341,7 +310,6 @@ def registrar_usuario(
         apellido_materno: str = "",
         rol:              str = "estudiante",
         numero_cuenta:    str = None,
-        correo:           str = None,
         registrado_por:   int = None,
         rol_registrador:  str = None,
         **kwargs,
@@ -367,14 +335,17 @@ def registrar_usuario(
     try:
         conn   = conectar()
         cursor = conn.cursor()
+        import time as _time
+        sufijo     = numero_cuenta if numero_cuenta else str(int(_time.time() * 1000))[-8:]
+        id_usuario = f"{rol[:3].upper()}-{sufijo}"
+
         cursor.execute("""
             INSERT INTO usuarios
-                (nombre, apellido_paterno, apellido_materno,
-                 numero_cuenta, correo, rol, registrado_por)
+                (id_usuario, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, rol, registrado_por)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (nombre, apellido_paterno, ap_mat,
+        """, (id_usuario, nombre, apellido_paterno, ap_mat,
               numero_cuenta or None,
-              correo or None,
               rol, registrado_por))
         conn.commit()
         uid = cursor.lastrowid
@@ -415,7 +386,7 @@ def listar_usuarios(rol: str = None) -> list:
     if rol:
         cursor.execute("""
             SELECT id, nombre, apellido_paterno, apellido_materno,
-                   numero_cuenta, correo, rol, angulos_registrados
+                   numero_cuenta, rol, angulos_registrados
             FROM vista_usuarios
             WHERE rol = ?
             ORDER BY apellido_paterno, nombre
@@ -423,7 +394,7 @@ def listar_usuarios(rol: str = None) -> list:
     else:
         cursor.execute("""
             SELECT id, nombre, apellido_paterno, apellido_materno,
-                   numero_cuenta, correo, rol, angulos_registrados
+                   numero_cuenta, rol, angulos_registrados
             FROM vista_usuarios
             ORDER BY apellido_paterno, nombre
         """)
@@ -438,7 +409,7 @@ def obtener_usuario(usuario_id: int) -> dict | None:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, nombre, apellido_paterno, apellido_materno,
-               numero_cuenta, correo, rol, registrado_por, fecha_registro
+               numero_cuenta, rol, registrado_por, fecha_registro
         FROM usuarios WHERE id = ?
     """, (usuario_id,))
     row = cursor.fetchone()
@@ -446,7 +417,7 @@ def obtener_usuario(usuario_id: int) -> dict | None:
     if not row:
         return None
     keys = ("id","nombre","apellido_paterno","apellido_materno",
-            "numero_cuenta","correo","rol","registrado_por","fecha_registro")
+            "numero_cuenta","rol","registrado_por","fecha_registro")
     return dict(zip(keys, row))
 
 
