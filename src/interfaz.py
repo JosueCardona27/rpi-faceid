@@ -766,7 +766,8 @@ class App(tk.Tk):
 
         self._start_cam()
         self.cam_running = True
-        self._ultima_cara_t = time.time()   # timestamp ultima deteccion
+        self._ultima_cara_t = time.time()
+        self._angulo_actual  = None          # angulo estable actual
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
@@ -882,31 +883,59 @@ class App(tk.Tk):
     def _monitor_cara(self):
         """
         Monitor continuo durante la pantalla de acceso.
-        Si no se detecta cara por TIMEOUT_SIN_CARA segundos:
-          - Resetea la pantalla a estado inicial
-          - Cancela cualquier resultado anterior
-          - Fuerza un nuevo ciclo de verificacion
-        Evita que el resultado de una persona quede en pantalla
-        cuando ya se fue y apareció otra persona.
+
+        - Sin cara por 1.5s          → resetea pantalla.
+        - Angulo cambia y se mantiene estable 0.7s → re-escanea.
+          Ejemplos que disparan re-scan:
+            frontal    → perfil_der
+            frontal    → perfil_izq
+            perfil_der → frontal
+            perfil_izq → frontal
+            perfil_der → perfil_izq  (y viceversa)
         """
-        TIMEOUT_SIN_CARA = 1.5   # segundos sin cara para resetear
-        ultimo_vector    = -1
+        TIMEOUT_SIN_CARA   = 1.5   # s sin cara → resetear
+        TIEMPO_ESTABLE     = 0.7   # s que debe mantenerse el nuevo angulo
+
+        angulo_confirmado  = None  # ultimo angulo que disparo un escaneo
+        angulo_candidato   = None  # angulo que se esta evaluando ahora
+        t_candidato        = None  # cuando empezó el angulo candidato
 
         while self.cam_running:
             with self._analisis_lock:
-                frame_id = self._analisis["frame_id"]
-                v        = self._analisis["vector"]
+                v    = self._analisis["vector"]
+                tipo = self._analisis["tipo"]
 
             if v is not None:
                 self._ultima_cara_t = time.time()
-                ultimo_vector       = frame_id
+
+                # ── Seguimiento de cambio de angulo ───────────────────────
+                if tipo != angulo_candidato:
+                    # El angulo cambió — empezar a medir cuánto se mantiene
+                    angulo_candidato = tipo
+                    t_candidato      = time.time()
+
+                else:
+                    # El angulo lleva un rato estable — ver si ya pasó el umbral
+                    estable_hace = time.time() - t_candidato
+                    if (estable_hace >= TIEMPO_ESTABLE
+                            and angulo_candidato != angulo_confirmado
+                            and not self.verificando):
+                        # Angulo nuevo estabilizado → re-escanear
+                        angulo_confirmado = angulo_candidato
+                        t_candidato       = time.time()  # reset para no disparar de nuevo
+                        self.after(0, self._resetear_pantalla_acceso)
+                        self.after(150, self._lanzar_verificacion)
+
             else:
+                # Sin cara — resetear contadores
                 sin_cara = time.time() - self._ultima_cara_t
                 if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
-                    # No hay cara — limpiar pantalla
+                    angulo_confirmado = None
+                    angulo_candidato  = None
+                    t_candidato       = None
                     self.after(0, self._resetear_pantalla_acceso)
 
-            time.sleep(0.15)
+            time.sleep(0.10)
 
     def _resetear_pantalla_acceso(self):
         """Limpia la pantalla de acceso al estado inicial de espera."""
