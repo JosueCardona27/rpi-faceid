@@ -59,18 +59,18 @@ HAAR_PATH = None
 # ── Pasos de registro ─────────────────────────────────────────────────────────
 PASOS_REGISTRO = [
     (0, "●", "Mira directo a la camara",
-     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
     (1, "◀", "Gira tu cabeza a la DERECHA",
-     "DERECHA",   10.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
+     "DERECHA",   6.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
     (2, "▶", "Gira tu cabeza a la IZQUIERDA",
-     "IZQUIERDA", 10.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
+     "IZQUIERDA", 6.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
     (3, "●", "Vuelve al frente",
-     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS           = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 44 s
-MAX_MUESTRAS_PASO = 50
-MUESTRAS_MIN_PASO = 10  # minimo para que un paso sea valido
+TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 24 s
+MAX_MUESTRAS_PASO = 20
+MUESTRAS_MIN_PASO = 5   # minimo para que un paso sea valido
 
 
 def _imgtk(frame, max_w, max_h):
@@ -827,7 +827,7 @@ class App(tk.Tk):
             return
 
         v_final   = np.mean(vectores, axis=0).astype(np.float32)
-        resultado = reconocer_persona(v_final)
+        resultado = reconocer_persona(v_final, angulo_nuevo="frontal")
 
         if resultado is None:
             # None = sin registros O persona desconocida (distancia > UMBRAL_RECHAZO)
