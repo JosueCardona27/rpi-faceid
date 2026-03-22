@@ -766,8 +766,7 @@ class App(tk.Tk):
 
         self._start_cam()
         self.cam_running = True
-        self._ultima_cara_t = time.time()
-        self._angulo_actual  = None          # angulo estable actual
+        self._ultima_cara_t = time.time()   # timestamp ultima deteccion
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
@@ -882,23 +881,17 @@ class App(tk.Tk):
 
     def _monitor_cara(self):
         """
-        Monitor continuo durante la pantalla de acceso.
-
-        - Sin cara por 1.5s          → resetea pantalla.
-        - Angulo cambia y se mantiene estable 0.7s → re-escanea.
-          Ejemplos que disparan re-scan:
-            frontal    → perfil_der
-            frontal    → perfil_izq
-            perfil_der → frontal
-            perfil_izq → frontal
-            perfil_der → perfil_izq  (y viceversa)
+        Re-escanea SOLO cuando el angulo detectado cambia de forma consistente.
+        Requiere FRAMES_CONFIRMACION frames consecutivos con el mismo angulo
+        nuevo antes de disparar — equivale a lo que ya muestra el overlay.
+        Sin cara por 1.5s → resetea pantalla.
         """
-        TIMEOUT_SIN_CARA   = 1.5   # s sin cara → resetear
-        TIEMPO_ESTABLE     = 0.7   # s que debe mantenerse el nuevo angulo
+        TIMEOUT_SIN_CARA    = 1.5
+        FRAMES_CONFIRMACION = 10   # frames consecutivos para confirmar cambio
 
-        angulo_confirmado  = None  # ultimo angulo que disparo un escaneo
-        angulo_candidato   = None  # angulo que se esta evaluando ahora
-        t_candidato        = None  # cuando empezó el angulo candidato
+        angulo_confirmado = None   # angulo que disparo el ultimo escaneo
+        angulo_candidato  = None   # angulo que se esta contando
+        contador          = 0
 
         while self.cam_running:
             with self._analisis_lock:
@@ -908,31 +901,28 @@ class App(tk.Tk):
             if v is not None:
                 self._ultima_cara_t = time.time()
 
-                # ── Seguimiento de cambio de angulo ───────────────────────
-                if tipo != angulo_candidato:
-                    # El angulo cambió — empezar a medir cuánto se mantiene
-                    angulo_candidato = tipo
-                    t_candidato      = time.time()
-
+                if tipo == angulo_candidato:
+                    contador += 1
                 else:
-                    # El angulo lleva un rato estable — ver si ya pasó el umbral
-                    estable_hace = time.time() - t_candidato
-                    if (estable_hace >= TIEMPO_ESTABLE
-                            and angulo_candidato != angulo_confirmado
-                            and not self.verificando):
-                        # Angulo nuevo estabilizado → re-escanear
-                        angulo_confirmado = angulo_candidato
-                        t_candidato       = time.time()  # reset para no disparar de nuevo
-                        self.after(0, self._resetear_pantalla_acceso)
-                        self.after(150, self._lanzar_verificacion)
+                    # Cambio de angulo — reiniciar contador
+                    angulo_candidato = tipo
+                    contador         = 1
+
+                # Solo dispara si el angulo es NUEVO y ya lleva suficientes frames
+                if (contador >= FRAMES_CONFIRMACION
+                        and angulo_candidato != angulo_confirmado
+                        and not self.verificando):
+                    angulo_confirmado = angulo_candidato
+                    contador          = 0
+                    self.after(0, self._resetear_pantalla_acceso)
+                    self.after(150, self._lanzar_verificacion)
 
             else:
-                # Sin cara — resetear contadores
                 sin_cara = time.time() - self._ultima_cara_t
                 if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
                     angulo_confirmado = None
                     angulo_candidato  = None
-                    t_candidato       = None
+                    contador          = 0
                     self.after(0, self._resetear_pantalla_acceso)
 
             time.sleep(0.10)
