@@ -38,7 +38,7 @@ DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 #  CONSTANTES — ajustar aqui si cambia el hardware o iluminacion
 # =============================================================================
 UMBRAL           = 0.55   # dist <= UMBRAL  → acceso PERMITIDO
-RECHAZO          = 0.58   # dist >  RECHAZO → DESCONOCIDO
+RECHAZO          = 0.80   # dist >  RECHAZO → DESCONOCIDO
 GAP_MIN          = 0.05   # diferencia minima entre 1° y 2° candidato
 MAX_DIST         = 1.0    # referencia para calcular porcentaje de similitud
 UMBRAL_DUPLICADO = 0.20   # dist <= esto en registro → misma persona, bloquear
@@ -461,11 +461,10 @@ def guardar_vectores_por_angulo(usuario_id: int,
 
         cursor.execute("""
             INSERT OR REPLACE INTO vectores_por_angulo
-                (usuario_id, angulo, vector, dimensiones, n_muestras)
-            VALUES (?, ?, ?, ?, ?)
+                (usuario_id, angulo, vector, n_muestras)
+            VALUES (?, ?, ?, ?)
         """, (usuario_id, angulo,
               json.dumps(v_prom.tolist()),
-              VECTOR_DIM,
               len(vecs)))
 
         print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
@@ -523,20 +522,17 @@ def cargar_vectores_por_angulo(excluir_id: int = None) -> list:
                 u.rol,
                 va.angulo,
                 va.vector,
-                va.n_muestras,
-                va.dimensiones
+                va.n_muestras
             FROM vectores_por_angulo va
             JOIN usuarios u ON u.id = va.usuario_id
             ORDER BY u.id, va.angulo
         """)
-        for uid, nombre, cuenta, rol, angulo, vjson, n, dims in cursor.fetchall():
+        for uid, nombre, cuenta, rol, angulo, vjson, n in cursor.fetchall():
             if excluir_id is not None and uid == excluir_id:
                 continue
-            if dims != VECTOR_DIM:
-                print(f"[DB] SKIP ID={uid} angulo={angulo}: "
-                      f"{dims} dims != {VECTOR_DIM}")
-                continue
             v = np.array(json.loads(vjson), dtype=np.float32)
+            if len(v) != VECTOR_DIM:
+                continue
             resultado.append({
                 "usuario_id":    uid,
                 "nombre":        nombre.strip(),
@@ -576,16 +572,10 @@ def reconocer_persona(
     if not registros:
         return None
 
-    # Filtrar por angulo; si no hay, usar frontal como fallback
-    por_angulo = [r for r in registros if r["angulo"] == angulo_nuevo]
-    if not por_angulo:
-        por_angulo = [r for r in registros if r["angulo"] == "frontal"]
-    if not por_angulo:
-        return None
-
-    # Distancia minima por usuario
+    # Calcular la distancia minima por USUARIO (usando todos sus angulos)
+    # Asi un usuario con 3 angulos sigue siendo UN candidato, no tres
     distancias: dict[int, dict] = {}
-    for reg in por_angulo:
+    for reg in registros:
         uid  = reg["usuario_id"]
         dist = round(float(distancia_chi2(vector_nuevo, reg["vector"])), 4)
         if uid not in distancias or dist < distancias[uid]["distancia"]:
@@ -615,7 +605,8 @@ def reconocer_persona(
               f"dist={mejor['distancia']:.4f} > RECHAZO={RECHAZO}")
         return None
 
-    # Validacion de margen
+    # GAP solo aplica cuando hay mas de un USUARIO diferente
+    # (no entre angulos del mismo usuario)
     if len(ordenados) >= 2:
         gap = round(ordenados[1]["distancia"] - mejor["distancia"], 4)
         if gap < GAP_MIN:

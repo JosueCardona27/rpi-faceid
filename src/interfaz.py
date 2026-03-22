@@ -59,18 +59,18 @@ HAAR_PATH = None
 # ── Pasos de registro ─────────────────────────────────────────────────────────
 PASOS_REGISTRO = [
     (0, "●", "Mira directo a la camara",
-     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
     (1, "◀", "Gira tu cabeza a la DERECHA",
-     "DERECHA",   6.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
+     "DERECHA",   10.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
     (2, "▶", "Gira tu cabeza a la IZQUIERDA",
-     "IZQUIERDA", 6.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
+     "IZQUIERDA", 10.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
     (3, "●", "Vuelve al frente",
-     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS           = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 24 s
-MAX_MUESTRAS_PASO = 20
-MUESTRAS_MIN_PASO = 5   # minimo para que un paso sea valido
+TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 44 s
+MAX_MUESTRAS_PASO = 50
+MUESTRAS_MIN_PASO = 10  # minimo para que un paso sea valido
 
 
 def _imgtk(frame, max_w, max_h):
@@ -881,50 +881,52 @@ class App(tk.Tk):
 
     def _monitor_cara(self):
         """
-        Re-escanea solo cuando el angulo cambia de forma SOSTENIDA.
-        Recoge lecturas cada 0.15s y solo dispara si las ultimas
-        VENTANA lecturas son TODAS el mismo angulo nuevo.
-        Un movimiento rapido o de paso interrumpe la ventana y reinicia.
-        Sin cara por 1.5s → resetea pantalla.
+        Re-escanea SOLO cuando la cara desaparece y vuelve a aparecer.
+        Eso cubre: alejarse de la camara, salirse del encuadre,
+        o que otra persona se ponga frente a la camara.
+        Movimientos normales mientras la cara sigue detectada no disparan nada.
         """
-        TIMEOUT_SIN_CARA = 1.5
-        VENTANA          = 15   # lecturas consecutivas identicas requeridas
-                                # 15 x 0.15s = ~2.25 segundos sostenidos
+        TIMEOUT_SIN_CARA  = 1.5   # s sin cara → limpiar pantalla
+        FRAMES_REAPARECE  = 5     # frames seguidos con cara para confirmar reaparicion
+        COOLDOWN          = 4.0   # s minimos entre re-scans
 
-        angulo_confirmado = None
-        historial         = []   # ultimas lecturas de tipo
+        cara_presente     = False
+        contador_reaparece = 0
+        t_ultimo_scan     = 0.0
 
         while self.cam_running:
             with self._analisis_lock:
-                v    = self._analisis["vector"]
-                tipo = self._analisis["tipo"]
+                v = self._analisis["vector"]
+
+            cooldown_ok = (time.time() - t_ultimo_scan) >= COOLDOWN
 
             if v is not None:
                 self._ultima_cara_t = time.time()
 
-                historial.append(tipo)
-                if len(historial) > VENTANA:
-                    historial.pop(0)
-
-                # Disparar solo si TODOS los valores del historial son iguales
-                # y distintos al angulo que ya confirmamos
-                if (len(historial) == VENTANA
-                        and len(set(historial)) == 1
-                        and historial[0] != angulo_confirmado
-                        and not self.verificando):
-                    angulo_confirmado = historial[0]
-                    historial.clear()
-                    self.after(0, self._resetear_pantalla_acceso)
-                    self.after(150, self._lanzar_verificacion)
+                if not cara_presente:
+                    # Cara acaba de aparecer — contar frames para confirmar
+                    contador_reaparece += 1
+                    if contador_reaparece >= FRAMES_REAPARECE:
+                        cara_presente      = True
+                        contador_reaparece = 0
+                        if not self.verificando and cooldown_ok:
+                            t_ultimo_scan = time.time()
+                            self.after(0, self._resetear_pantalla_acceso)
+                            self.after(150, self._lanzar_verificacion)
+                # Si cara_presente ya es True, no hacer nada — cara sigue ahi
 
             else:
+                # Sin cara
+                contador_reaparece = 0
                 sin_cara = time.time() - self._ultima_cara_t
-                if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
-                    angulo_confirmado = None
-                    historial.clear()
-                    self.after(0, self._resetear_pantalla_acceso)
 
-            time.sleep(0.15)
+                if sin_cara >= TIMEOUT_SIN_CARA:
+                    if cara_presente:
+                        cara_presente = False
+                    if not self.verificando:
+                        self.after(0, self._resetear_pantalla_acceso)
+
+            time.sleep(0.12)
 
     def _resetear_pantalla_acceso(self):
         """Limpia la pantalla de acceso al estado inicial de espera."""
