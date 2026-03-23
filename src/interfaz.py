@@ -1,4 +1,6 @@
 """
+interfaz.py
+===========
 Interfaz grafica del sistema de acceso facial.
 Pantalla tactil 7" 1024x600.
 
@@ -7,7 +9,7 @@ Formulario de registro:
   - Admin/Maestro:  correo + contrasena (minimo 6 caracteres)
   - Estudiante:     grado (1-20) + grupo (A-Z)
 
-Login del panel de registro: mediante login.html (correo + contraseña)
+v5.5  |  4 pasos  |  MobileFaceNet 512 dims
 """
 
 import tkinter as tk
@@ -62,25 +64,27 @@ COLOR_ROL = {"estudiante": ACCENT, "maestro": WARNING, "admin": DANGER}
 W, H    = 1024, 600
 PANEL_W = 320
 CAM_W   = W - PANEL_W
-HAAR_PATH = None
 
-PASOS_REGISTRO = [
-    (0, "●", "Mira directo a la camara",
-     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
-    (1, "▶", "Gira tu cabeza a la IZQUIERDA",
-     "IZQUIERDA", 6.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu izquierda"),
-    (2, "◀", "Gira tu cabeza a la DERECHA",
-     "DERECHA",   6.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu derecha"),
-    (3, "●", "Vuelve al frente",
-     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
-]
-N_PASOS           = len(PASOS_REGISTRO)
-TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)
-MAX_MUESTRAS_PASO = 20
-MUESTRAS_MIN_PASO = 5
+HAAR_PATH = None
 
 GRADOS = [str(i) for i in range(1, 21)]
 GRUPOS = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+
+# ── Pasos de registro ─────────────────────────────────────────────────────────
+PASOS_REGISTRO = [
+    (0, "●", "Mira directo a la camara",
+     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+    (1, "◀", "Gira tu cabeza a la IZQUIERDA",
+     "IZQUIERDA", 10.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu izquierda"),
+    (2, "▶", "Gira tu cabeza a la DERECHA",
+     "DERECHA",   10.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu derecha"),
+    (3, "●", "Vuelve al frente",
+     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+]
+N_PASOS           = len(PASOS_REGISTRO)
+TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)
+MAX_MUESTRAS_PASO = 50
+MUESTRAS_MIN_PASO = 10
 
 
 def _imgtk(frame, max_w, max_h):
@@ -114,8 +118,9 @@ class App(tk.Tk):
 
         self._frame_actual = None
         self._frame_lock   = threading.Lock()
-        self._analisis     = {"vector": None, "coords": None,
-                              "frame_id": -1, "tipo": None}
+
+        self._analisis = {"vector": None, "coords": None,
+                          "frame_id": -1, "tipo": None}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
         self._tipo_esperado  = None
@@ -137,6 +142,7 @@ class App(tk.Tk):
 
         self._ov_color = None
         self._ov_texto = ""
+        self._modo_acceso = False
         self._ov_lock  = threading.Lock()
 
         self._build_main()
@@ -168,6 +174,7 @@ class App(tk.Tk):
     def _volver(self):
         self._stop_cam()
         self._usuario_login = None
+        self._modo_acceso   = False
         self._build_main()
 
     def _set_overlay(self, color, texto=""):
@@ -208,23 +215,40 @@ class App(tk.Tk):
             if raw is None:
                 time.sleep(0.03)
                 continue
+
             frame = cv2.flip(raw, 1)
             with self._frame_lock:
                 self._frame_actual = frame
+
             with self._analisis_lock:
                 coords = self._analisis["coords"]
                 vector = self._analisis["vector"]
                 tipo   = self._analisis["tipo"]
+
             with self._ov_lock:
                 ov_color = self._ov_color
                 ov_texto = self._ov_texto
+
             vis = frame.copy()
             if coords:
-                c = ov_color if ov_color else (
-                    (0, 212, 255) if vector is not None else (80, 80, 80))
-                t = ov_texto if ov_texto else (
-                    "Detectado" if vector is not None else "Buscando...")
-                vis = dibujar_overlay(vis, coords, c, t, tipo=tipo)
+                if self._modo_acceso:
+                    if ov_color:
+                        c = ov_color
+                    elif vector is not None and tipo == TIPO_FRONTAL:
+                        c = (0, 212, 255)
+                    elif vector is not None:
+                        c = (255, 184, 48)
+                    else:
+                        c = (80, 80, 80)
+                    t = ov_texto if ov_texto else ""
+                    vis = dibujar_overlay(vis, coords, c, t, tipo=None)
+                else:
+                    c = ov_color if ov_color else (
+                        (0, 212, 255) if vector is not None else (80, 80, 80))
+                    t = ov_texto if ov_texto else (
+                        "Detectado" if vector is not None else "Buscando...")
+                    vis = dibujar_overlay(vis, coords, c, t, tipo=tipo)
+
             imgtk = _imgtk(vis, max_w, max_h)
             self.after(0, self._mostrar_frame, imgtk)
             time.sleep(0.033)
@@ -244,14 +268,17 @@ class App(tk.Tk):
             with self._frame_lock:
                 frame    = self._frame_actual
                 frame_id = id(frame) if frame is not None else -1
+
             if frame is None or frame_id == ultimo_id:
                 time.sleep(0.02)
                 continue
+
             ultimo_id = frame_id
             vector, coords, tipo = extraer_caracteristicas(
                 frame, HAAR_PATH,
                 modo=self._modo_deteccion,
                 tipo_esperado=self._tipo_esperado)
+
             with self._analisis_lock:
                 self._analisis["vector"]   = vector
                 self._analisis["coords"]   = coords
@@ -268,6 +295,8 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_main(self):
         self._clear()
+        self.geometry(f"{W}x{H}+0+0")
+
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
         cv.place(x=0, y=0)
         cv.create_rectangle(0, 0, W, 3, fill=ACCENT, outline="")
@@ -284,14 +313,18 @@ class App(tk.Tk):
                  ).place(x=W//2, y=TY, anchor="center")
         SY = TY + 22
         modo_txt = "Raspberry Pi" if USAR_PICAM else "Webcam"
-        tk.Label(self, text=f"LBP 512 dims  |  4 pasos  |  {modo_txt}",
+        tk.Label(self,
+                 text=f"MobileFaceNet 512 dims  |  4 pasos  |  {modo_txt}",
                  font=self.f_sub, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=SY, anchor="center")
 
         LY = SY + 16
         cv.create_line(W//2-280, LY, W//2+280, LY, fill=BORDER, width=1)
-        CY = LY + 16; CW, CH = 230, 180; GAP = 40
-        CX1 = W//2 - (CW*2+GAP)//2; CX2 = CX1 + CW + GAP
+
+        CY = LY + 16
+        CW, CH = 230, 180; GAP = 40
+        CX1 = W//2 - (CW*2+GAP)//2
+        CX2 = CX1 + CW + GAP
 
         self._card_btn(cv, CX1, CY, CW, CH, "REGISTRAR",
                        "Iniciar sesion en el\npanel de registro",
@@ -302,7 +335,7 @@ class App(tk.Tk):
 
         cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
         tk.Label(self,
-                 text=f"v4.0  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
+                 text=f"v5.5  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
                       f"max {MAX_MUESTRAS_PASO} muestras/paso  |  {modo_txt}",
                  font=self.f_zona, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=H-13, anchor="center")
@@ -314,9 +347,9 @@ class App(tk.Tk):
         fr = tk.Frame(self, bg=CARD, width=w, height=h)
         fr.place(x=x, y=y)
         tk.Label(fr, text=titulo, font=self.f_btn,   fg=color,  bg=CARD
-                 ).place(relx=.5, y=30, anchor="center")
+                 ).place(relx=.5, y=30,  anchor="center")
         tk.Label(fr, text=desc,   font=self.f_label, fg=SUBTEXT, bg=CARD,
-                 justify="center").place(relx=.5, y=76, anchor="center")
+                 justify="center").place(relx=.5, y=76,  anchor="center")
         btn = tk.Button(fr, text="INICIAR  ->", font=self.f_status,
                         fg=BG, bg=color, relief="flat", cursor="hand2",
                         command=cmd, padx=14, pady=5)
@@ -325,32 +358,35 @@ class App(tk.Tk):
         btn.bind("<Leave>", lambda e,b=btn,c=color: b.config(bg=c))
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  PANTALLA REGISTRO (formulario completo)
+    #  PANTALLA REGISTRO
     # ══════════════════════════════════════════════════════════════════════════
     def _show_registro(self):
         self._clear()
+        self.geometry(f"{W}x{H}+0+0")
         self._set_overlay(None, "")
 
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
         left.place(x=0, y=0)
         tk.Frame(left, bg=ACCENT, width=PANEL_W, height=3).place(x=0, y=0)
         tk.Label(left, text="REGISTRO",
-                 font=self.f_title, fg=ACCENT, bg=PANEL).place(x=18, y=8)
+                 font=self.f_title, fg=ACCENT,  bg=PANEL).place(x=18, y=8)
         tk.Label(left, text="Nuevo usuario",
-                 font=self.f_sub, fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
+                 font=self.f_sub,   fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
 
-        # ── Campos fijos para todos ───────────────────────────────────────────
-        self._field(left, "Nombre(s)",                   self.nombre_var,  58)
-        self._field(left, "Apellido paterno",             self.ap_pat_var,  94)
-        self._field(left, "Apellido materno",             self.ap_mat_var, 130)
-        self._field(left, "Numero de cuenta (8 digitos)", self.cuenta_var, 166)
+        # ── Campos fijos para todos (con más espacio entre ellos) ──
+        # Aumenté la separación vertical de 36 a 42 píxeles
+        self._field(left, "Nombre(s)",                   self.nombre_var,  56)
+        self._field(left, "Apellido paterno",             self.ap_pat_var,  96)  # +40
+        self._field(left, "Apellido materno",             self.ap_mat_var, 136)  # +40
+        self._field(left, "Numero de cuenta (8 digitos)", self.cuenta_var, 176)  # +40
 
-        # ── Rol ───────────────────────────────────────────────────────────────
+        # ── Rol (más espacio) ──
+        # Movido de 204 a 214
         tk.Label(left, text="Rol", font=self.f_label,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=204)
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=210)
         rf = tk.Frame(left, bg=PANEL)
-        rf.place(x=18, y=216, width=284)
+        rf.place(x=18, y=222, width=284)  # +12 desde el label
         for i, rol in enumerate(ROLES_VALIDOS):
             c = COLOR_ROL.get(rol, ACCENT)
             tk.Radiobutton(rf, text=rol.capitalize(),
@@ -361,9 +397,10 @@ class App(tk.Tk):
                            command=self._actualizar_campos_rol
                            ).grid(row=0, column=i, padx=8)
 
-        # ── Zona condicional (y=238, h=50 fijos — nunca se mueven los elementos de abajo)
-        self._frame_cond = tk.Frame(left, bg=PANEL, width=284, height=50)
-        self._frame_cond.place(x=18, y=238)
+        # ── Zona condicional (más espacio vertical) ──
+        # Antes: y=238, height=50. Ahora: y=250, height=60
+        self._frame_cond = tk.Frame(left, bg=PANEL, width=284, height=60)
+        self._frame_cond.place(x=18, y=250)
         self._frame_cond.pack_propagate(False)
 
         # Widgets para admin/maestro
@@ -404,19 +441,21 @@ class App(tk.Tk):
         # Mostrar segun rol inicial
         self._actualizar_campos_rol()
 
-        # ── Separador fijo ────────────────────────────────────────────────────
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=296)
+        # ── Separador (más abajo) ──
+        # Antes: y=296, ahora: y=316
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=316)
 
-        # ── Pasos de escaneo ──────────────────────────────────────────────────
+        # ── Indicadores de los 4 pasos (ajustados) ──
+        # Antes: y=302, ahora: y=322
         tk.Label(left, text="PASOS DE ESCANEO:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=302)
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=322)
 
         self._paso_frames = []
         paso_w = 56
         for i, (_, icono, _, etiq, _, _, _, _) in enumerate(PASOS_REGISTRO):
             fx = 18 + i * (paso_w + 6)
             pf = tk.Frame(left, bg=BORDER, width=paso_w, height=48)
-            pf.place(x=fx, y=314)
+            pf.place(x=fx, y=334)  # +12 desde el label
             li = tk.Label(pf, text=str(i+1), font=self.f_btn,
                           fg=SUBTEXT, bg=BORDER)
             li.place(relx=.5, y=10, anchor="center")
@@ -433,66 +472,68 @@ class App(tk.Tk):
         tk.Label(left, textvariable=self.paso_desc_var,
                  font=self.f_label, fg=ACCENT, bg=PANEL,
                  wraplength=284, justify="center"
-                 ).place(x=18, y=370, width=284)
+                 ).place(x=18, y=390, width=284)  # Ajustado desde 370
 
         self.cap_btn = tk.Button(
             left, text="INICIAR ESCANEO", font=self.f_btn,
             fg=BG, bg=ACCENT, relief="flat", cursor="hand2",
             padx=8, pady=6, command=self._iniciar_registro)
-        self.cap_btn.place(x=18, y=392, width=284)
+        self.cap_btn.place(x=18, y=412, width=284)  # Ajustado desde 392
         self.cap_btn.bind("<Enter>",
                           lambda e: self.cap_btn.config(bg=self._lighten(ACCENT)))
         self.cap_btn.bind("<Leave>",
                           lambda e: self.cap_btn.config(bg=ACCENT))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=430)
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=450)  # Ajustado desde 430
 
-        # ── Barras de muestras ────────────────────────────────────────────────
+        # ── Barras de muestras (ajustadas) ──
         tk.Label(left, text="MUESTRAS POR PASO:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=436)
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=456)  # Ajustado desde 436
 
         self._barra_pasos = []
         barra_w = 56
-        for i, etiq in enumerate(["Frente","Derecha","Izquierda","Frente"]):
+        for i, etiq in enumerate(["Frente", "Izquierda", "Derecha", "Frente"]):
             fx = 18 + i * (barra_w + 6)
             tk.Label(left, text=etiq[:5], font=self.f_zona,
-                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=450)
+                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=470)  # Ajustado desde 450
             bg_b = tk.Frame(left, bg=BORDER, width=barra_w, height=8)
-            bg_b.place(x=fx, y=462)
+            bg_b.place(x=fx, y=482)  # Ajustado desde 462
             bar = tk.Frame(bg_b, bg=BORDER, width=0, height=8)
             bar.place(x=0, y=0)
             lbl = tk.Label(left, text="0", font=self.f_zona,
                            fg=SUBTEXT, bg=PANEL)
-            lbl.place(x=fx + barra_w//2, y=472, anchor="center")
+            lbl.place(x=fx + barra_w//2, y=492, anchor="center")  # Ajustado desde 472
             self._barra_pasos.append((bar, lbl, barra_w))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=482)
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=502)  # Ajustado desde 482
 
         self.progreso_var = tk.StringVar(value="")
         self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
                                      font=self.f_status, fg=WARNING,
                                      bg=PANEL, justify="center", wraplength=284)
-        self.prog_label.place(x=18, y=488, width=284)
+        self.prog_label.place(x=18, y=508, width=284)  # Ajustado desde 488
 
         self.timer_var    = tk.StringVar(value="")
         self.paso_txt_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.timer_var,
                  font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=526, anchor="nw")
+                 ).place(x=18, y=546, anchor="nw")  # Ajustado desde 526
         tk.Label(left, textvariable=self.paso_txt_var,
                  font=self.f_zona, fg=SUBTEXT, bg=PANEL,
-                 wraplength=160).place(x=62, y=534, anchor="nw")
+                 wraplength=160).place(x=62, y=554, anchor="nw")  # Ajustado desde 534
 
         tk.Button(left, text="<  Volver", font=self.f_label,
                   fg=SUBTEXT, bg=PANEL, relief="flat",
-                  cursor="hand2", command=self._volver).place(x=18, y=565)
+                  cursor="hand2", command=self._volver).place(x=18, y=570)  # Ajustado desde 565
 
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
         self.cam_label = tk.Label(right, bg="#080A0F")
         self.cam_label.place(x=8, y=5, width=CAM_W-16, height=H-46)
+
         tk.Label(right, textvariable=self.status_var,
                  font=self.f_status, fg=ACCENT, bg=BG).place(x=8, y=H-36)
+
         self.prog_frame = tk.Frame(right, bg=BORDER, width=CAM_W-16, height=8)
         self.prog_frame.place(x=8, y=H-18)
         self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=8)
@@ -509,9 +550,8 @@ class App(tk.Tk):
         """
         Muestra correo+contrasena para admin/maestro,
         o grado+grupo para estudiante.
-        El frame contenedor siempre ocupa 50px — nada se desplaza.
+        El frame contenedor ahora tiene 60px de altura para mejor espaciado.
         """
-        # Ocultar todo primero
         for w in (self._lbl_correo, self._ent_correo,
                   self._lbl_pwd,    self._ent_pwd,
                   self._lbl_grado,  self._om_grado,
@@ -521,15 +561,16 @@ class App(tk.Tk):
 
         rol = self.rol_var.get()
         if rol in ("admin", "maestro"):
-            self._lbl_correo.place(x=0,   y=0)
-            self._ent_correo.place(x=0,   y=13, width=136, height=22)
-            self._lbl_pwd.place(  x=148,  y=0)
-            self._ent_pwd.place(  x=148,  y=13, width=136, height=22)
+            # Más espacio vertical dentro del frame condicional
+            self._lbl_correo.place(x=0,   y=5)   # Centrado verticalmente
+            self._ent_correo.place(x=0,   y=22, width=136, height=24)
+            self._lbl_pwd.place(  x=148, y=5)
+            self._ent_pwd.place(  x=148, y=22, width=136, height=24)
         else:  # estudiante
-            self._lbl_grado.place(x=0,  y=0)
-            self._om_grado.place( x=0,  y=13, width=68, height=22)
-            self._lbl_grupo.place(x=88, y=0)
-            self._om_grupo.place( x=88, y=13, width=68, height=22)
+            self._lbl_grado.place(x=0,   y=5)
+            self._om_grado.place( x=0,   y=22, width=70, height=24)
+            self._lbl_grupo.place(x=90,  y=5)
+            self._om_grupo.place( x=90,  y=22, width=70, height=24)
 
     def _field(self, parent, label, var, y, show=None):
         tk.Label(parent, text=label, font=self.f_label,
@@ -541,7 +582,7 @@ class App(tk.Tk):
         if show:
             kw["show"] = show
         tk.Entry(parent, textvariable=var, **kw
-                 ).place(x=18, y=y+13, width=284, height=22)
+                 ).place(x=18, y=y+16, width=284, height=24)  # Más altura (24 en lugar de 22)
 
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
         if not hasattr(self, "_paso_frames") or not self.cam_running:
@@ -636,8 +677,7 @@ class App(tk.Tk):
             ok, msg = validar_grupo(grupo)
             if not ok: return err(msg)
 
-        self.cap_btn.config(state="disabled", bg=BORDER,
-                            text="Escaneando...")
+        self.cap_btn.config(state="disabled", bg=BORDER, text="Escaneando...")
         self.progreso_var.set("Preparando...")
         self.prog_label.config(fg=WARNING)
         self.timer_var.set("")
@@ -659,8 +699,8 @@ class App(tk.Tk):
             apellido_paterno=ap_pat,
             apellido_materno=ap_mat,
             numero_cuenta=cuenta,
-            correo=correo if rol in ("admin","maestro") else None,
-            contrasena=pwd if rol in ("admin","maestro") else None,
+            correo=correo if rol in ("admin", "maestro") else None,
+            contrasena=pwd if rol in ("admin", "maestro") else None,
             rol=rol,
             grado=int(grado) if rol == "estudiante" else None,
             grupo=grupo.upper() if rol == "estudiante" else None,
@@ -773,6 +813,7 @@ class App(tk.Tk):
 
                 time.sleep(0.04)
 
+            # Verificacion anti-duplicado al terminar cada paso
             if self.cam_running and \
                     n_muestras_paso[paso_idx] >= MUESTRAS_MIN_PASO:
                 snapshot = {
@@ -870,7 +911,9 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _show_acceso(self):
         self._clear()
+        self.geometry(f"{W}x{H}+0+0")
         self.verificando = False
+        self._modo_acceso = True
         self._set_overlay(None, "")
 
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
@@ -878,20 +921,15 @@ class App(tk.Tk):
         tk.Frame(left, bg=SUCCESS, width=PANEL_W, height=3).place(x=0, y=0)
         tk.Label(left, text="ACCESO", font=self.f_title,
                  fg=SUCCESS, bg=PANEL).place(x=18, y=8)
-        tk.Label(left, text="Verificacion de identidad",
-                 font=self.f_sub, fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
+        tk.Label(left, text="Verificacion de identidad", font=self.f_sub,
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
 
-        tk.Label(left,
-                 text=("Mira directo a la camara.\n\n"
-                       "Funciona con:\n"
-                       "  - Lentes\n"
-                       "  - Cubrebocas\n"
-                       "  - Gorra\n\n"
-                       "El mejor angulo registrado\n"
-                       "se usa para identificarte."),
-                 font=self.f_label, fg=SUBTEXT, bg=PANEL,
-                 justify="left").place(x=18, y=60)
+        self.posicion_var   = tk.StringVar(value="Mira directo a la camara.")
+        self.posicion_label = tk.Label(left, textvariable=self.posicion_var,
+                 font=self.f_btn, fg=WARNING, bg=PANEL,
+                 wraplength=284, justify="center")
+        self.posicion_label.place(x=18, y=80, width=284)
 
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=228)
 
@@ -941,7 +979,8 @@ class App(tk.Tk):
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
-        threading.Thread(target=self._monitor_cara, daemon=True).start()
+        threading.Thread(target=self._monitor_cara,   daemon=True).start()
+        threading.Thread(target=self._guia_posicion,  daemon=True).start()
         self.after(1800, self._lanzar_verificacion)
 
     def _set_sim_bar(self, pct, color):
@@ -1028,9 +1067,11 @@ class App(tk.Tk):
         self.resultado_label.config(fg=SUCCESS)
         self.candidato_var.set(
             f"{r['nombre']}\n"
-            f"Cuenta: {r['numero_cuenta']}\n"
-            f"Rol: {r.get('rol','---').upper()}\n"
+            f"Cuenta: {r.get('numero_cuenta', '---')}\n"
+            f"Rol: {r.get('rol', '---').upper()}\n"
             f"Similitud: {r['similitud_pct']}%")
+        self.after(0, lambda: self._safe(
+            lambda: self.posicion_label.config(fg=SUCCESS)))
         servo.abrir()
         self.after(4000, self._lanzar_verificacion)
 
@@ -1043,29 +1084,73 @@ class App(tk.Tk):
             f"Similitud: {r['similitud_pct']}%")
         self.after(4000, self._lanzar_verificacion)
 
-    def _monitor_cara(self):
-        TIMEOUT = 1.5; ESTABLE = 0.7
-        angulo_conf = None; angulo_cand = None; t_cand = None
+    def _guia_posicion(self):
+        """Actualiza la instruccion de posicion en tiempo real."""
         while self.cam_running:
             with self._analisis_lock:
-                v = self._analisis["vector"]; tipo = self._analisis["tipo"]
+                v    = self._analisis["vector"]
+                tipo = self._analisis["tipo"]
+            try:
+                if v is None:
+                    self.posicion_var.set("Acercate a la camara")
+                    self.posicion_label.config(fg=WARNING)
+                elif tipo == TIPO_FRONTAL:
+                    self.posicion_var.set("Listo, mira a la camara")
+                    self.posicion_label.config(fg=SUCCESS)
+                elif tipo == TIPO_PERFIL_D:
+                    self.posicion_var.set(
+                        "Estas volteado a tu Izquierda\nVoltea hacia enfrente")
+                    self.posicion_label.config(fg=WARNING)
+                elif tipo == TIPO_PERFIL_I:
+                    self.posicion_var.set(
+                        "Estas volteado a tu Derecha\nVoltea hacia enfrente")
+                    self.posicion_label.config(fg=WARNING)
+            except Exception:
+                pass
+            time.sleep(0.15)
+
+    def _monitor_cara(self):
+        """
+        Re-escanea SOLO cuando la cara desaparece y vuelve a aparecer.
+        Movimientos normales mientras la cara sigue detectada no disparan nada.
+        """
+        TIMEOUT_SIN_CARA  = 1.5
+        FRAMES_REAPARECE  = 5
+        COOLDOWN          = 4.0
+
+        cara_presente      = False
+        contador_reaparece = 0
+        t_ultimo_scan      = 0.0
+
+        while self.cam_running:
+            with self._analisis_lock:
+                v = self._analisis["vector"]
+
+            cooldown_ok = (time.time() - t_ultimo_scan) >= COOLDOWN
+
             if v is not None:
                 self._ultima_cara_t = time.time()
-                if tipo != angulo_cand:
-                    angulo_cand = tipo; t_cand = time.time()
-                else:
-                    if (time.time() - t_cand >= ESTABLE
-                            and angulo_cand != angulo_conf
-                            and not self.verificando):
-                        angulo_conf = angulo_cand; t_cand = time.time()
-                        self.after(0, self._resetear_pantalla_acceso)
-                        self.after(150, self._lanzar_verificacion)
+
+                if not cara_presente:
+                    contador_reaparece += 1
+                    if contador_reaparece >= FRAMES_REAPARECE:
+                        cara_presente      = True
+                        contador_reaparece = 0
+                        if not self.verificando and cooldown_ok:
+                            t_ultimo_scan = time.time()
+                            self.after(0, self._resetear_pantalla_acceso)
+                            self.after(150, self._lanzar_verificacion)
             else:
-                if (time.time() - self._ultima_cara_t >= TIMEOUT
-                        and not self.verificando):
-                    angulo_conf = angulo_cand = t_cand = None
-                    self.after(0, self._resetear_pantalla_acceso)
-            time.sleep(0.10)
+                contador_reaparece = 0
+                sin_cara = time.time() - self._ultima_cara_t
+
+                if sin_cara >= TIMEOUT_SIN_CARA:
+                    if cara_presente:
+                        cara_presente = False
+                    if not self.verificando:
+                        self.after(0, self._resetear_pantalla_acceso)
+
+            time.sleep(0.12)
 
     def _resetear_pantalla_acceso(self):
         try:
