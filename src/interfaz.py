@@ -1,6 +1,4 @@
 """
-interfaz.py
-===========
 Interfaz grafica del sistema de acceso facial.
 Pantalla tactil 7" 1024x600.
 
@@ -9,7 +7,7 @@ Formulario de registro:
   - Admin/Maestro:  correo + contrasena (minimo 6 caracteres)
   - Estudiante:     grado (1-20) + grupo (A-Z)
 
-Login del panel de registro: mediante login.html (correo + contrasena)
+Login del panel de registro: mediante login.html (correo + contraseña)
 """
 
 import tkinter as tk
@@ -19,6 +17,8 @@ import numpy as np
 import threading
 import time
 from PIL import Image, ImageTk
+
+from vista_login import build_main as _mostrar_login
 
 USAR_PICAM = False
 try:
@@ -141,7 +141,7 @@ class App(tk.Tk):
         self._ov_texto = ""
         self._ov_lock  = threading.Lock()
 
-        self._build_main()
+        self._build_login()
 
     @staticmethod
     def _lighten(hx):
@@ -169,7 +169,7 @@ class App(tk.Tk):
 
     def _volver(self):
         self._stop_cam()
-        self._usuario_login = None
+        self._modo_acceso = False
         self._build_main()
 
     def _set_overlay(self, color, texto=""):
@@ -268,6 +268,9 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA PRINCIPAL
     # ══════════════════════════════════════════════════════════════════════════
+    def _build_login(self):
+        _mostrar_login(self)
+    
     def _build_main(self):
         self._clear()
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
