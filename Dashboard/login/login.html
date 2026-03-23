@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Login - Sistema de Maestros</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    body {
+      height: 100vh;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #e2e8f0;
+    }
+
+    .login-container {
+      background: #1e293b;
+      padding: 40px;
+      border-radius: 16px;
+      width: 320px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      text-align: center;
+    }
+
+    .login-container h2 {
+      margin-bottom: 20px;
+      color: #22c55e;
+    }
+
+    .input-group {
+      margin-bottom: 15px;
+      text-align: left;
+    }
+
+    .input-group label {
+      font-size: 14px;
+      color: #94a3b8;
+    }
+
+    .input-group input {
+      width: 100%;
+      padding: 10px;
+      margin-top: 5px;
+      border: none;
+      border-radius: 8px;
+      background: #0f172a;
+      color: white;
+      outline: none;
+    }
+
+    .input-group input:focus {
+      border: 1px solid #22c55e;
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 10px;
+      background: #22c55e;
+      border: none;
+      border-radius: 8px;
+      color: #0f172a;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: 0.3s;
+    }
+
+    .btn-login:hover {
+      background: #16a34a;
+    }
+
+    .extra {
+      margin-top: 15px;
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    .extra a {
+      color: #22c55e;
+      text-decoration: none;
+    }
+
+    .extra a:hover {
+      text-decoration: underline;
+    }
+
+  </style>
+</head>
+<body>
+
+  <div class="login-container">
+    <h2>LabControl</h2>
+
+    <form>
+      <div class="input-group">
+        <label for="email">Correo institucional</label>
+        <input type="email" id="email" placeholder="ejemplo@escuela.edu">
+      </div>
+
+      <div class="input-group">
+        <label for="password">Contraseña</label>
+        <input type="password" id="password" placeholder="********">
+      </div>
+
+      <button class="btn-login">Iniciar sesión</button>
+    </form>
+
+    <div class="extra">
+      ¿Olvidaste tu contraseña? <a href="#">Recuperar</a>
+    </div>
+  </div>
+
+</body>
+</html>

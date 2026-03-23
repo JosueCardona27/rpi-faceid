@@ -20,8 +20,6 @@ import threading
 import time
 from PIL import Image, ImageTk
 
-from vista_login import build_main as _mostrar_login
-
 USAR_PICAM = False
 try:
     from picamera2 import Picamera2
@@ -32,6 +30,7 @@ except Exception:
     print("[CAM] Modo webcam OpenCV")
 
 from face_engine import (extraer_caracteristicas, dibujar_overlay,
+                          ZONAS_POR_TIPO, ZONAS_FRONTAL,
                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
 from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          guardar_vector_unico, reconocer_persona,
@@ -60,18 +59,18 @@ HAAR_PATH = None
 # ── Pasos de registro ─────────────────────────────────────────────────────────
 PASOS_REGISTRO = [
     (0, "●", "Mira directo a la camara",
-     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
-    (1, "◀", "Gira tu cabeza a la IZQUIERDA",
-     "IZQUIERDA", 10.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu izquierda"),
-    (2, "▶", "Gira tu cabeza a la DERECHA",
-     "DERECHA",   10.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu derecha"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+    (1, "◀", "Gira tu cabeza a la DERECHA",
+     "DERECHA",   6.0, "perfil",  TIPO_PERFIL_D, "Gira mas a tu derecha"),
+    (2, "▶", "Gira tu cabeza a la IZQUIERDA",
+     "IZQUIERDA", 6.0, "perfil",  TIPO_PERFIL_I, "Gira mas a tu izquierda"),
     (3, "●", "Vuelve al frente",
-     "FRENTE",    12.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
+     "FRENTE",    6.0, "frontal", TIPO_FRONTAL,  "Mira directo a la camara"),
 ]
 N_PASOS           = len(PASOS_REGISTRO)
 TIEMPO_ESCANEO    = sum(p[4] for p in PASOS_REGISTRO)   # 24 s
-MAX_MUESTRAS_PASO = 50
-MUESTRAS_MIN_PASO = 10  # minimo para que un paso sea valido
+MAX_MUESTRAS_PASO = 20
+MUESTRAS_MIN_PASO = 5   # minimo para que un paso sea valido
 
 
 def _imgtk(frame, max_w, max_h):
@@ -120,10 +119,9 @@ class App(tk.Tk):
 
         self._ov_color = None
         self._ov_texto = ""
-        self._modo_acceso = False
         self._ov_lock  = threading.Lock()
 
-        self._build_login() 
+        self._build_main()
 
     @staticmethod
     def _lighten(hx):
@@ -151,8 +149,7 @@ class App(tk.Tk):
 
     def _volver(self):
         self._stop_cam()
-        self._modo_acceso = False
-        self._build_main_menu()
+        self._build_main()
 
     def _set_overlay(self, color, texto=""):
         with self._ov_lock:
@@ -208,23 +205,11 @@ class App(tk.Tk):
 
             vis = frame.copy()
             if coords:
-                if self._modo_acceso:
-                    if ov_color:
-                        c = ov_color
-                    elif vector is not None and tipo == TIPO_FRONTAL:
-                        c = (0, 212, 255)
-                    elif vector is not None:
-                        c = (255, 184, 48)
-                    else:
-                        c = (80, 80, 80)
-                    t = ov_texto if ov_texto else ""
-                    vis = dibujar_overlay(vis, coords, c, t, tipo=None)
-                else:
-                    c = ov_color if ov_color else (
-                        (0, 212, 255) if vector is not None else (80, 80, 80))
-                    t = ov_texto if ov_texto else (
-                        "Detectado" if vector is not None else "Buscando...")
-                    vis = dibujar_overlay(vis, coords, c, t, tipo=tipo)
+                c = ov_color if ov_color else (
+                    (0, 212, 255) if vector is not None else (80, 80, 80))
+                t = ov_texto if ov_texto else (
+                    "Detectado" if vector is not None else "Buscando...")
+                vis = dibujar_overlay(vis, coords, c, t, tipo=tipo)
 
             imgtk = _imgtk(vis, max_w, max_h)
             self.after(0, self._mostrar_frame, imgtk)
@@ -270,9 +255,6 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA PRINCIPAL
     # ══════════════════════════════════════════════════════════════════════════
-    def _build_login(self):
-        _mostrar_login(self)
-    
     def _build_main(self):
         self._clear()
         self.geometry(f"{W}x{H}+0+0")
@@ -294,7 +276,7 @@ class App(tk.Tk):
         SY = TY + 22
         modo_txt = "Raspberry Pi" if USAR_PICAM else "Webcam"
         tk.Label(self,
-                 text=f"MobileFaceNet 512 dims  |  4 pasos  |  {modo_txt}",
+                 text=f"LBP 512 dims  |  4 pasos  |  {modo_txt}",
                  font=self.f_sub, fg=SUBTEXT, bg=BG
                  ).place(x=W//2, y=SY, anchor="center")
 
@@ -720,7 +702,6 @@ class App(tk.Tk):
         self._clear()
         self.geometry(f"{W}x{H}+0+0")
         self.verificando = False
-        self._modo_acceso = True
         self._set_overlay(None, "")
 
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
@@ -732,11 +713,16 @@ class App(tk.Tk):
                  fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
 
-        self.posicion_var   = tk.StringVar(value="Mira directo a la camara.")
-        self.posicion_label = tk.Label(left, textvariable=self.posicion_var,
-                 font=self.f_btn, fg=WARNING, bg=PANEL,
-                 wraplength=284, justify="center")
-        self.posicion_label.place(x=18, y=80, width=284)
+        tk.Label(left,
+                 text=("Mira directo a la camara.\n\n"
+                       "Funciona con:\n"
+                       "  - Lentes\n"
+                       "  - Cubrebocas\n"
+                       "  - Gorra\n\n"
+                       "El mejor angulo registrado\n"
+                       "se usa para identificarte."),
+                 font=self.f_label, fg=SUBTEXT, bg=PANEL,
+                 justify="left").place(x=18, y=60)
 
         tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=228)
 
@@ -765,6 +751,9 @@ class App(tk.Tk):
         self.sim_lbl.place(x=4, y=2)
 
         self.detalle_var = tk.StringVar(value="")
+        tk.Label(left, textvariable=self.detalle_var, font=self.f_zona,
+                 fg=SUBTEXT, bg=PANEL, wraplength=284, justify="center"
+                 ).place(x=18, y=448, width=284)
 
         tk.Button(left, text="<  Volver", font=self.f_label,
                   fg=SUBTEXT, bg=PANEL, relief="flat",
@@ -777,13 +766,13 @@ class App(tk.Tk):
 
         self._start_cam()
         self.cam_running = True
-        self._ultima_cara_t = time.time()   # timestamp ultima deteccion
+        self._ultima_cara_t = time.time()
+        self._angulo_actual  = None          # angulo estable actual
         threading.Thread(target=self._loop_camara,
                          kwargs={"max_w": CAM_W-16, "max_h": H-10},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
         threading.Thread(target=self._monitor_cara, daemon=True).start()
-        threading.Thread(target=self._guia_posicion, daemon=True).start()
         self.after(1800, self._lanzar_verificacion)
 
     def _set_sim_bar(self, pct, color):
@@ -816,12 +805,11 @@ class App(tk.Tk):
             with self._analisis_lock:
                 frame_id = self._analisis["frame_id"]
                 v        = self._analisis["vector"]
-                tipo     = self._analisis["tipo"]
             if frame_id == ultimo:
                 time.sleep(0.04)
                 continue
             ultimo = frame_id
-            if v is not None and tipo == TIPO_FRONTAL:
+            if v is not None:
                 vectores.append(v)
             time.sleep(0.04)
 
@@ -840,7 +828,7 @@ class App(tk.Tk):
             return
 
         v_final   = np.mean(vectores, axis=0).astype(np.float32)
-        resultado = reconocer_persona(v_final, angulo_nuevo="frontal")
+        resultado = reconocer_persona(v_final)
 
         if resultado is None:
             # None = sin registros O persona desconocida (distancia > UMBRAL_RECHAZO)
@@ -859,106 +847,95 @@ class App(tk.Tk):
             self.after(4000, self._lanzar_verificacion)
             return
 
-        sim = resultado["similitud_pct"]
-        if resultado["acceso"] and sim >= 80:
-            self.after(0, lambda: self._set_sim_bar(int(sim), SUCCESS))
+        sim         = resultado["similitud_pct"]
+        color_barra = SUCCESS if resultado["acceso"] else (WARNING if sim >= 55 else DANGER)
+        self.after(0, lambda: self._set_sim_bar(int(sim), color_barra))
+        self.after(0, lambda r=resultado: self.detalle_var.set(
+            f"Angulo match: {r['angulo']}"))
+
+        # Doble validacion: acceso=True Y similitud minima del 70%
+        # Evita que una persona no registrada acceda por ser "la mas cercana"
+        # aunque su distancia supere el umbral (por redondeos o vectores cortos)
+        if resultado["acceso"]:
             self.after(0, lambda r=resultado: self._resultado_ok(r))
         else:
-            self.after(0, lambda: self._set_sim_bar(0, BORDER))
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
     def _resultado_ok(self, r):
-        self._set_overlay((0, 255, 136), "")
+        self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
         self.resultado_label.config(fg=SUCCESS)
         self.candidato_var.set(
             f"{r['nombre']}\n"
             f"Rol: {r.get('rol','---').upper()}\n"
             f"Similitud: {r['similitud_pct']}%")
-        self.after(0, lambda: self._safe(
-            lambda: self.posicion_label.config(fg=SUCCESS)))
         self.after(4000, self._lanzar_verificacion)
 
     def _resultado_negado(self, r):
-        self._set_overlay((255, 59, 92), "")
+        self._set_overlay((255, 59, 92), "Desconocido")
         self.resultado_var.set("ACCESO DENEGADO")
         self.resultado_label.config(fg=DANGER)
-        self.candidato_var.set("Rostro no reconocido.")
+        self.candidato_var.set(
+            f"Mas parecido a:\n{r['nombre']}\n"
+            f"Similitud: {r['similitud_pct']}%")
         self.after(4000, self._lanzar_verificacion)
 
-    def _guia_posicion(self):
-        """Actualiza la instruccion de posicion en tiempo real."""
+    def _monitor_cara(self):
+        """
+        Monitor continuo durante la pantalla de acceso.
+
+        - Sin cara por 1.5s          → resetea pantalla.
+        - Angulo cambia y se mantiene estable 0.7s → re-escanea.
+          Ejemplos que disparan re-scan:
+            frontal    → perfil_der
+            frontal    → perfil_izq
+            perfil_der → frontal
+            perfil_izq → frontal
+            perfil_der → perfil_izq  (y viceversa)
+        """
+        TIMEOUT_SIN_CARA   = 1.5   # s sin cara → resetear
+        TIEMPO_ESTABLE     = 0.7   # s que debe mantenerse el nuevo angulo
+
+        angulo_confirmado  = None  # ultimo angulo que disparo un escaneo
+        angulo_candidato   = None  # angulo que se esta evaluando ahora
+        t_candidato        = None  # cuando empezó el angulo candidato
+
         while self.cam_running:
             with self._analisis_lock:
                 v    = self._analisis["vector"]
                 tipo = self._analisis["tipo"]
-            try:
-                if v is None:
-                    self.posicion_var.set("Acercate a la camara")
-                    self.posicion_label.config(fg=WARNING)
-                elif tipo == TIPO_FRONTAL:
-                    self.posicion_var.set("Listo, mira a la camara")
-                    self.posicion_label.config(fg=SUCCESS)
-                elif tipo == TIPO_PERFIL_D:
-                    self.posicion_var.set(
-                        "Estas volteado a tu derecha\nVoltea hacia enfrente")
-                    self.posicion_label.config(fg=WARNING)
-                elif tipo == TIPO_PERFIL_I:
-                    self.posicion_var.set(
-                        "Estas volteado a tu izquierda\nVoltea hacia enfrente")
-                    self.posicion_label.config(fg=WARNING)
-            except Exception:
-                pass
-            time.sleep(0.15)
-
-    def _monitor_cara(self):
-        """
-        Re-escanea SOLO cuando la cara desaparece y vuelve a aparecer.
-        Eso cubre: alejarse de la camara, salirse del encuadre,
-        o que otra persona se ponga frente a la camara.
-        Movimientos normales mientras la cara sigue detectada no disparan nada.
-        """
-        TIMEOUT_SIN_CARA  = 1.5   # s sin cara → limpiar pantalla
-        FRAMES_REAPARECE  = 5     # frames seguidos con cara para confirmar reaparicion
-        COOLDOWN          = 4.0   # s minimos entre re-scans
-
-        cara_presente     = False
-        contador_reaparece = 0
-        t_ultimo_scan     = 0.0
-
-        while self.cam_running:
-            with self._analisis_lock:
-                v = self._analisis["vector"]
-
-            cooldown_ok = (time.time() - t_ultimo_scan) >= COOLDOWN
 
             if v is not None:
                 self._ultima_cara_t = time.time()
 
-                if not cara_presente:
-                    # Cara acaba de aparecer — contar frames para confirmar
-                    contador_reaparece += 1
-                    if contador_reaparece >= FRAMES_REAPARECE:
-                        cara_presente      = True
-                        contador_reaparece = 0
-                        if not self.verificando and cooldown_ok:
-                            t_ultimo_scan = time.time()
-                            self.after(0, self._resetear_pantalla_acceso)
-                            self.after(150, self._lanzar_verificacion)
-                # Si cara_presente ya es True, no hacer nada — cara sigue ahi
+                # ── Seguimiento de cambio de angulo ───────────────────────
+                if tipo != angulo_candidato:
+                    # El angulo cambió — empezar a medir cuánto se mantiene
+                    angulo_candidato = tipo
+                    t_candidato      = time.time()
+
+                else:
+                    # El angulo lleva un rato estable — ver si ya pasó el umbral
+                    estable_hace = time.time() - t_candidato
+                    if (estable_hace >= TIEMPO_ESTABLE
+                            and angulo_candidato != angulo_confirmado
+                            and not self.verificando):
+                        # Angulo nuevo estabilizado → re-escanear
+                        angulo_confirmado = angulo_candidato
+                        t_candidato       = time.time()  # reset para no disparar de nuevo
+                        self.after(0, self._resetear_pantalla_acceso)
+                        self.after(150, self._lanzar_verificacion)
 
             else:
-                # Sin cara
-                contador_reaparece = 0
+                # Sin cara — resetear contadores
                 sin_cara = time.time() - self._ultima_cara_t
+                if sin_cara >= TIMEOUT_SIN_CARA and not self.verificando:
+                    angulo_confirmado = None
+                    angulo_candidato  = None
+                    t_candidato       = None
+                    self.after(0, self._resetear_pantalla_acceso)
 
-                if sin_cara >= TIMEOUT_SIN_CARA:
-                    if cara_presente:
-                        cara_presente = False
-                    if not self.verificando:
-                        self.after(0, self._resetear_pantalla_acceso)
-
-            time.sleep(0.12)
+            time.sleep(0.10)
 
     def _resetear_pantalla_acceso(self):
         """Limpia la pantalla de acceso al estado inicial de espera."""
@@ -983,7 +960,6 @@ if __name__ == "__main__":
     except ImportError:
         print("[ERROR] Falta Pillow:  pip install Pillow")
         exit(1)
-
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
