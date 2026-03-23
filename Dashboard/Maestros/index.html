@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LabControl — Panel de Gestión</title>
+
+  <!-- Fuentes -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
+
+  <!-- Estilos separados por sección -->
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/sidebar.css" />
+  <link rel="stylesheet" href="css/components.css" />
+</head>
+<body>
+
+  <!-- Overlay oscuro detrás del sidebar en móvil -->
+  <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <!-- ============================================================
+       SIDEBAR
+  ============================================================ -->
+  <aside class="sidebar" id="sidebar">
+
+    <div class="sidebar-brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">LabControl</div>
+        <div class="brand-sub">Sistema de Gestión</div>
+      </div>
+    </div>
+
+    <!-- Perfil del profesor -->
+    <div class="sidebar-profile">
+      <div class="profile-avatar">
+        <span>MA</span>
+        <div class="profile-status"></div>
+      </div>
+      <div class="profile-info">
+        <div class="profile-name">Dr. Marco Alvarado</div>
+        <div class="profile-role">Jefe de Laboratorio</div>
+        <div class="profile-dept">Ing. en Sistemas · CUCEI</div>
+      </div>
+      <button class="profile-edit-btn" title="Editar perfil">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Navegación -->
+    <nav class="sidebar-nav">
+      <div class="nav-group-label">Panel</div>
+
+      <a class="nav-item active" onclick="navigate('dashboard', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+        </svg>
+        <span>Resumen</span>
+      </a>
+
+      <a class="nav-item" onclick="navigate('inside', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>En el laboratorio</span>
+        <span class="nav-badge live" id="badge-inside">0</span>
+      </a>
+
+      <a class="nav-item" onclick="navigate('access', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        <span>Registro de acceso</span>
+      </a>
+
+      <a class="nav-item" onclick="navigate('stats', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+        <span>Estadísticas</span>
+      </a>
+
+      <div class="nav-group-label" style="margin-top:8px">Cuenta</div>
+
+      <a class="nav-item" onclick="navigate('profile', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="8" r="4"/><path d="M4 20v-1a8 8 0 0 1 16 0v1"/>
+        </svg>
+        <span>Mi perfil</span>
+      </a>
+
+      <a class="nav-item" onclick="navigate('settings', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Configuración</span>
+      </a>
+    </nav>
+
+    <!-- Footer -->
+    <div class="sidebar-footer">
+      <div class="lab-status-row">
+        <div class="lab-status-dot"></div>
+        <span class="lab-status-label">Laboratorio abierto</span>
+        <div class="lab-clock" id="lab-clock">--:--:--</div>
+      </div>
+      <button class="btn-logout" onclick="showModal('logoutModal')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+        Cerrar sesión
+      </button>
+    </div>
+
+  </aside>
+
+  <!-- ============================================================
+       ÁREA PRINCIPAL
+  ============================================================ -->
+  <div class="main" id="main">
+
+    <header class="header">
+      <button class="hamburger" onclick="toggleSidebar()" aria-label="Menú">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="header-left">
+        <h1 class="header-title" id="header-title">Resumen del laboratorio</h1>
+        <div class="header-sub" id="header-sub">Vista general en tiempo real</div>
+      </div>
+      <div class="header-right">
+        <div class="header-date" id="header-date"></div>
+        <div class="btn-icon" onclick="toggleNotifPanel()" title="Alertas de tiempo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="17" height="17">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span class="notif-counter" id="notif-counter" style="display:none">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Panel de alertas -->
+    <div class="notif-panel" id="notifPanel">
+      <div class="notif-panel-head">
+        <span>Alertas de permanencia</span>
+        <button onclick="toggleNotifPanel()">✕</button>
+      </div>
+      <div class="notif-panel-body" id="notifPanelBody">
+        <div class="notif-empty">Sin alertas activas</div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- VISTA: RESUMEN -->
+      <div class="view active" id="view-dashboard">
+        <div class="kpi-row">
+          <div class="kpi-card accent">
+            <div class="kpi-top">
+              <div class="kpi-icon-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+              </div>
+              <div class="kpi-pulse"></div>
+            </div>
+            <div class="kpi-value" id="kpi-inside">0</div>
+            <div class="kpi-label">Personas adentro</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-top">
+              <div class="kpi-icon-wrap blue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpi-today">0</div>
+            <div class="kpi-label">Accesos hoy</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-top">
+              <div class="kpi-icon-wrap amber">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpi-avg">—</div>
+            <div class="kpi-label">Tiempo promedio</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-top">
+              <div class="kpi-icon-wrap red">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpi-alerts">0</div>
+            <div class="kpi-label">Alertas activas</div>
+          </div>
+        </div>
+
+        <div class="main-grid">
+          <div class="card">
+            <div class="card-head">
+              <div><div class="card-title">En el laboratorio ahora</div><div class="card-sub">Presencia en tiempo real</div></div>
+              <div class="live-chip"><span class="live-dot"></span> En vivo</div>
+            </div>
+            <div class="inside-list" id="inside-list-dash"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <div><div class="card-title">Alertas de permanencia</div><div class="card-sub">Personas con tiempo excesivo</div></div>
+              <div class="alert-config-btn" onclick="showModal('timeConfigModal')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+                Límite: <span id="limit-label">2h</span>
+              </div>
+            </div>
+            <div class="alerts-list" id="alerts-list">
+              <div class="empty-state-sm">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="28" height="28">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <span>Sin alertas activas</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:18px">
+          <div class="card-head">
+            <div><div class="card-title">Últimos accesos</div><div class="card-sub">Movimientos recientes</div></div>
+            <button class="btn-sm" onclick="navigate('access', document.querySelector('[onclick*=access]'))">Ver todo</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Persona</th><th>Tipo</th><th>Hora</th><th>Estado</th></tr></thead>
+              <tbody id="recent-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-dashboard -->
+
+
+      <!-- VISTA: EN EL LABORATORIO -->
+      <div class="view" id="view-inside">
+        <div class="card">
+          <div class="card-head">
+            <div><div class="card-title">Personas en el laboratorio</div><div class="card-sub">Lista completa de presencia actual</div></div>
+            <div class="live-chip"><span class="live-dot"></span> En vivo</div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Nombre</th><th>Matrícula</th><th>Carrera</th><th>Hora de entrada</th><th>Tiempo dentro</th><th>Estado</th></tr></thead>
+              <tbody id="inside-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-inside -->
+
+
+      <!-- VISTA: REGISTRO DE ACCESOS -->
+      <div class="view" id="view-access">
+        <div class="card">
+          <div class="card-head">
+            <div><div class="card-title">Registro completo de accesos</div><div class="card-sub">Historial de entradas y salidas del día</div></div>
+            <div class="table-filters">
+              <select class="filter-select" id="filter-type" onchange="renderAccessTable()">
+                <option value="">Todos</option><option value="Entrada">Entradas</option><option value="Salida">Salidas</option>
+              </select>
+              <select class="filter-select" id="filter-career" onchange="renderAccessTable()">
+                <option value="">Todas las carreras</option>
+                <option value="Ing. en Sistemas">Ing. en Sistemas</option>
+                <option value="Ing. Industrial">Ing. Industrial</option>
+                <option value="Lic. Informática">Lic. Informática</option>
+                <option value="Ing. Civil">Ing. Civil</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>#</th><th>Nombre</th><th>Matrícula</th><th>Carrera</th><th>Tipo</th><th>Hora</th><th>Duración</th></tr></thead>
+              <tbody id="access-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-access -->
+
+
+      <!-- VISTA: ESTADÍSTICAS -->
+      <div class="view" id="view-stats">
+        <div class="stats-grid">
+          <div class="card">
+            <div class="card-head"><div><div class="card-title">Top visitantes del mes</div><div class="card-sub">Usuarios que más han accedido</div></div></div>
+            <div class="top-list" id="top-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><div class="card-title">Accesos por carrera</div><div class="card-sub">Distribución por programa académico</div></div></div>
+            <div class="bar-chart" id="career-chart"></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:18px">
+          <div class="card-head"><div><div class="card-title">Accesos por hora del día</div><div class="card-sub">Hora pico de mayor afluencia (★)</div></div></div>
+          <div class="hour-chart" id="hour-chart"></div>
+        </div>
+      </div><!-- /view-stats -->
+
+
+      <!-- VISTA: MI PERFIL -->
+      <div class="view" id="view-profile">
+        <div class="profile-page-grid">
+          <div class="card profile-card-main">
+            <div class="profile-big-avatar">MA</div>
+            <div class="profile-big-name">Dr. Marco Alvarado</div>
+            <div class="profile-big-role">Jefe de Laboratorio</div>
+            <div class="profile-tags">
+              <span class="tag">CUCEI</span><span class="tag">Ing. en Sistemas</span><span class="tag">Activo</span>
+            </div>
+            <div class="profile-meta-grid">
+              <div class="pmeta"><span>Correo</span><strong>m.alvarado@cucei.edu.mx</strong></div>
+              <div class="pmeta"><span>Extensión</span><strong>3847</strong></div>
+              <div class="pmeta"><span>Laboratorio</span><strong>Lab. Cómputo B-204</strong></div>
+              <div class="pmeta"><span>Turno</span><strong>07:00 — 15:00</strong></div>
+            </div>
+          </div>
+          <div class="card profile-stats-card">
+            <div class="card-head"><div class="card-title">Actividad del mes</div></div>
+            <div class="profile-stat-list">
+              <div class="pstat"><div class="pstat-val">127</div><div class="pstat-label">Accesos supervisados</div></div>
+              <div class="pstat"><div class="pstat-val">14</div><div class="pstat-label">Alertas emitidas</div></div>
+              <div class="pstat"><div class="pstat-val">18</div><div class="pstat-label">Días activos</div></div>
+              <div class="pstat"><div class="pstat-val">3</div><div class="pstat-label">Grupos registrados</div></div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /view-profile -->
+
+
+      <!-- VISTA: CONFIGURACIÓN -->
+      <div class="view" id="view-settings">
+        <div class="card">
+          <div class="card-head"><div class="card-title">Configuración del sistema</div></div>
+          <div class="settings-list">
+            <div class="setting-row">
+              <div><div class="setting-name">Límite de permanencia</div><div class="setting-desc">Tiempo máximo antes de emitir alerta al profesor</div></div>
+              <select class="filter-select" id="time-limit-select" onchange="updateTimeLimit(this.value)">
+                <option value="60">1 hora</option><option value="120" selected>2 horas</option>
+                <option value="180">3 horas</option><option value="240">4 horas</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <div><div class="setting-name">Notificaciones sonoras</div><div class="setting-desc">Emitir sonido al activarse una alerta de tiempo</div></div>
+              <label class="toggle"><input type="checkbox" checked /><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            </div>
+            <div class="setting-row">
+              <div><div class="setting-name">Actualización automática</div><div class="setting-desc">Refrescar lista de presentes cada 30 segundos</div></div>
+              <label class="toggle"><input type="checkbox" checked /><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            </div>
+            <div class="setting-row">
+              <div><div class="setting-name">Modo oscuro</div><div class="setting-desc">Cambiar a tema oscuro en toda la interfaz</div></div>
+              <label class="toggle"><input type="checkbox" id="dark-toggle" checked onchange="toggleDark(this.checked)" /><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            </div>
+          </div>
+        </div>
+      </div><!-- /view-settings -->
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+
+
+  <!-- ============================================================
+       MODALES
+  ============================================================ -->
+
+  <!-- Cerrar sesión -->
+  <div class="modal-overlay" id="logoutModal" onclick="closeModalOutside(event,'logoutModal')">
+    <div class="modal">
+      <div class="modal-icon danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </div>
+      <div class="modal-title">¿Cerrar sesión?</div>
+      <div class="modal-desc">Se terminará tu sesión activa en LabControl. Deberás iniciar sesión nuevamente para acceder al sistema.</div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal('logoutModal')">Cancelar</button>
+        <button class="btn-confirm danger" id="btn-confirm-logout">Cerrar sesión</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alerta de tiempo -->
+  <div class="modal-overlay" id="timeAlertModal" onclick="closeModalOutside(event,'timeAlertModal')">
+    <div class="modal">
+      <div class="modal-icon warning">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <div class="modal-title">⚠ Alerta de permanencia</div>
+      <div class="modal-desc" id="timeAlertDesc">Una persona lleva demasiado tiempo en el laboratorio.</div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal('timeAlertModal')">Descartar</button>
+        <button class="btn-confirm warning">Notificar al alumno</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Configurar límite -->
+  <div class="modal-overlay" id="timeConfigModal" onclick="closeModalOutside(event,'timeConfigModal')">
+    <div class="modal">
+      <div class="modal-icon info">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <div class="modal-title">Configurar límite de tiempo</div>
+      <div class="modal-desc">Define el tiempo máximo que una persona puede permanecer en el laboratorio antes de generar una alerta.</div>
+      <div class="modal-select-wrap">
+        <label class="modal-label">Límite máximo</label>
+        <select class="filter-select full" id="modal-time-select">
+          <option value="60">1 hora</option><option value="120" selected>2 horas</option>
+          <option value="180">3 horas</option><option value="240">4 horas</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal('timeConfigModal')">Cancelar</button>
+        <button class="btn-confirm info" onclick="applyTimeLimit()">Aplicar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts: orden importante — data primero, luego alerts, luego app -->
+  <script src="js/data.js"></script>
+  <script src="js/alerts.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>

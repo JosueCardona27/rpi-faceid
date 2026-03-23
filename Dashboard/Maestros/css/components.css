@@ -1,0 +1,107 @@
+/* ═══════════════════════════════════════════════════════
+   components.css — Modales, toasts y responsive.
+═══════════════════════════════════════════════════════ */
+
+/* ================================================================
+   20. MODALES
+================================================================ */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 16px; padding: 28px; max-width: 400px; width: 92%;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+  animation: modalIn 0.28s cubic-bezier(0.34,1.5,0.64,1);
+}
+.modal-icon { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+.modal-icon.danger  { background: var(--red-dim);   color: var(--red); }
+.modal-icon.warning { background: var(--amber-dim); color: var(--amber); }
+.modal-icon.info    { background: var(--blue-dim);  color: var(--blue); }
+
+.modal-title { font-family: var(--font-head); font-size: 18px; font-weight: 700; color: var(--text-1); margin-bottom: 8px; }
+.modal-desc  { font-size: 13px; color: var(--text-2); line-height: 1.65; margin-bottom: 22px; }
+.modal-select-wrap { margin-bottom: 22px; }
+.modal-label { display: block; font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.modal-actions { display: flex; gap: 10px; }
+
+.btn-cancel {
+  flex: 1; padding: 10px 16px; border: 1px solid var(--border2); background: var(--surface2);
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600;
+  font-family: var(--font-ui); color: var(--text-2); transition: all 0.15s;
+}
+.btn-cancel:hover { color: var(--text-1); }
+
+.btn-confirm {
+  flex: 1; padding: 10px 16px; border: none;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600;
+  font-family: var(--font-ui); color: #fff; transition: all 0.15s;
+}
+.btn-confirm.danger  { background: var(--red); }
+.btn-confirm.warning { background: var(--amber); }
+.btn-confirm.info    { background: var(--blue); }
+.btn-confirm:hover   { filter: brightness(1.1); }
+
+
+/* ================================================================
+   21. TOASTS EMERGENTES (esquina inferior derecha)
+================================================================ */
+.toast-container {
+  position: fixed; bottom: 24px; right: 24px;
+  z-index: 200; display: flex; flex-direction: column; gap: 10px;
+}
+.toast {
+  background: var(--surface); border: 1px solid var(--border2);
+  border-left: 4px solid var(--red); border-radius: var(--radius-sm);
+  padding: 12px 16px; max-width: 340px; box-shadow: var(--shadow);
+  display: flex; align-items: flex-start; gap: 10px;
+  animation: slideUp 0.3s ease;
+}
+.toast-icon  { color: var(--red); flex-shrink: 0; margin-top: 1px; }
+.toast-title { font-size: 13px; font-weight: 700; color: var(--text-1); }
+.toast-msg   { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.toast-close {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  color: var(--text-3); font-size: 14px; align-self: flex-start;
+  padding: 0 0 0 6px; transition: color 0.15s;
+}
+.toast-close:hover { color: var(--text-1); }
+
+
+/* ================================================================
+   22. UTILIDADES Y COMPONENTES PEQUEÑOS
+================================================================ */
+[title] { cursor: default; }  /* Tooltips nativos del navegador */
+
+
+/* ================================================================
+   23. RESPONSIVE / MEDIA QUERIES
+================================================================ */
+@media (max-width: 1200px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 700px) {
+  .kpi-row            { grid-template-columns: repeat(2, 1fr); }
+  .kpi-value          { font-size: 28px; }
+  .card-head          { flex-wrap: wrap; gap: 8px; }
+  .table-filters      { width: 100%; }
+  .filter-select      { flex: 1; }
+  .modal              { padding: 22px; }
+  .stats-grid         { grid-template-columns: 1fr; }
+  .profile-page-grid  { grid-template-columns: 1fr; }
+  .profile-stat-list  { grid-template-columns: 1fr 1fr; }
+  .toast-container    { left: 16px; right: 16px; bottom: 16px; }
+  .toast              { max-width: 100%; }
+}
+
+@media (max-width: 480px) {
+  .kpi-row    { grid-template-columns: 1fr 1fr; }
+  .header-date { display: none; }
+  .content    { padding: 14px; }
+  .main-grid  { gap: 14px; }
+}

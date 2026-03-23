@@ -1,0 +1,189 @@
+/* ═══════════════════════════════════════════════════════
+   main.css — Variables, reset, layout, vistas, KPIs,
+   cards, tablas, estadísticas, perfil y configuración.
+═══════════════════════════════════════════════════════ */
+
+/* ================================================================
+   style.css — LabControl: Sistema de Gestión de Laboratorio
+   Todos los estilos del proyecto en un solo archivo.
+
+   ÍNDICE:
+   1.  Variables y tema oscuro/claro
+   2.  Reset y base
+   3.  Animaciones globales
+   4.  Overlay móvil
+   5.  Sidebar
+       5a. Brand / logo
+       5b. Perfil del profesor
+       5c. Navegación
+       5d. Footer y reloj
+   6.  Layout principal
+   7.  Header
+   8.  Panel de notificaciones (campana)
+   9.  Área de contenido y vistas
+   10. Tarjetas KPI
+   11. Grid principal del dashboard
+   12. Cards genéricas
+   13. Lista de personas dentro (widget)
+   14. Barra de progreso de tiempo
+   15. Lista de alertas de permanencia
+   16. Tablas de datos
+   17. Estadísticas (top, barras, horas)
+   18. Vista de perfil del profesor
+   19. Vista de configuración
+   20. Modales
+   21. Toasts emergentes
+   22. Utilidades y componentes pequeños
+   23. Responsive / media queries
+================================================================ */
+
+
+/* ================================================================
+   1. VARIABLES GLOBALES Y TEMAS
+   Cambia aquí los colores para personalizar toda la app.
+   El tema oscuro es el default; el claro se activa con class="light"
+   en el <body> (desde el toggle de configuración).
+================================================================ */
+:root {
+  /* Fondos */
+  --bg:       #0F1117;   /* Fondo de página */
+  --bg2:      #161B26;   /* Fondo de header y sidebar */
+  --bg3:      #1C2333;   /* Fondo de encabezados de tabla */
+  --surface:  #1E2638;   /* Cards y paneles */
+  --surface2: #252E42;   /* Hover de surface, inputs */
+
+  /* Bordes */
+  --border:  rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.13);
+
+  /* Color acento principal: verde cian */
+  --accent:      #00C9A7;
+  --accent-dim:  rgba(0,201,167,0.12);
+  --accent-glow: rgba(0,201,167,0.25);
+
+  /* Colores semánticos */
+  --blue:       #3B82F6;
+  --blue-dim:   rgba(59,130,246,0.12);
+  --amber:      #F59E0B;
+  --amber-dim:  rgba(245,158,11,0.12);
+  --red:        #EF4444;
+  --red-dim:    rgba(239,68,68,0.12);
+  --purple:     #A78BFA;
+  --purple-dim: rgba(167,139,250,0.12);
+
+  /* Texto */
+  --text-1: #EDF2F7;  /* Principal */
+  --text-2: #94A3B8;  /* Secundario */
+  --text-3: #556070;  /* Muted / labels */
+
+  /* Tipografía */
+  --font-ui:   'Lato', sans-serif;
+  --font-head: 'Syne', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* Layout */
+  --sidebar-w: 268px;
+  --header-h:  60px;
+
+  /* Bordes redondeados */
+  --radius:    12px;
+  --radius-sm: 8px;
+  --radius-xs: 5px;
+
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* Tema claro — se activa con JS al poner class="light" en body */
+body.light {
+  --bg:       #F0F4FB;
+  --bg2:      #E8EDF7;
+  --bg3:      #DDE4F0;
+  --surface:  #FFFFFF;
+  --surface2: #F5F7FD;
+  --border:   rgba(0,0,0,0.07);
+  --border2:  rgba(0,0,0,0.13);
+  --text-1:   #1A202C;
+  --text-2:   #4A5568;
+  --text-3:   #94A3B8;
+  --accent-dim:  rgba(0,201,167,0.1);
+  --blue-dim:    rgba(59,130,246,0.1);
+  --amber-dim:   rgba(245,158,11,0.1);
+  --red-dim:     rgba(239,68,68,0.1);
+}
+
+
+/* ================================================================
+   2. RESET Y BASE
+================================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--text-1);
+  min-height: 100vh;
+  display: flex;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.6;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* Scrollbars delgados en toda la app */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+*::-webkit-scrollbar        { width: 5px; height: 5px; }
+*::-webkit-scrollbar-track  { background: transparent; }
+*::-webkit-scrollbar-thumb  { background: var(--border2); border-radius: 4px; }
+
+
+/* ================================================================
+   3. ANIMACIONES GLOBALES
+================================================================ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70%  { box-shadow: 0 0 0 8px rgba(0,201,167,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,201,167,0); }
+}
+
+@keyframes modalIn {
+  from { transform: scale(0.88) translateY(20px); opacity: 0; }
+  to   { transform: scale(1) translateY(0);       opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+@keyframes flashBorder {
+  0%, 100% { border-color: rgba(239,68,68,0.2); }
+  50%       { border-color: rgba(239,68,68,0.7); }
+}
+
+
+/* ================================================================
+   4. OVERLAY MÓVIL
+   Fondo semitransparente que aparece detrás del sidebar en móvil
+================================================================ */
+.overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 40;
+  backdrop-filter: blur(3px);
+}
+.overlay.active { display: block; }
