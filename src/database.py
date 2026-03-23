@@ -3,39 +3,32 @@ database.py
 ===========
 Base de datos SQLite para el sistema de reconocimiento facial.
 
-Caracteristicas:
-  - Roles: admin, maestro, estudiante
-  - Vectores LBP por angulo: frontal, perfil_der, perfil_izq (512 dims)
-  - Reconocimiento por angulo consistente (frontal vs frontal)
-  - Deteccion de duplicado facial en registro
-  - Registro de accesos inmutable
-  - Auditoria de cambios inmutable
+Cambios v3:
+  - numero_cuenta obligatorio para todos (exactamente 8 digitos)
+  - estudiantes_detalle: grado (1-20) y grupo (A-Z) para estudiantes
+  - validacion de formato en Python antes de intentar INSERT
 
-Umbrales calibrados con datos reales:
-  UMBRAL           = 0.55   distancia maxima para acceso permitido
-  RECHAZO          = 0.58   por encima de esto = desconocido
-  GAP_MIN          = 0.05   margen minimo entre 1° y 2° candidato
-  UMBRAL_DUPLICADO = 0.20   bloquea registro si misma cara detectada
-
-Permisos por rol:
-  admin    — puede registrar admin, maestro y estudiante
-  maestro  — solo puede registrar estudiantes
-  estudiante — no puede registrar a nadie
+Umbrales calibrados:
+  UMBRAL           = 0.55
+  RECHAZO          = 0.58
+  GAP_MIN          = 0.05
+  UMBRAL_DUPLICADO = 0.20
 """
 
 import sqlite3
 import json
 import os
+import sys
+import re
 import numpy as np
 from face_engine import distancia_chi2, VECTOR_DIM
 
 _DIR_ESTE_ARCHIVO = os.path.dirname(os.path.abspath(__file__))
 _DIR_DB           = os.path.join(_DIR_ESTE_ARCHIVO, "..", "database")
-os.makedirs(_DIR_DB, exist_ok=True)
-DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
+DB_PATH           = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 
 # =============================================================================
-#  CONSTANTES — ajustar aqui si cambia el hardware o iluminacion
+#  CONSTANTES
 # =============================================================================
 UMBRAL           = 0.35   # dist <= UMBRAL  → acceso PERMITIDO
 RECHAZO          = 0.80   # dist >  RECHAZO → DESCONOCIDO
@@ -46,12 +39,69 @@ UMBRAL_DUPLICADO = 0.20   # dist <= esto en registro → misma persona, bloquear
 ANGULOS_VALIDOS = ("frontal", "perfil_der", "perfil_izq")
 ROLES_VALIDOS   = ("admin", "maestro", "estudiante")
 
-# Que roles puede registrar cada rol
 PERMISOS_REGISTRO = {
     "admin":      ("admin", "maestro", "estudiante"),
     "maestro":    ("estudiante",),
     "estudiante": (),
 }
+
+GRADO_MIN = 1
+GRADO_MAX = 20
+
+
+# =============================================================================
+#  VERIFICACION DE BASE DE DATOS AL INICIO
+# =============================================================================
+
+def _verificar_bd():
+    if not os.path.exists(DB_PATH):
+        print()
+        print("=" * 60)
+        print("  [ERROR] Base de datos no encontrada.")
+        print(f"  Ruta esperada: {DB_PATH}")
+        print()
+        print("  Para crear la base de datos:")
+        print("  1. Abre DB Browser for SQLite")
+        print("  2. File > New Database > guarda como")
+        print("     reconocimiento_facial.db en la carpeta /database")
+        print("  3. Pestaña 'Execute SQL'")
+        print("  4. Pega el contenido de esquema.sql y ejecuta")
+        print("=" * 60)
+        print()
+        sys.exit(1)
+
+    tablas_requeridas = {
+        "usuarios",
+        "estudiantes_detalle",
+        "vectores_por_angulo",
+        "registro_acceso",
+        "auditoria_cambios",
+    }
+
+    try:
+        conn   = sqlite3.connect(DB_PATH)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")
+        tablas_existentes = {row[0] for row in cursor.fetchall()}
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"\n[ERROR] No se pudo abrir la base de datos: {e}\n")
+        sys.exit(1)
+
+    faltantes = tablas_requeridas - tablas_existentes
+    if faltantes:
+        print()
+        print("=" * 60)
+        print("  [ERROR] La base de datos esta incompleta.")
+        print(f"  Tablas faltantes: {', '.join(sorted(faltantes))}")
+        print("  Ejecuta esquema.sql en DB Browser para crearlas.")
+        print("=" * 60)
+        print()
+        sys.exit(1)
+
+    print(f"[DB] Base de datos verificada: {DB_PATH}")
+
+_verificar_bd()
 
 
 # =============================================================================
@@ -67,7 +117,7 @@ def conectar() -> sqlite3.Connection:
 
 
 # =============================================================================
-#  INICIALIZACION
+#  AUXILIAR INTERNO
 # =============================================================================
 
 def _crear_tablas():
@@ -291,12 +341,6 @@ _crear_tablas()
 # =============================================================================
 
 def puede_registrar(rol_registrador: str, rol_nuevo: str) -> bool:
-    """
-    Valida si un rol tiene permiso para registrar otro rol.
-      admin   → puede registrar admin, maestro, estudiante
-      maestro → solo puede registrar estudiante
-      estudiante → no puede registrar a nadie
-    """
     return rol_nuevo in PERMISOS_REGISTRO.get(rol_registrador, ())
 
 
@@ -317,17 +361,39 @@ def registrar_usuario(
     """
     Registra un nuevo usuario.
 
-    rol_registrador: rol de quien hace el registro (para validar permisos).
-                     Si es None, se omite la validacion de permisos.
+    numero_cuenta : obligatorio para todos — exactamente 8 digitos
+    grado         : obligatorio si rol == 'estudiante' (1-20)
+    grupo         : obligatorio si rol == 'estudiante' (A-Z)
+    rol_registrador: si se pasa, valida permisos antes de registrar
+
     Retorna el id del nuevo usuario, o -1 si hubo error.
     """
+    # Validar rol
     if rol not in ROLES_VALIDOS:
         print(f"[ERROR] Rol '{rol}' no valido.")
         return -1
 
+    # Validar permisos
     if rol_registrador is not None:
         if not puede_registrar(rol_registrador, rol):
-            print(f"[ERROR] '{rol_registrador}' no tiene permiso para registrar '{rol}'.")
+            print(f"[ERROR] '{rol_registrador}' no puede registrar '{rol}'.")
+            return -1
+
+    # Validar numero de cuenta
+    ok, msg = validar_numero_cuenta(numero_cuenta)
+    if not ok:
+        print(f"[ERROR] {msg}")
+        return -1
+
+    # Validar grado y grupo para estudiantes
+    if rol == "estudiante":
+        ok, msg = validar_grado(grado)
+        if not ok:
+            print(f"[ERROR] {msg}")
+            return -1
+        ok, msg = validar_grupo(grupo)
+        if not ok:
+            print(f"[ERROR] {msg}")
             return -1
 
     ap_mat = apellido_materno.strip() if apellido_materno.strip() else "."
@@ -347,11 +413,23 @@ def registrar_usuario(
         """, (id_usuario, nombre, apellido_paterno, ap_mat,
               numero_cuenta or None,
               rol, registrado_por))
-        conn.commit()
+
         uid = cursor.lastrowid
+
+        # Insertar detalle de estudiante si aplica
+        if rol == "estudiante":
+            cursor.execute("""
+                INSERT INTO estudiantes_detalle
+                    (usuario_id, grado, grupo)
+                VALUES (?, ?, ?)
+            """, (uid, int(grado), grupo.strip().upper()))
+
+        conn.commit()
         print(f"[DB] Usuario registrado ID={uid}: "
-              f"{nombre} {apellido_paterno} ({rol})")
+              f"{nombre} {apellido_paterno} ({rol}) "
+              f"cuenta={numero_cuenta}")
         return uid
+
     except sqlite3.IntegrityError as e:
         print(f"[DB] Error de integridad: {e}")
         return -1
@@ -362,8 +440,8 @@ def registrar_usuario(
 def eliminar_usuario(usuario_id: int) -> bool:
     """
     Elimina un usuario y sus vectores (cascada).
-    El registro de auditoria queda intacto.
-    La persona puede volver a registrarse despues de ser eliminada.
+    También elimina su fila en estudiantes_detalle (cascada).
+    La auditoria queda intacta.
     """
     try:
         conn = conectar()
@@ -380,7 +458,7 @@ eliminar_persona = eliminar_usuario
 
 
 def listar_usuarios(rol: str = None) -> list:
-    """Lista usuarios desde vista_usuarios. Incluye conteo de angulos."""
+    """Lista usuarios desde vista_usuarios con grado/grupo si aplica."""
     conn   = conectar()
     cursor = conn.cursor()
     if rol:
@@ -404,7 +482,7 @@ def listar_usuarios(rol: str = None) -> list:
 
 
 def obtener_usuario(usuario_id: int) -> dict | None:
-    """Retorna un dict con los datos del usuario, o None si no existe."""
+    """Retorna dict con datos completos del usuario, o None si no existe."""
     conn   = conectar()
     cursor = conn.cursor()
     cursor.execute("""
@@ -421,42 +499,42 @@ def obtener_usuario(usuario_id: int) -> dict | None:
     return dict(zip(keys, row))
 
 
+def registrar_persona(nombre_completo: str,
+                       numero_cuenta: str = None) -> int:
+    """Registra estudiante a partir de nombre completo como string."""
+    partes = nombre_completo.strip().split()
+    if len(partes) >= 3:
+        nombre = " ".join(partes[:-2])
+        ap_pat = partes[-2]
+        ap_mat = partes[-1]
+    elif len(partes) == 2:
+        nombre = partes[0]; ap_pat = partes[1]; ap_mat = ""
+    else:
+        nombre = nombre_completo.strip(); ap_pat = "."; ap_mat = ""
+    return registrar_usuario(nombre, ap_pat, ap_mat,
+                             numero_cuenta=numero_cuenta)
+
+
 # =============================================================================
 #  GUARDAR VECTORES
 # =============================================================================
 
 def guardar_vectores_por_angulo(usuario_id: int,
                                  vectores_por_paso: dict) -> int:
-    """
-    Guarda vectores promediados por angulo.
-
-    vectores_por_paso formato:
-      {
-        "frontal":    {"vectores": [array(512), ...]},
-        "perfil_der": {"vectores": [array(512), ...]},
-        "perfil_izq": {"vectores": [array(512), ...]},
-      }
-
-    Retorna el numero de angulos guardados exitosamente.
-    """
     conn   = conectar()
     cursor = conn.cursor()
     total  = 0
 
     for angulo, datos in vectores_por_paso.items():
         if angulo not in ANGULOS_VALIDOS:
-            print(f"[DB] Angulo '{angulo}' no valido. Omitido.")
             continue
 
         vecs = datos.get("vectores", [])
         if not vecs:
-            print(f"[DB] Angulo '{angulo}' sin muestras.")
             continue
 
         v_prom = np.mean(vecs, axis=0).astype(np.float32)
-
         if len(v_prom) != VECTOR_DIM:
-            print(f"[DB] '{angulo}': {len(v_prom)} dims != {VECTOR_DIM}. Omitido.")
             continue
 
         cursor.execute("""
@@ -467,51 +545,33 @@ def guardar_vectores_por_angulo(usuario_id: int,
               json.dumps(v_prom.tolist()),
               len(vecs)))
 
-        print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
+        print(f"[DB] ID={usuario_id} angulo='{angulo}' "
+              f"muestras={len(vecs)}")
         total += 1
 
     conn.commit()
     conn.close()
-    print(f"[DB] {total} angulos guardados para usuario ID={usuario_id}.")
+    print(f"[DB] {total} angulos guardados para ID={usuario_id}.")
     return total
 
 
 def guardar_vector_unico(usuario_id: int, vectores: list,
                           pesos_lista=None):
-    """Compatibilidad — guarda vector frontal en vectores_por_angulo."""
     if not vectores:
         return
     v_prom = np.mean(vectores, axis=0).astype(np.float32)
     guardar_vectores_por_angulo(
-        usuario_id,
-        {"frontal": {"vectores": [v_prom]}}
-    )
+        usuario_id, {"frontal": {"vectores": [v_prom]}})
 
 
 # =============================================================================
 #  CARGAR VECTORES
 # =============================================================================
 
-def _tablas_existentes(conn) -> set:
-    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    return {row[0] for row in cur.fetchall()}
-
-
 def cargar_vectores_por_angulo(excluir_id: int = None) -> list:
-    """
-    Carga todos los vectores activos de la BD.
-
-    excluir_id: omite ese usuario_id (para no comparar el registro
-                temporal recien creado contra si mismo).
-
-    Los usuarios eliminados no aparecen porque sus vectores se borran
-    en cascada, lo que permite re-registro tras eliminacion.
-    La auditoria no interfiere con esto.
-    """
     conn      = conectar()
     cursor    = conn.cursor()
     resultado = []
-    tablas    = _tablas_existentes(conn)
 
     if "vectores_por_angulo" in tablas:
         cursor.execute("""
@@ -556,18 +616,6 @@ def reconocer_persona(
         angulo_nuevo: str   = "frontal",
         umbral:       float = UMBRAL,
 ) -> dict | None:
-    """
-    Identifica a quien pertenece vector_nuevo comparando SOLO contra
-    vectores del mismo angulo almacenado (frontal vs frontal, etc.)
-
-    Logica de decision:
-      dist > RECHAZO          → None (desconocido)
-      gap 1°-2° < GAP_MIN     → None (ambiguo)
-      dist <= UMBRAL           → acceso=True
-      UMBRAL < dist <= RECHAZO → acceso=False (conocido pero denegado)
-
-    Siempre imprime candidatos en terminal para facilitar calibracion.
-    """
     registros = cargar_vectores_por_angulo()
     if not registros:
         return None
@@ -594,12 +642,10 @@ def reconocer_persona(
     ordenados = sorted(distancias.values(), key=lambda x: x["distancia"])
     mejor     = ordenados[0]
 
-    # Log siempre para calibracion
     print("[RECONO] Candidatos: " +
           ", ".join(f"{r['nombre'].split()[0]}={r['distancia']:.4f}"
                     for r in ordenados))
 
-    # Rechazo absoluto
     if mejor["distancia"] > RECHAZO:
         print(f"[RECONO] Desconocido — "
               f"dist={mejor['distancia']:.4f} > RECHAZO={RECHAZO}")
@@ -610,8 +656,7 @@ def reconocer_persona(
     if len(ordenados) >= 2:
         gap = round(ordenados[1]["distancia"] - mejor["distancia"], 4)
         if gap < GAP_MIN:
-            print(f"[RECONO] Ambiguo — "
-                  f"gap={gap:.4f} < GAP_MIN={GAP_MIN}")
+            print(f"[RECONO] Ambiguo — gap={gap:.4f} < GAP_MIN={GAP_MIN}")
             return None
 
     sim_raw                = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
@@ -633,18 +678,6 @@ def verificar_duplicado_facial(
         excluir_id:      int   = None,
         umbral:          float = UMBRAL_DUPLICADO,
 ) -> dict | None:
-    """
-    Verifica si la cara que se intenta registrar ya existe en la BD.
-
-    Compara SOLO angulos que ya fueron capturados (puede llamarse
-    con 1, 2 o 3 angulos durante el registro progresivo).
-
-    dist <= umbral → misma persona → bloquear registro
-    dist >  umbral → persona diferente → permitir registro
-
-    Los usuarios eliminados no bloquean el re-registro porque
-    sus vectores se borran en cascada.
-    """
     if not vectores_nuevos:
         return None
 
@@ -658,8 +691,8 @@ def verificar_duplicado_facial(
         ang = reg["angulo"]
         if ang not in vectores_nuevos:
             continue
-        dist = round(float(distancia_chi2(vectores_nuevos[ang],
-                                           reg["vector"])), 4)
+        dist = round(float(
+            distancia_chi2(vectores_nuevos[ang], reg["vector"])), 4)
         if uid not in mejores or dist < mejores[uid]["distancia"]:
             mejores[uid] = {
                 "usuario_id":    uid,
@@ -693,10 +726,6 @@ def registrar_acceso(
         tipo_evento: str,
         detalle:     str = None,
 ) -> bool:
-    """
-    Registra un evento de entrada / salida / intento_fallido.
-    Copia los datos del usuario en el momento del evento (inmutable).
-    """
     if tipo_evento not in ("entrada", "salida", "intento_fallido"):
         print(f"[DB] tipo_evento '{tipo_evento}' no valido.")
         return False
@@ -739,22 +768,20 @@ def registrar_acceso(
 def tiene_vector(usuario_id: int) -> bool:
     conn = conectar()
     c    = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?",
-              (usuario_id,))
+    c.execute(
+        "SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?",
+        (usuario_id,))
     n = c.fetchone()[0]
     conn.close()
     return n > 0
 
 
 def angulos_registrados(usuario_id: int) -> list:
-    """Retorna lista de (angulo, n_muestras) para el usuario."""
     conn = conectar()
     c    = conn.cursor()
     c.execute("""
-        SELECT angulo, n_muestras
-        FROM vectores_por_angulo
-        WHERE usuario_id = ?
-        ORDER BY angulo
+        SELECT angulo, n_muestras FROM vectores_por_angulo
+        WHERE usuario_id = ? ORDER BY angulo
     """, (usuario_id,))
     rows = c.fetchall()
     conn.close()
@@ -762,19 +789,16 @@ def angulos_registrados(usuario_id: int) -> list:
 
 
 def accesos_recientes(usuario_id: int = None, limite: int = 50) -> list:
-    """Retorna los ultimos accesos, opcionalmente filtrados por usuario."""
     conn   = conectar()
     cursor = conn.cursor()
     if usuario_id:
         cursor.execute("""
             SELECT * FROM vista_accesos_recientes
-            WHERE usuario_id = ?
-            LIMIT ?
+            WHERE usuario_id = ? LIMIT ?
         """, (usuario_id, limite))
     else:
         cursor.execute("""
-            SELECT * FROM vista_accesos_recientes
-            LIMIT ?
+            SELECT * FROM vista_accesos_recientes LIMIT ?
         """, (limite,))
     rows = cursor.fetchall()
     conn.close()
