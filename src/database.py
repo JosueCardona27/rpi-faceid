@@ -37,10 +37,10 @@ DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 # =============================================================================
 #  CONSTANTES — ajustar aqui si cambia el hardware o iluminacion
 # =============================================================================
-UMBRAL           = 0.55   # dist <= UMBRAL  → acceso PERMITIDO
+UMBRAL           = 0.35   # dist <= UMBRAL  → acceso PERMITIDO
 RECHAZO          = 0.80   # dist >  RECHAZO → DESCONOCIDO
 GAP_MIN          = 0.05   # diferencia minima entre 1° y 2° candidato
-MAX_DIST         = 1.0    # referencia para calcular porcentaje de similitud
+MAX_DIST         = 2.75   # referencia para calcular porcentaje de similitud
 UMBRAL_DUPLICADO = 0.20   # dist <= esto en registro → misma persona, bloquear
 
 ANGULOS_VALIDOS = ("frontal", "perfil_der", "perfil_izq")
