@@ -1051,7 +1051,7 @@ class App(tk.Tk):
 
         sim         = resultado["similitud_pct"]
         color_barra = SUCCESS if resultado["acceso"] else \
-                      (WARNING if sim >= 55 else DANGER)
+                      (WARNING if sim >= 80 else DANGER)
         self.after(0, lambda: self._set_sim_bar(int(sim), color_barra))
         self.after(0, lambda r=resultado: self.detalle_var.set(
             f"Angulo match: {r['angulo']}"))

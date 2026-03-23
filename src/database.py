@@ -31,8 +31,8 @@ DB_PATH           = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 #  CONSTANTES
 # =============================================================================
 
-UMBRAL           = 0.55
-RECHAZO          = 0.58
+UMBRAL           = 0.80
+RECHAZO          = 0.83
 GAP_MIN          = 0.05
 MAX_DIST         = 1.0
 UMBRAL_DUPLICADO = 0.20
