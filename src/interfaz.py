@@ -20,6 +20,8 @@ import threading
 import time
 from PIL import Image, ImageTk
 
+from vista_login import build_main as _mostrar_login
+
 USAR_PICAM = False
 try:
     from picamera2 import Picamera2
@@ -30,7 +32,6 @@ except Exception:
     print("[CAM] Modo webcam OpenCV")
 
 from face_engine import (extraer_caracteristicas, dibujar_overlay,
-                          ZONAS_POR_TIPO, ZONAS_FRONTAL,
                           TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
 from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          guardar_vector_unico, reconocer_persona,
@@ -121,7 +122,7 @@ class App(tk.Tk):
         self._ov_texto = ""
         self._ov_lock  = threading.Lock()
 
-        self._build_main()
+        self._build_login()
 
     @staticmethod
     def _lighten(hx):
@@ -149,6 +150,7 @@ class App(tk.Tk):
 
     def _volver(self):
         self._stop_cam()
+        self._modo_acceso = False
         self._build_main()
 
     def _set_overlay(self, color, texto=""):
@@ -255,6 +257,9 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA PRINCIPAL
     # ══════════════════════════════════════════════════════════════════════════
+    def _build_login(self):
+        _mostrar_login(self)
+    
     def _build_main(self):
         self._clear()
         self.geometry(f"{W}x{H}+0+0")
