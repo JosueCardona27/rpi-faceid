@@ -31,10 +31,10 @@ DB_PATH           = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 #  CONSTANTES
 # =============================================================================
 
-UMBRAL           = 0.80
-RECHAZO          = 0.83
+UMBRAL           = 0.40   # dist coseno <= 0.40 -> acceso (~80% similitud)
+RECHAZO          = 0.65   # dist coseno >  0.65 -> desconocido
 GAP_MIN          = 0.05
-MAX_DIST         = 1.0
+MAX_DIST         = 2.0    # rango coseno es 0-2, no 0-1
 UMBRAL_DUPLICADO = 0.20
 
 ANGULOS_VALIDOS = ("frontal", "perfil_der", "perfil_izq")

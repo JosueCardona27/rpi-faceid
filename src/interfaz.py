@@ -1056,7 +1056,7 @@ class App(tk.Tk):
         self.after(0, lambda r=resultado: self.detalle_var.set(
             f"Angulo match: {r['angulo']}"))
 
-        if resultado["acceso"]:
+        if resultado["acceso"] and sim >= 80:
             self.after(0, lambda r=resultado: self._resultado_ok(r))
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
