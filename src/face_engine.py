@@ -1,47 +1,60 @@
 """
-face_engine.py - Version YuNet corregida v3
-=============================================
-CORRECCIONES vs version anterior:
+face_engine.py - Version Deep Learning (MobileFaceNet + YuNet)
+==============================================================
+CAMBIOS vs version LBP:
 
-  BUG 1 — score_threshold demasiado alto (0.5)
-           → demasiados SIN CARA con camara OV5647
-           FIX: score_threshold = 0.30
+  RECONOCIMIENTO:
+    LBP 512-dim histogramas  ->  MobileFaceNet ONNX 512-dim embeddings
+    Distancia chi-cuadrado   ->  Distancia coseno (vectores L2-normalizados)
+    Cara 128x128 en gris     ->  Cara 112x112 RGB alineada con 5 landmarks
 
-  BUG 2 — sin fallback real a Haar cuando YuNet no detecta
-           → si YuNet carga pero no encuentra cara, retornaba []
-           FIX: si YuNet retorna vacio, intenta Haar
+  DETECCION / ANGULO (SIN CAMBIOS):
+    YuNet ONNX + Haar fallback
+    Clasificacion por asimetria de landmarks
 
-  BUG 3 — perfiles invertidos por flip horizontal
-           El frame entra con cv2.flip(raw,1) — imagen espejo.
-           Cuando el usuario gira a su DERECHA, en la imagen
-           aparece girando a su IZQUIERDA. YuNet clasifica segun
-           la imagen, no segun el usuario real.
-           FIX: intercambiar PERFIL_I <-> PERFIL_D en landmarks
+MODELO REQUERIDO:
+  Archivo: models/w600k_mbf.onnx
+  Se descarga automaticamente al primer arranque (~16 MB).
+  Si falla la descarga automatica:
+    1. Descarga buffalo_sc.zip desde:
+       https://github.com/deepinsight/insightface/releases/tag/v0.7
+    2. Extrae w600k_mbf.onnx y colócalo en la carpeta models/
 
-  BUG 4 — umbral de asimetria muy ajustado (0.28)
-           → cara frontal levemente ladeada = falso perfil
-           FIX: umbral subido a 0.40
+INSTALACION:
+  pip install onnxruntime
 """
 
 import os
 import cv2
 import numpy as np
 
-# ── Tipos de angulo ───────────────────────────────────────────────────────────
+# -- Tipos de angulo ----------------------------------------------------------
 TIPO_FRONTAL  = "frontal"
 TIPO_PERFIL_D = "perfil_der"
 TIPO_PERFIL_I = "perfil_izq"
 
-# ── CLAHE ─────────────────────────────────────────────────────────────────────
+# -- CLAHE (para deteccion, no para reconocimiento) ---------------------------
 _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
-# ── Rutas base ────────────────────────────────────────────────────────────────
+# -- Rutas base ----------------------------------------------------------------
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _MODELS   = os.path.join(_BASE_DIR, "..", "models")
 
+# -- Dimension del vector de caracteristicas ----------------------------------
+VECTOR_DIM = 512   # MobileFaceNet w600k_mbf.onnx -> 512 dims
+
+# -- Template de alineacion facial (5 puntos -> 112x112) ----------------------
+_TEMPLATE_112 = np.array([
+    [38.2946, 51.6963],
+    [73.5318, 51.5014],
+    [56.0252, 71.7366],
+    [41.5493, 92.3655],
+    [70.7299, 92.2041],
+], dtype=np.float32)
+
 
 # =============================================================================
-#  DETECTOR  (singleton)
+#  DETECTOR YuNet + Haar  (identico a version anterior)
 # =============================================================================
 
 _yunet        = None
@@ -57,27 +70,25 @@ def _init_detectores():
         return
     _det_init = True
 
-    # ── YuNet ─────────────────────────────────────────────────────────────────
     for nombre in ("face_detection_yunet_2023mar.onnx", "face_detection_yunet.onnx"):
         yunet_path = os.path.join(_MODELS, nombre)
         if os.path.exists(yunet_path):
             try:
                 _yunet = cv2.FaceDetectorYN.create(
                     yunet_path, "", (640, 480),
-                    score_threshold=0.30,   # BUG1 FIX: era 0.5, muy alto para OV5647
+                    score_threshold=0.30,
                     nms_threshold=0.3,
                     top_k=5000
                 )
-                print(f"[DET] ✅ YuNet cargado: {yunet_path}")
+                print(f"[DET] YuNet cargado: {yunet_path}")
             except Exception as e:
-                print(f"[DET] ⚠️  YuNet error: {e}")
+                print(f"[DET] YuNet error: {e}")
                 _yunet = None
             break
 
     if _yunet is None:
-        print(f"[DET] ⚠️  YuNet NO encontrado en {_MODELS}")
+        print(f"[DET] YuNet NO encontrado en {_MODELS}")
 
-    # ── Haar frontal ──────────────────────────────────────────────────────────
     rutas_f = [
         os.path.join(_MODELS, "haarcascade_frontalface_default.xml"),
         os.path.join(_BASE_DIR, "haarcascade_frontalface_default.xml"),
@@ -92,7 +103,6 @@ def _init_detectores():
                 print(f"[DET] Haar frontal (fallback): {ruta}")
                 break
 
-    # ── Haar perfil ───────────────────────────────────────────────────────────
     rutas_p = [
         os.path.join(_MODELS, "haarcascade_profileface.xml"),
         os.path.join(_BASE_DIR, "haarcascade_profileface.xml"),
@@ -108,14 +118,10 @@ def _init_detectores():
                 break
 
     if _yunet is None and _haar_frontal is None:
-        print("[DET] ❌ Ningun detector disponible.")
+        print("[DET] Ningun detector disponible.")
 
 
-# =============================================================================
-#  CACHE DE ULTIMA DETECCION YUNET
-# =============================================================================
-
-_ultimo_face_yunet = None   # array de 15 valores de YuNet
+_ultimo_face_yunet = None
 
 
 # =============================================================================
@@ -123,11 +129,6 @@ _ultimo_face_yunet = None   # array de 15 valores de YuNet
 # =============================================================================
 
 def _detectar_caras_yunet(frame):
-    """
-    Detecta caras con YuNet.
-    Guarda la mejor deteccion en _ultimo_face_yunet para reusar landmarks.
-    Retorna lista de (x, y, w, h, score).
-    """
     global _ultimo_face_yunet
 
     h_img, w_img      = frame.shape[:2]
@@ -143,38 +144,30 @@ def _detectar_caras_yunet(frame):
         x = int(face[0]); y = int(face[1])
         w = int(face[2]); h = int(face[3])
         score = float(face[14])
-
         x = max(0, x);  y = max(0, y)
         w = min(w, w_img - x);  h = min(h, h_img - y)
-
         if w < 15 or h < 15:
             continue
-
         detecciones.append((x, y, w, h, round(score, 3), face))
 
     if not detecciones:
         return []
 
-    # Ordenar por area — cara mas grande primero
     detecciones.sort(key=lambda d: d[2] * d[3], reverse=True)
-
-    # Guardar landmarks de la cara principal
     _ultimo_face_yunet = detecciones[0][5]
 
     return [(d[0], d[1], d[2], d[3], d[4]) for d in detecciones]
 
 
 def _detectar_caras_haar(frame, tipo_esperado=None):
-    """Fallback Haar — cuando YuNet no detecta nada."""
     global _ultimo_face_yunet
-    _ultimo_face_yunet = None   # sin landmarks de YuNet
+    _ultimo_face_yunet = None
 
     h_img, w_img = frame.shape[:2]
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gris = _clahe.apply(gris)
     resultados = []
 
-    # Frontal
     if tipo_esperado in (TIPO_FRONTAL, None):
         if _haar_frontal is not None:
             caras = _haar_frontal.detectMultiScale(
@@ -183,7 +176,6 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.75))
 
-    # Perfil derecho
     if tipo_esperado in (TIPO_PERFIL_D, None):
         if _haar_perfil is not None:
             caras = _haar_perfil.detectMultiScale(
@@ -192,7 +184,6 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
             for (x, y, w, h) in caras:
                 resultados.append((int(x), int(y), int(w), int(h), 0.70))
 
-    # Perfil izquierdo (imagen invertida)
     if tipo_esperado in (TIPO_PERFIL_I, None):
         if _haar_perfil is not None:
             gris_flip = cv2.flip(gris, 1)
@@ -208,28 +199,14 @@ def _detectar_caras_haar(frame, tipo_esperado=None):
 
 
 def _detectar_caras(frame, tipo_esperado=None):
-    """
-    Interfaz unificada.
-
-    Cuando YuNet esta disponible (siempre en esta RasPi), se usa YuNet
-    exclusivamente. Si YuNet no encuentra cara, se retorna [] sin recurrir
-    a Haar. Haar genera demasiados falsos positivos con la camara OV5647
-    (fondo morado / ruido de baja iluminacion) y no aporta valor cuando
-    YuNet ya esta cargado correctamente.
-
-    Haar solo se usa si YuNet no pudo cargarse del todo.
-    """
     _init_detectores()
-
     if _yunet is not None:
         return _detectar_caras_yunet(frame)
-
-    # Solo llega aqui si YuNet no cargo (sin modelo .onnx)
     return _detectar_caras_haar(frame, tipo_esperado)
 
 
 # =============================================================================
-#  CLASIFICACION DE ANGULO
+#  CLASIFICACION DE ANGULO  (identica a version anterior)
 # =============================================================================
 
 _buf_yaw   = []
@@ -237,32 +214,13 @@ _BUF_N_YAW = 8
 
 
 def _clasificar_angulo_con_landmarks(face_row):
-    """
-    Clasifica el angulo usando landmarks de YuNet ya detectados.
+    x   = float(face_row[0])
+    w   = float(face_row[2])
+    cx  = x + w / 2.0
+    x_od = float(face_row[4])
+    x_oi = float(face_row[6])
+    x_n  = float(face_row[8])
 
-    face_row indices:
-      [0,1,2,3]   = x, y, w, h del bbox
-      [4,5]       = ojo derecho x,y  (derecho en imagen = izquierdo del usuario por flip)
-      [6,7]       = ojo izquierdo x,y
-      [8,9]       = nariz x,y
-      [10,11]     = boca izquierda x,y
-      [12,13]     = boca derecha x,y
-      [14]        = score
-
-    BUG3 FIX — inversion por flip horizontal:
-      El frame viene con cv2.flip(raw,1). Cuando el usuario gira a su DERECHA,
-      en la imagen aparece girando a su IZQUIERDA. Por eso se intercambia
-      PERFIL_I <-> PERFIL_D respecto a lo que indica la asimetria de imagen.
-    """
-    x     = float(face_row[0])
-    w     = float(face_row[2])
-    cx    = x + w / 2.0
-
-    x_od  = float(face_row[4])   # ojo der en imagen
-    x_oi  = float(face_row[6])   # ojo izq en imagen
-    x_n   = float(face_row[8])   # nariz
-
-    # ── Asimetria de ojos ─────────────────────────────────────────────────────
     dist_od   = cx - x_od
     dist_oi   = x_oi - cx
     total     = abs(dist_od) + abs(dist_oi) + 1e-6
@@ -273,196 +231,177 @@ def _clasificar_angulo_con_landmarks(face_row):
         _buf_yaw.pop(0)
     asm = float(np.median(_buf_yaw))
 
-    # BUG3 FIX: intercambiado PERFIL_I <-> PERFIL_D por flip horizontal
-    # BUG4 FIX: umbral subido de 0.28 a 0.40
     if asm > 0.40:
-        return TIPO_PERFIL_D   # en imagen parece izq, pero usuario giro der
+        return TIPO_PERFIL_D
     elif asm < -0.40:
-        return TIPO_PERFIL_I   # en imagen parece der, pero usuario giro izq
+        return TIPO_PERFIL_I
 
-    # ── Posicion de nariz (confirmacion) ─────────────────────────────────────
     desv = (x_n - cx) / (w + 1e-6)
     if desv > 0.15:
-        return TIPO_PERFIL_I   # intercambiado por flip
+        return TIPO_PERFIL_I
     elif desv < -0.15:
-        return TIPO_PERFIL_D   # intercambiado por flip
+        return TIPO_PERFIL_D
 
     return TIPO_FRONTAL
 
 
 def _calcular_yaw_sobel(frame_gris, bbox):
-    """Fallback Sobel — solo cuando no hay landmarks YuNet."""
     x, y, w, h = bbox
-    x1, y1     = max(0, x), max(0, y)
-    x2, y2     = min(frame_gris.shape[1], x + w), min(frame_gris.shape[0], y + h)
-    recorte    = frame_gris[y1:y2, x1:x2]
-
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(frame_gris.shape[1], x + w), min(frame_gris.shape[0], y + h)
+    recorte = frame_gris[y1:y2, x1:x2]
     if recorte.size == 0:
         return 0.0
     try:
-        cara  = cv2.resize(recorte, (128, 128))
-        gx    = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
-        gabs  = np.abs(gx)
-        wc    = cara.shape[1] // 3
-        izq   = np.mean(gabs[:, :wc])
-        der   = np.mean(gabs[:, 2*wc:])
+        cara = cv2.resize(recorte, (128, 128))
+        gx   = cv2.Sobel(cara, cv2.CV_32F, 1, 0, ksize=7)
+        gabs = np.abs(gx)
+        wc   = cara.shape[1] // 3
+        izq  = np.mean(gabs[:, :wc])
+        der  = np.mean(gabs[:, 2*wc:])
         return (der - izq) / (der + izq + 1e-6) * 100.0
-    except Exception as e:
-        print(f"[Sobel] Error: {e}")
+    except Exception:
         return 0.0
 
 
 def _clasificar_angulo(frame, bbox, frame_shape, tipo_esperado=None):
-    """
-    Prioridad de clasificacion:
-      1. tipo_esperado  → registro guiado, siempre se respeta
-      2. YuNet landmarks del cache → precision real sin doble deteccion
-      3. Sobel fallback → si YuNet no detecto nada
-    """
     global _buf_yaw
-
-    # YuNet: usar cache de la deteccion ya hecha
     if _ultimo_face_yunet is not None:
         return _clasificar_angulo_con_landmarks(_ultimo_face_yunet)
-
-    # Fallback Sobel (Haar no dio landmarks)
     try:
         fg  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         yaw = _calcular_yaw_sobel(fg, bbox)
     except Exception:
         yaw = 0.0
-
     _buf_yaw.append(yaw)
     if len(_buf_yaw) > _BUF_N_YAW:
         _buf_yaw.pop(0)
     ys = float(np.median(_buf_yaw)) if _buf_yaw else yaw
-
     if ys > 40.0:
         return TIPO_PERFIL_D
     elif ys < -40.0:
         return TIPO_PERFIL_I
-    else:
-        return TIPO_FRONTAL
+    return TIPO_FRONTAL
 
 
 def _extraer_angulos_lbf(gris, bbox, fw, fh):
-    """Compatibilidad con diagnostico.py — siempre retorna None."""
+    """Compatibilidad con diagnostico.py."""
     return None, None
 
 
 # =============================================================================
-#  ZONAS LBP  (sin cambios)
+#  RECONOCIMIENTO DEEP LEARNING  (MobileFaceNet ONNX)
 # =============================================================================
 
-ZONAS_FRONTAL = [
-    (0,  40,  0,   128, "frente"),
-    (28, 65,  0,   58,  "ojo_izq"),
-    (28, 65,  70,  128, "ojo_der"),
-    (55, 92,  28,  100, "nariz"),
-    (62, 100, 0,   50,  "mejilla_izq"),
-    (62, 100, 78,  128, "mejilla_der"),
-    (88, 128, 14,  114, "boca_menton"),
-    (20, 100, 0,   128, "cara_media"),
-]
+_ort_session = None
+_ort_input   = None
+_recog_listo = False
 
-ZONAS_PERFIL_D = [
-    (0,  40,  0,  128, "frente"),
-    (20, 60,  0,  60,  "ojo"),
-    (45, 85,  0,  65,  "nariz_lat"),
-    (55, 95,  0,  55,  "mejilla"),
-    (65, 110, 0,  50,  "mandibula"),
-    (25, 75,  0,  40,  "pomulo"),
-    (82, 128, 0,  75,  "menton"),
-    (15, 105, 0,  80,  "perfil_media"),
-]
 
-ZONAS_PERFIL_I = [
-    (0,  40,  0,   128, "frente"),
-    (20, 60,  68,  128, "ojo"),
-    (45, 85,  63,  128, "nariz_lat"),
-    (55, 95,  73,  128, "mejilla"),
-    (65, 110, 78,  128, "mandibula"),
-    (25, 75,  88,  128, "pomulo"),
-    (82, 128, 53,  128, "menton"),
-    (15, 105, 48,  128, "perfil_media"),
-]
+def _descargar_modelo(dest_path):
+    import urllib.request
+    import zipfile
 
-ZONAS_POR_TIPO = {
-    TIPO_FRONTAL:  ZONAS_FRONTAL,
-    TIPO_PERFIL_D: ZONAS_PERFIL_D,
-    TIPO_PERFIL_I: ZONAS_PERFIL_I,
-}
+    url      = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_sc.zip"
+    zip_path = dest_path.replace("w600k_mbf.onnx", "buffalo_sc_tmp.zip")
 
-ZONAS      = ZONAS_FRONTAL
-N_ZONAS    = 8
-LBP_BINS   = 64
-VECTOR_DIM = N_ZONAS * LBP_BINS
+    print("[RECOG] Descargando modelo MobileFaceNet (~16 MB)...")
+    try:
+        def _prog(count, block, total):
+            mb = count * block / 1_048_576
+            print(f"\r[RECOG] {mb:.1f} MB...", end="", flush=True)
+        urllib.request.urlretrieve(url, zip_path, reporthook=_prog)
+        print()
+
+        with zipfile.ZipFile(zip_path, "r") as z:
+            for name in z.namelist():
+                if name.endswith("w600k_mbf.onnx"):
+                    data = z.read(name)
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    with open(dest_path, "wb") as f:
+                        f.write(data)
+                    print(f"[RECOG] Modelo guardado: {dest_path}")
+                    break
+            else:
+                print("[RECOG] w600k_mbf.onnx no encontrado en el zip.")
+        os.remove(zip_path)
+    except Exception as e:
+        print(f"\n[RECOG] Error descargando: {e}")
+        print("[RECOG] Descarga manual en: https://github.com/deepinsight/insightface/releases/tag/v0.7")
+        print("[RECOG] Extrae w600k_mbf.onnx en la carpeta models/")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
+
+def _init_reconocimiento():
+    global _ort_session, _ort_input, _recog_listo
+
+    if _recog_listo:
+        return
+    _recog_listo = True
+
+    model_path = os.path.join(_MODELS, "w600k_mbf.onnx")
+
+    if not os.path.exists(model_path):
+        _descargar_modelo(model_path)
+
+    if not os.path.exists(model_path):
+        print("[RECOG] Modelo no disponible. Instala onnxruntime y descarga el modelo.")
+        return
+
+    try:
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 2
+        opts.intra_op_num_threads = 2
+        _ort_session = ort.InferenceSession(
+            model_path,
+            sess_options=opts,
+            providers=["CPUExecutionProvider"]
+        )
+        _ort_input = _ort_session.get_inputs()[0].name
+        print(f"[RECOG] MobileFaceNet listo | dims={_ort_session.get_outputs()[0].shape}")
+    except ImportError:
+        print("[RECOG] onnxruntime no instalado. Ejecuta: pip install onnxruntime")
+    except Exception as e:
+        print(f"[RECOG] Error cargando modelo: {e}")
+
+
+def _alinear_cara(frame, face_row):
+    """Alinea la cara a 112x112 con los 5 landmarks de YuNet."""
+    src = np.array([
+        [face_row[4],  face_row[5]],
+        [face_row[6],  face_row[7]],
+        [face_row[8],  face_row[9]],
+        [face_row[10], face_row[11]],
+        [face_row[12], face_row[13]],
+    ], dtype=np.float32)
+
+    M, _ = cv2.estimateAffinePartial2D(src, _TEMPLATE_112, method=cv2.LMEDS)
+    if M is None:
+        return None
+
+    return cv2.warpAffine(frame, M, (112, 112),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REFLECT)
+
+
+def _extraer_embedding(cara_112):
+    """Extrae embedding L2-normalizado de 512 dims con MobileFaceNet."""
+    if _ort_session is None:
+        return None
+
+    img = cv2.cvtColor(cara_112, cv2.COLOR_BGR2RGB).astype(np.float32)
+    img = (img - 127.5) / 127.5
+    img = img.transpose(2, 0, 1)[np.newaxis]   # (1, 3, 112, 112)
+
+    out  = _ort_session.run(None, {_ort_input: img})[0][0]   # (512,)
+    norm = np.linalg.norm(out)
+    return (out / norm).astype(np.float32) if norm > 0 else out.astype(np.float32)
 
 
 # =============================================================================
-#  LBP  (sin cambios)
-# =============================================================================
-
-_UNIFORM_MAP = None
-
-
-def _build_uniform_map():
-    umap = np.full(256, 58, dtype=np.int32)
-    idx  = 0
-    for code in range(256):
-        b     = format(code, "08b")
-        trans = sum(b[i] != b[(i + 1) % 8] for i in range(8))
-        if trans <= 2:
-            umap[code] = idx
-            idx += 1
-    return umap
-
-
-def _get_uniform_map():
-    global _UNIFORM_MAP
-    if _UNIFORM_MAP is None:
-        _UNIFORM_MAP = _build_uniform_map()
-    return _UNIFORM_MAP
-
-
-def _lbp_imagen(gris):
-    img    = gris.astype(np.int32)
-    pad    = np.pad(img, 1, mode="edge")
-    h, w   = gris.shape
-    center = pad[1:-1, 1:-1]
-    nbrs   = [
-        pad[0:-2, 0:-2], pad[0:-2, 1:-1], pad[0:-2, 2:],
-        pad[1:-1, 2:],   pad[2:,   2:],   pad[2:,   1:-1],
-        pad[2:,   0:-2], pad[1:-1, 0:-2],
-    ]
-    lbp = np.zeros((h, w), dtype=np.uint8)
-    for bit, nbr in enumerate(nbrs):
-        lbp |= ((nbr >= center).astype(np.uint8) << bit)
-    return lbp
-
-
-def _histograma_zona(cara128, r0, r1, c0, c1):
-    zona = cara128[r0:r1, c0:c1]
-    if zona.size == 0:
-        return np.zeros(LBP_BINS, dtype=np.float32)
-
-    lbp_map = _lbp_imagen(zona)
-    umap    = _get_uniform_map()
-    hist59  = np.bincount(
-        umap[lbp_map.flatten()], minlength=59
-    ).astype(np.float32)
-
-    total = hist59.sum()
-    if total > 0:
-        hist59 /= total
-
-    hist64      = np.zeros(LBP_BINS, dtype=np.float32)
-    hist64[:59] = hist59
-    return hist64
-
-
-# =============================================================================
-#  API PUBLICA  (firma identica al original)
+#  API PUBLICA
 # =============================================================================
 
 def preprocesar_cara(gris_zona):
@@ -471,47 +410,48 @@ def preprocesar_cara(gris_zona):
 
 def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=None):
     """
-    Detecta cara, clasifica angulo y extrae vector LBP.
-    Compatible con database.py e interfaz.py sin cambios.
+    Detecta cara, clasifica angulo y extrae embedding MobileFaceNet.
+    Firma identica a la version LBP — compatible con interfaz.py sin cambios.
     """
+    _init_detectores()
+    _init_reconocimiento()
+
     caras = _detectar_caras(frame, tipo_esperado=tipo_esperado)
     if not caras:
         return None, None, None
 
     x, y, w, h, _ = caras[0]
     h_img, w_img   = frame.shape[:2]
+    x1 = max(0, x);          y1 = max(0, y)
+    x2 = min(w_img, x + w);  y2 = min(h_img, y + h)
+    bbox = (x1, y1, x2 - x1, y2 - y1)
 
-    x1, y1 = max(0, x),         max(0, y)
-    x2, y2 = min(w_img, x + w), min(h_img, y + h)
+    tipo = _clasificar_angulo(frame, bbox, frame.shape, tipo_esperado=None)
 
-    gris_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    recorte   = gris_full[y1:y2, x1:x2]
+    embedding = None
+    if _ultimo_face_yunet is not None:
+        cara_alineada = _alinear_cara(frame, _ultimo_face_yunet)
+        if cara_alineada is not None and cara_alineada.size > 0:
+            embedding = _extraer_embedding(cara_alineada)
 
-    if recorte.size == 0:
-        return None, None, None
+    if embedding is None:
+        recorte = frame[y1:y2, x1:x2]
+        if recorte.size > 0:
+            embedding = _extraer_embedding(cv2.resize(recorte, (112, 112)))
 
-    recorte = preprocesar_cara(recorte)
-    cara128 = cv2.resize(recorte, (128, 128))
-
-    tipo = _clasificar_angulo(
-        frame,
-        (x1, y1, x2 - x1, y2 - y1),
-        frame.shape,
-        tipo_esperado=None
-    )
-
-    zonas  = ZONAS_POR_TIPO.get(tipo, ZONAS_FRONTAL)
-    vector = np.concatenate([
-        _histograma_zona(cara128, r0, r1, c0, c1)
-        for r0, r1, c0, c1, _ in zonas
-    ]).astype(np.float32)
-
-    return vector, (x1, y1, x2 - x1, y2 - y1), tipo
+    return embedding, bbox, tipo
 
 
-def distancia_chi2(v1, v2):
-    denom = v1 + v2 + 1e-7
-    return float(np.sum((v1 - v2) ** 2 / denom))
+def distancia_coseno(v1, v2):
+    """
+    Distancia coseno entre vectores L2-normalizados. Rango [0, 2].
+    < 0.40 misma persona  |  > 0.65 persona distinta
+    """
+    return float(1.0 - np.dot(v1, v2))
+
+
+# Alias de compatibilidad — database.py importa distancia_chi2
+distancia_chi2 = distancia_coseno
 
 
 def dibujar_overlay(frame, coords, color, texto="", tipo=None):
@@ -540,47 +480,34 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     }
 
     if tipo in etiquetas:
-        cv2.putText(
-            frame, etiquetas[tipo],
-            (x, y + h + 16),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1
-        )
+        cv2.putText(frame, etiquetas[tipo],
+                    (x, y + h + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1)
 
     if texto:
-        cv2.putText(
-            frame, texto,
-            (x, max(14, y - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
-        )
+        cv2.putText(frame, texto,
+                    (x, max(14, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     return frame
 
 
 def guardar_rostro_recortado(frame, nombre="persona", carpeta_base="dataset", tipo_esperado=None):
-    """Guarda rostro recortado en dataset/nombre/"""
     from datetime import datetime
-
     vector, bbox, tipo = extraer_caracteristicas(frame, tipo_esperado=tipo_esperado)
-
     if bbox is None:
         return None, None, None, None
-
     x, y, w, h   = bbox
     h_img, w_img = frame.shape[:2]
-
-    x1, y1 = max(0, x),         max(0, y)
+    x1, y1 = max(0, x), max(0, y)
     x2, y2 = min(w_img, x + w), min(h_img, y + h)
-
     rostro = frame[y1:y2, x1:x2]
     if rostro.size == 0:
         return None, None, None, None
-
     ruta_dir = os.path.join(carpeta_base, nombre)
     os.makedirs(ruta_dir, exist_ok=True)
-
     marca   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     archivo = f"{nombre}_{tipo}_{marca}.png"
     ruta    = os.path.join(ruta_dir, archivo)
-
     cv2.imwrite(ruta, rostro)
     return ruta, vector, bbox, tipo
