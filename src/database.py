@@ -5,17 +5,29 @@ Base de datos SQLite para el sistema de reconocimiento facial.
 
 Caracteristicas:
   - Roles: admin, maestro, estudiante
-  - Vectores LBP por angulo: frontal, perfil_der, perfil_izq (512 dims)
-  - Reconocimiento por angulo consistente (frontal vs frontal)
+  - Embeddings MobileFaceNet por angulo: frontal, perfil_der, perfil_izq (512 dims)
+  - Reconocimiento por distancia coseno (L2-normalizado)
   - Deteccion de duplicado facial en registro
   - Registro de accesos inmutable
   - Auditoria de cambios inmutable
 
-Umbrales calibrados con datos reales:
-  UMBRAL           = 0.55   distancia maxima para acceso permitido
-  RECHAZO          = 0.58   por encima de esto = desconocido
+Umbrales para distancia COSENO con MobileFaceNet:
+  UMBRAL           = 0.40   dist <= 0.40 → acceso PERMITIDO   (~80% similitud)
+  RECHAZO          = 0.65   dist >  0.65 → desconocido        (~67% similitud)
   GAP_MIN          = 0.05   margen minimo entre 1° y 2° candidato
-  UMBRAL_DUPLICADO = 0.20   bloquea registro si misma cara detectada
+  UMBRAL_DUPLICADO = 0.20   dist <= 0.20 en registro → misma persona, bloquear
+  MAX_DIST         = 2.0    referencia para % similitud (coseno rango 0-2)
+
+  Formula similitud: sim = max(0, (1 - dist / MAX_DIST)) * 100
+    dist=0.00 → sim=100%   (identico)
+    dist=0.40 → sim=80%    (limite de acceso)
+    dist=0.65 → sim=67.5%  (limite de rechazo)
+    dist=1.00 → sim=50%
+    dist=2.00 → sim=0%     (opuesto)
+
+  NOTA: Si cambias de LBP a MobileFaceNet (o viceversa), debes
+        eliminar la base de datos y re-registrar todos los usuarios.
+        Los vectores LBP NO son compatibles con embeddings coseno.
 
 Permisos por rol:
   admin    — puede registrar admin, maestro y estudiante
@@ -37,10 +49,10 @@ DB_PATH = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 # =============================================================================
 #  CONSTANTES — ajustar aqui si cambia el hardware o iluminacion
 # =============================================================================
-UMBRAL           = 0.35   # dist <= UMBRAL  → acceso PERMITIDO
-RECHAZO          = 0.80   # dist >  RECHAZO → DESCONOCIDO
+UMBRAL           = 0.40   # dist <= UMBRAL  → acceso PERMITIDO  (coseno)
+RECHAZO          = 0.65   # dist >  RECHAZO → DESCONOCIDO       (coseno)
 GAP_MIN          = 0.05   # diferencia minima entre 1° y 2° candidato
-MAX_DIST         = 2.75   # referencia para calcular porcentaje de similitud
+MAX_DIST         = 2.0    # referencia para % similitud (rango coseno 0-2)
 UMBRAL_DUPLICADO = 0.20   # dist <= esto en registro → misma persona, bloquear
 
 ANGULOS_VALIDOS = ("frontal", "perfil_der", "perfil_izq")
