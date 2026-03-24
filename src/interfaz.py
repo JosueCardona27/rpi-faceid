@@ -915,19 +915,44 @@ class App(tk.Tk):
             pass
 
     def _cancelar_por_duplicado(self, duplicado: dict):
-        self._set_overlay((255, 59, 92), "Ya registrado")
+        # Overlay rojo en cámara con nombre del duplicado
+        nombre_dup = duplicado.get("nombre", "Persona desconocida")
+        self._set_overlay((255, 59, 92), f"YA REGISTRADO\n{nombre_dup}")
         try:
+            # Mensaje más grande y en rojo en la zona de estado
             self.progreso_var.set(
-                f"Rostro ya registrado como:\n{duplicado['nombre']}")
-            self.prog_label.config(fg=DANGER)
+                f"Rostro ya registrado como:\n{nombre_dup}")
+            self.prog_label.config(
+                fg=DANGER,
+                font=("Segoe UI", 11, "bold"))   # sube de 8pt a 11pt
+
             self.status_var.set("Registro cancelado.")
-            self.cap_btn.config(state="normal", bg=ACCENT,
-                                text="INICIAR ESCANEO")
+
+            # Botón en rojo para reforzar el error visualmente
+            self.cap_btn.config(
+                state="normal",
+                bg=DANGER,
+                fg="#FFFFFF",
+                text="Intentar de nuevo")
             self.timer_var.set("")
             self.paso_txt_var.set("")
         except:
             pass
+
         self.after(100, self._resetear_pasos_ui)
+
+        # Restaurar estado normal después de 5 segundos
+        def _restaurar():
+            try:
+                self.cap_btn.config(bg=ACCENT, fg=BG, text="INICIAR ESCANEO")
+                self.prog_label.config(font=("Segoe UI", 8, "bold"))
+                self.progreso_var.set("")
+                self.status_var.set("Listo")
+                self._set_overlay(None, "")
+            except:
+                pass
+
+        self.after(5000, _restaurar)
 
     # ── Validacion e inicio ───────────────────────────────────────────────────
     def _iniciar_registro(self):

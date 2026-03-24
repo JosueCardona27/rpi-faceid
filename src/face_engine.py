@@ -533,38 +533,104 @@ distancia_chi2 = distancia_coseno
 
 def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     x, y, w, h = coords
-    L = max(18, w // 4)
 
     colores_tipo = {
-        TIPO_FRONTAL:  (0, 212, 255),
-        TIPO_PERFIL_D: (255, 165, 0),
-        TIPO_PERFIL_I: (0, 165, 255),
+        TIPO_FRONTAL:  (0, 212, 255),   # cian
+        TIPO_PERFIL_D: (255, 165,   0), # naranja
+        TIPO_PERFIL_I: (0,  165, 255),  # azul
     }
     c = colores_tipo.get(tipo, color)
 
-    for p1, p2 in [
-        ((x, y),         (x + L, y)),           ((x, y),         (x, y + L)),
-        ((x + w, y),     (x + w - L, y)),       ((x + w, y),     (x + w, y + L)),
-        ((x, y + h),     (x + L, y + h)),       ((x, y + h),     (x, y + h - L)),
-        ((x + w, y + h), (x + w - L, y + h)),   ((x + w, y + h), (x + w, y + h - L)),
-    ]:
-        cv2.line(frame, p1, p2, c, 2)
+    # ── Longitud de esquinas y grosor ────────────────────────────────────────
+    L      = max(28, w // 4)   # antes: max(18, w//4) — esquinas más largas
+    grosor = 3                  # antes: 2 — línea más gruesa
 
+    # ── Sombra de las esquinas (desplazada 2 px, color negro) ────────────────
+    segmentos = [
+        ((x,     y),     (x + L,     y)),       ((x,     y),     (x,     y + L)),
+        ((x + w, y),     (x + w - L, y)),       ((x + w, y),     (x + w, y + L)),
+        ((x,     y + h), (x + L,     y + h)),   ((x,     y + h), (x,     y + h - L)),
+        ((x + w, y + h), (x + w - L, y + h)),   ((x + w, y + h), (x + w, y + h - L)),
+    ]
+    for p1, p2 in segmentos:
+        cv2.line(frame,
+                 (p1[0] + 2, p1[1] + 2),
+                 (p2[0] + 2, p2[1] + 2),
+                 (0, 0, 0), grosor + 2, cv2.LINE_AA)
+
+    # ── Esquinas del marco ───────────────────────────────────────────────────
+    for p1, p2 in segmentos:
+        cv2.line(frame, p1, p2, c, grosor, cv2.LINE_AA)
+
+    # ── Etiqueta de tipo de pose (parte inferior del marco) ──────────────────
     etiquetas = {
         TIPO_FRONTAL:  "FRONTAL",
-        TIPO_PERFIL_D: "PERFIL DER",
-        TIPO_PERFIL_I: "PERFIL IZQ",
+        TIPO_PERFIL_D: "PERFIL DER.",
+        TIPO_PERFIL_I: "PERFIL IZQ.",
     }
-
     if tipo in etiquetas:
-        cv2.putText(frame, etiquetas[tipo],
-                    (x, y + h + 16),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1)
+        etq_txt   = etiquetas[tipo]
+        font      = cv2.FONT_HERSHEY_DUPLEX   # antes SIMPLEX — más legible
+        fscale    = 0.6                        # antes: 0.45
+        fthick    = 2                          # antes: 1
+        (tw, th), bl = cv2.getTextSize(etq_txt, font, fscale, fthick)
+        tx = x + w // 2 - tw // 2
+        ty = y + h + th + 10
 
+        # Fondo píldora semitransparente
+        pad = 5
+        overlay = frame.copy()
+        cv2.rectangle(overlay,
+                      (tx - pad,      ty - th - pad),
+                      (tx + tw + pad, ty + bl + pad - 2),
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.60, frame, 0.40, 0, frame)
+        cv2.rectangle(frame,
+                      (tx - pad,      ty - th - pad),
+                      (tx + tw + pad, ty + bl + pad - 2),
+                      c, 1, cv2.LINE_AA)
+
+        # Sombra + texto
+        cv2.putText(frame, etq_txt, (tx + 2, ty + 2),
+                    font, fscale, (0, 0, 0), fthick + 2, cv2.LINE_AA)
+        cv2.putText(frame, etq_txt, (tx, ty),
+                    font, fscale, c, fthick, cv2.LINE_AA)
+
+    # ── Texto principal (sobre el marco, parte superior) ─────────────────────
     if texto:
-        cv2.putText(frame, texto,
-                    (x, max(14, y - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        font2   = cv2.FONT_HERSHEY_DUPLEX   # antes SIMPLEX
+        fscale2 = 0.75                       # antes: 0.6
+        fthick2 = 2
+        lines   = texto.split("\n")
+        line_h  = 28
+        cx      = x + w // 2
+
+        max_tw = max(
+            cv2.getTextSize(ln, font2, fscale2, fthick2)[0][0]
+            for ln in lines
+        )
+        total_h = len(lines) * line_h
+        bx1 = cx - max_tw // 2 - 8
+        bx2 = cx + max_tw // 2 + 8
+        by1 = max(0, y - total_h - 12)
+        by2 = max(total_h + 4, y - 4)
+
+        # Fondo semitransparente negro con borde coloreado
+        bg = frame.copy()
+        cv2.rectangle(bg, (bx1, by1), (bx2, by2), (0, 0, 0), -1)
+        cv2.addWeighted(bg, 0.65, frame, 0.35, 0, frame)
+        cv2.rectangle(frame, (bx1, by1), (bx2, by2), c, 1, cv2.LINE_AA)
+
+        for idx, line in enumerate(lines):
+            (tw2, th2), _ = cv2.getTextSize(line, font2, fscale2, fthick2)
+            tx2 = cx - tw2 // 2
+            ty2 = by1 + (idx + 1) * line_h - 4
+            # Sombra
+            cv2.putText(frame, line, (tx2 + 2, ty2 + 2),
+                        font2, fscale2, (0, 0, 0), fthick2 + 2, cv2.LINE_AA)
+            # Texto
+            cv2.putText(frame, line, (tx2, ty2),
+                        font2, fscale2, color, fthick2, cv2.LINE_AA)
 
     return frame
 
