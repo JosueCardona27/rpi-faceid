@@ -75,8 +75,8 @@ CAM_W   = W - PANEL_W
 
 HAAR_PATH = None
 
-GRADOS = [str(i) for i in range(1, 21)]
-GRUPOS = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+GRADOS = [str(i) for i in range(1, 11)]
+GRUPOS = [chr(i) for i in range(ord('A'), ord('G'))]
 
 # ── Pasos de registro ─────────────────────────────────────────────────────────
 PASOS_REGISTRO = [
@@ -154,7 +154,7 @@ def _rounded_btn(parent, text, cmd, width=284, height=40,
 
     _draw(bg)
     lbl = tk.Label(frame, text=text,
-                   font=("Courier New", font_size, "bold"),
+                   font=("Segoe UI", font_size, "bold"),
                    fg=fg, bg=bg, cursor="hand2")
     lbl.place(relx=.5, rely=.5, anchor="center")
 
@@ -184,12 +184,13 @@ class App(tk.Tk):
         self.resizable(False, False)
         self.configure(bg=BG)
 
-        self.f_title  = tkfont.Font(family="Courier New", size=16, weight="bold")
-        self.f_sub    = tkfont.Font(family="Courier New", size=8)
-        self.f_btn    = tkfont.Font(family="Courier New", size=10, weight="bold")
-        self.f_label  = tkfont.Font(family="Courier New", size=8)
-        self.f_status = tkfont.Font(family="Courier New", size=8,  weight="bold")
-        self.f_zona   = tkfont.Font(family="Courier New", size=7)
+        FONT = "Segoe UI"
+        self.f_title  = tkfont.Font(family=FONT, size=16, weight="bold")
+        self.f_sub    = tkfont.Font(family=FONT, size=9)
+        self.f_btn    = tkfont.Font(family=FONT, size=10, weight="bold")
+        self.f_label  = tkfont.Font(family=FONT, size=9)
+        self.f_status = tkfont.Font(family=FONT, size=9,  weight="bold")
+        self.f_zona   = tkfont.Font(family=FONT, size=8)
 
         self.picam2      = None
         self._cap        = None
@@ -387,19 +388,32 @@ class App(tk.Tk):
         cv.create_rectangle(0, 54, W, 56, fill=ACCENT, outline="")
         cv.create_text(W // 2, 27,
                        text="SISTEMA DE CONTROL DE ACCESO  ·  FACIAL",
-                       font=("Courier New", 11, "bold"), fill=TEXT)
+                       font=("Segoe UI", 11, "bold"), fill=TEXT)
+
+        # ── Botón CERRAR en barra superior derecha ────────────────────────────
+        close_btn = tk.Button(
+            self, text="✕  CERRAR",
+            font=("Segoe UI", 8, "bold"),
+            fg=TEXT, bg=DANGER,
+            relief="flat", cursor="hand2",
+            padx=10, pady=0,
+            bd=0, highlightthickness=0,
+            command=self.on_close)
+        close_btn.place(x=W - 110, y=13, width=96, height=28)
+        close_btn.bind("<Enter>", lambda e: close_btn.config(bg=self._lighten(DANGER)))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(bg=DANGER))
         # ── Barra inferior ────────────────────────────────────────────────────
         cv.create_rectangle(0, H - 30, W, H, fill=PANEL, outline="")
         cv.create_rectangle(0, H - 30, W, H - 29, fill=BORDER, outline="")
         cv.create_text(W // 2, H - 15,
                        text=f"Universidad de Colima  ·  Facultad de Ingeniería Electromecanica  "
                             f"|  v5.5  |  {int(TIEMPO_ESCANEO)}s  |  max {MAX_MUESTRAS_PASO} muestras/paso",
-                       font=("Courier New", 7), fill=SUBTEXT)
+                       font=("Segoe UI", 7), fill=SUBTEXT)
 
         # ── Subtítulo central ─────────────────────────────────────────────────
         cv.create_text(W // 2, 86,
                        text="Bienvenido — selecciona una opción",
-                       font=("Courier New", 10), fill=SUBTEXT)
+                       font=("Segoe UI", 10), fill=SUBTEXT)
 
         # ── Botones horizontales tipo pill (boceto) ───────────────────────────
         BW, BH = 680, 122
@@ -445,15 +459,15 @@ class App(tk.Tk):
 
         # Textos
         tk.Label(fr, text=titulo,
-                 font=("Courier New", 13, "bold"),
+                 font=("Segoe UI", 13, "bold"),
                  fg=TEXT, bg=CARD
                  ).place(relx=.5, y=82, anchor="center")
         tk.Label(fr, text=subtitulo,
-                 font=("Courier New", 8, "bold"),
+                 font=("Segoe UI", 8, "bold"),
                  fg=color, bg=CARD
                  ).place(relx=.5, y=102, anchor="center")
         tk.Label(fr, text=desc,
-                 font=("Courier New", 8),
+                 font=("Segoe UI", 8),
                  fg=SUBTEXT, bg=CARD, justify="center"
                  ).place(relx=.5, y=130, anchor="center")
 
@@ -524,11 +538,11 @@ class App(tk.Tk):
         # ── Textos ────────────────────────────────────────────────────────────
         tx = bw + 26
         cc.create_text(tx, 28,  text=titulo,    anchor="w",
-                       font=("Courier New", 16, "bold"), fill=TEXT)
+                       font=("Segoe UI", 16, "bold"), fill=TEXT)
         cc.create_text(tx, 56,  text=subtitulo, anchor="w",
-                       font=("Courier New", 9, "bold"),  fill=color)
+                       font=("Segoe UI", 9, "bold"),  fill=color)
         cc.create_text(tx, 76,  text=desc,      anchor="w",
-                       font=("Courier New", 8),          fill=SUBTEXT)
+                       font=("Segoe UI", 8),          fill=SUBTEXT)
 
         # ── Botón pill ENTRAR (Canvas embebido via create_window) ─────────────
         btn_w2, btn_h2 = 150, 46
@@ -557,221 +571,247 @@ class App(tk.Tk):
         self.geometry(f"{W}x{H}+0+0")
         self._set_overlay(None, "")
 
+        FONT = "Segoe UI"
+
+        # ══════════════════════════════════════════════════════════════════════
+        # PANEL IZQUIERDO — formulario
+        # ══════════════════════════════════════════════════════════════════════
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
         left.place(x=0, y=0)
-
-        # ── Header del panel ──────────────────────────────────────────────────
-        # Franja de acento curva superior (canvas recubre los primeros 58px)
-        hdr_cv = tk.Canvas(left, width=PANEL_W, height=58,
-                           bg=PANEL, highlightthickness=0)
-        hdr_cv.place(x=0, y=0)
-        hdr_cv.create_rectangle(0, 0, PANEL_W, 4, fill=ACCENT, outline="")
-        hdr_cv.create_text(18, 22,
-                           text="◈  REGISTRO",
-                           font=("Courier New", 13, "bold"), fill=ACCENT,
-                           anchor="w")
-        hdr_cv.create_text(18, 42,
-                           text="Nuevo usuario · captura biométrica guiada",
-                           font=("Courier New", 7), fill=SUBTEXT, anchor="w")
-        hdr_cv.create_rectangle(18, 56, PANEL_W - 18, 57,
-                                fill=BORDER, outline="")
+        left.pack_propagate(False)
 
         # Separador vertical derecho
         tk.Frame(self, bg=BORDER, width=1, height=H).place(x=PANEL_W - 1, y=0)
 
-        # ── Campos fijos para todos (con más espacio entre ellos) ──
-        # Aumenté la separación vertical de 36 a 42 píxeles
-        self._field(left, "Nombre(s)",                   self.nombre_var,  56)
-        self._field(left, "Apellido paterno",             self.ap_pat_var,  96)  # +40
-        self._field(left, "Apellido materno",             self.ap_mat_var, 136)  # +40
-        self._field(left, "Numero de cuenta (8 digitos)", self.cuenta_var, 176)  # +40
+        # ── Header ───────────────────────────────────────────────────────────
+        hdr = tk.Frame(left, bg="#141824", width=PANEL_W, height=54)
+        hdr.place(x=0, y=0)
+        hdr.pack_propagate(False)
+        tk.Frame(left, bg=ACCENT, width=PANEL_W, height=3).place(x=0, y=0)
+        tk.Label(hdr, text="REGISTRO", font=(FONT, 13, "bold"),
+                 fg=ACCENT, bg="#141824").place(x=18, y=12)
+        tk.Label(hdr, text="Nuevo usuario · captura biométrica",
+                 font=(FONT, 8), fg=SUBTEXT, bg="#141824").place(x=18, y=34)
 
-        # ── Rol (más espacio) ──
-        # Movido de 204 a 214
-        tk.Label(left, text="Rol", font=self.f_label,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=210)
-        rf = tk.Frame(left, bg=PANEL)
-        rf.place(x=18, y=222, width=284)  # +12 desde el label
+        # ── Campo helper ──────────────────────────────────────────────────────
+        def campo(label_txt, var, y, show=None):
+            tk.Label(left, text=label_txt, font=(FONT, 8),
+                     fg=SUBTEXT, bg=PANEL).place(x=18, y=y)
+            kw = dict(font=(FONT, 9), fg=TEXT, bg=CARD,
+                      insertbackground=ACCENT, relief="flat",
+                      highlightthickness=1, highlightcolor=ACCENT,
+                      highlightbackground=BORDER)
+            if show:
+                kw["show"] = show
+            tk.Entry(left, textvariable=var, **kw
+                     ).place(x=18, y=y + 16, width=284, height=26)
+
+        # ── Campos principales ────────────────────────────────────────────────
+        campo("Nombre(s)",                   self.nombre_var,   60)
+        campo("Apellido paterno",             self.ap_pat_var,  102)
+        campo("Apellido materno",             self.ap_mat_var,  144)
+        campo("Número de cuenta (8 dígitos)", self.cuenta_var,  186)
+
+        # ── Rol ───────────────────────────────────────────────────────────────
+        tk.Label(left, text="Rol", font=(FONT, 8),
+                 fg=SUBTEXT, bg=PANEL).place(x=18, y=228)
+
+        rol_frame = tk.Frame(left, bg=CARD, width=284, height=34)
+        rol_frame.place(x=18, y=244)
+        rol_frame.pack_propagate(False)
         for i, rol in enumerate(ROLES_VALIDOS):
             c = COLOR_ROL.get(rol, ACCENT)
-            tk.Radiobutton(rf, text=rol.capitalize(),
+            tk.Radiobutton(rol_frame, text=rol.capitalize(),
                            variable=self.rol_var, value=rol,
-                           font=self.f_label, fg=c, bg=PANEL,
-                           selectcolor=CARD, activebackground=PANEL,
+                           font=(FONT, 9), fg=c, bg=CARD,
+                           selectcolor=BORDER, activebackground=CARD,
                            activeforeground=c, cursor="hand2",
                            command=self._actualizar_campos_rol
-                           ).grid(row=0, column=i, padx=8)
+                           ).place(x=8 + i * 90, y=7)
 
-        # ── Zona condicional (más espacio vertical) ──
-        # Antes: y=238, height=50. Ahora: y=250, height=60
-        self._frame_cond = tk.Frame(left, bg=PANEL, width=284, height=60)
-        self._frame_cond.place(x=18, y=250)
+        # ── Zona condicional (correo/pwd o grado/grupo) ───────────────────────
+        self._frame_cond = tk.Frame(left, bg=PANEL, width=284, height=52)
+        self._frame_cond.place(x=18, y=284)
         self._frame_cond.pack_propagate(False)
 
-        # Widgets para admin/maestro
+        # Widgets admin/maestro
         self._lbl_correo = tk.Label(self._frame_cond, text="Correo",
-                                    font=self.f_label, fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
         self._ent_correo = tk.Entry(self._frame_cond, textvariable=self.correo_var,
-                                    font=self.f_sub, fg=TEXT, bg=CARD,
+                                    font=(FONT, 9), fg=TEXT, bg=CARD,
                                     insertbackground=ACCENT, relief="flat",
-                                    highlightthickness=1,
-                                    highlightcolor=ACCENT,
+                                    highlightthickness=1, highlightcolor=ACCENT,
                                     highlightbackground=BORDER)
-        self._lbl_pwd = tk.Label(self._frame_cond, text="Contrasena",
-                                  font=self.f_label, fg=SUBTEXT, bg=PANEL)
+        self._lbl_pwd = tk.Label(self._frame_cond, text="Contraseña",
+                                  font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
         self._ent_pwd = tk.Entry(self._frame_cond, textvariable=self.pwd_var,
-                                  show="●", font=self.f_sub, fg=TEXT, bg=CARD,
+                                  show="●", font=(FONT, 9), fg=TEXT, bg=CARD,
                                   insertbackground=ACCENT, relief="flat",
-                                  highlightthickness=1,
-                                  highlightcolor=ACCENT,
+                                  highlightthickness=1, highlightcolor=ACCENT,
                                   highlightbackground=BORDER)
-
-        # Widgets para estudiante
+        # Widgets estudiante
         self._lbl_grado = tk.Label(self._frame_cond, text="Grado",
-                                    font=self.f_label, fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
         self._om_grado  = tk.OptionMenu(self._frame_cond, self.grado_var, *GRADOS)
-        self._om_grado.config(font=self.f_sub, fg=TEXT, bg=CARD,
+        self._om_grado.config(font=(FONT, 9), fg=TEXT, bg=CARD,
                                activebackground=CARD, activeforeground=ACCENT,
-                               highlightthickness=0, relief="flat")
-        self._om_grado["menu"].config(bg=CARD, fg=TEXT, font=self.f_sub)
+                               highlightthickness=0, relief="flat", bd=0)
+        self._om_grado["menu"].config(bg=CARD, fg=TEXT, font=(FONT, 9))
 
         self._lbl_grupo = tk.Label(self._frame_cond, text="Grupo",
-                                    font=self.f_label, fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
         self._om_grupo  = tk.OptionMenu(self._frame_cond, self.grupo_var, *GRUPOS)
-        self._om_grupo.config(font=self.f_sub, fg=TEXT, bg=CARD,
+        self._om_grupo.config(font=(FONT, 9), fg=TEXT, bg=CARD,
                                activebackground=CARD, activeforeground=ACCENT,
-                               highlightthickness=0, relief="flat")
-        self._om_grupo["menu"].config(bg=CARD, fg=TEXT, font=self.f_sub)
+                               highlightthickness=0, relief="flat", bd=0)
+        self._om_grupo["menu"].config(bg=CARD, fg=TEXT, font=(FONT, 9))
 
-        # Mostrar segun rol inicial
         self._actualizar_campos_rol()
 
-        # ── Separador con etiqueta ────────────────────────────────────────────
-        sep_cv = tk.Canvas(left, width=284, height=20,
-                           bg=PANEL, highlightthickness=0)
-        sep_cv.place(x=18, y=312)
-        sep_cv.create_line(0, 10, 80, 10,  fill=BORDER, width=1)
-        sep_cv.create_text(92, 10, text="PASOS", font=("Courier New", 7),
-                           fill=SUBTEXT, anchor="center")
-        sep_cv.create_line(104, 10, 284, 10, fill=BORDER, width=1)
+        # ── Línea separadora ──────────────────────────────────────────────────
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=342)
 
-        # ── Indicadores de los 4 pasos (tarjetas redondeadas con Canvas) ──────
+        # ── Botón Volver ──────────────────────────────────────────────────────
+        volver_f = _rounded_btn(left, text="◀  Volver", cmd=self._volver,
+                                width=120, height=32, bg=BORDER, fg=SUBTEXT,
+                                hover=CARD, font_size=9, bg_parent=PANEL)
+        volver_f.place(x=18, y=354)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # PANEL DERECHO — cámara + progreso + botón iniciar
+        # ══════════════════════════════════════════════════════════════════════
+        right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
+        right.place(x=PANEL_W, y=0)
+
+        # ── Etiqueta superior ─────────────────────────────────────────────────
+        tk.Label(right, text="CAPTURA BIOMÉTRICA",
+                 font=(FONT, 10, "bold"), fg=ACCENT, bg=BG
+                 ).place(x=12, y=10)
+
+        # ── Vista de cámara ───────────────────────────────────────────────────
+        CAM_H = 360
+        cam_cv = tk.Canvas(right, width=CAM_W - 16, height=CAM_H,
+                           bg=BG, highlightthickness=0)
+        cam_cv.place(x=8, y=36)
+        _round_rect(cam_cv, 0, 0, CAM_W - 16, CAM_H,
+                    r=10, fill="#080A0F", outline=BORDER, width=1)
+
+        self.cam_label = tk.Label(right, bg="#080A0F")
+        self.cam_label.place(x=16, y=44, width=CAM_W - 32, height=CAM_H - 16)
+
+        # ── Sección de progreso de captura ────────────────────────────────────
+        prog_y = 36 + CAM_H + 10   # justo debajo de la cámara
+
+        tk.Label(right, text="Progreso de captura",
+                 font=(FONT, 8, "bold"), fg=SUBTEXT, bg=BG
+                 ).place(x=12, y=prog_y)
+
+        # Indicadores de paso: círculos conectados (como el sketch)
+        step_y = prog_y + 20
+        step_labels = ["F", "I", "D", "F"]
+        step_names  = ["Frente", "Izq.", "Der.", "Frente"]
+        CIRCLE_R = 14
+        STEP_GAP = (CAM_W - 16 - 4 * CIRCLE_R * 2) // 5
         self._paso_frames = []
-        paso_w = 56
-        paso_gap = 6
-        for i, (_, icono, _, etiq, _, _, _, _) in enumerate(PASOS_REGISTRO):
-            fx = 18 + i * (paso_w + paso_gap)
-            # Canvas que dibuja la tarjeta redondeada
-            pf_cv = tk.Canvas(left, width=paso_w, height=52,
-                               bg=PANEL, highlightthickness=0)
-            pf_cv.place(x=fx, y=334)
-            _round_rect(pf_cv, 0, 0, paso_w, 52,
-                        r=8, fill=BORDER, outline=BORDER, width=0)
 
-            # Usamos un Frame transparente para los Labels encima del Canvas
-            pf = tk.Frame(left, bg=BORDER, width=paso_w, height=52)
-            pf.place(x=fx, y=334)
-            li = tk.Label(pf, text=str(i + 1), font=self.f_btn,
-                          fg=SUBTEXT, bg=BORDER)
-            li.place(relx=.5, y=12, anchor="center")
-            ln = tk.Label(pf, text=icono, font=self.f_label,
-                          fg=SUBTEXT, bg=BORDER)
-            ln.place(relx=.5, y=28, anchor="center")
-            bpf = tk.Frame(pf, bg="#0D0F14", width=paso_w - 8, height=4)
-            bpf.place(x=4, y=44)
-            bp = tk.Frame(bpf, bg=SUBTEXT, width=0, height=4)
-            bp.place(x=0, y=0)
-            self._paso_frames.append((pf, li, ln, bp))
+        paso_cv = tk.Canvas(right, width=CAM_W - 16, height=70,
+                            bg=BG, highlightthickness=0)
+        paso_cv.place(x=8, y=step_y)
 
+        # Línea de conexión de fondo
+        line_y = CIRCLE_R
+        paso_cv.create_line(CIRCLE_R * 2 + STEP_GAP, line_y,
+                            CAM_W - 16 - CIRCLE_R * 2 - STEP_GAP, line_y,
+                            fill=BORDER, width=2)
+
+        self._paso_canvas  = paso_cv
+        self._paso_cx      = []
+        self._paso_cy      = []
+        self._paso_circles = []
+        self._paso_nums    = []
+        self._paso_prog    = []
+
+        for i in range(4):
+            cx = STEP_GAP + CIRCLE_R + i * (CIRCLE_R * 2 + STEP_GAP)
+            cy = CIRCLE_R
+            # Fondo del círculo
+            cid = paso_cv.create_oval(cx - CIRCLE_R, cy - CIRCLE_R,
+                                      cx + CIRCLE_R, cy + CIRCLE_R,
+                                      fill=BORDER, outline=BORDER, width=2)
+            nid = paso_cv.create_text(cx, cy, text=step_labels[i],
+                                      font=(FONT, 9, "bold"), fill=SUBTEXT)
+            lid = paso_cv.create_text(cx, cy + CIRCLE_R + 10,
+                                      text=step_names[i],
+                                      font=(FONT, 7), fill=SUBTEXT)
+            cnt = paso_cv.create_text(cx, cy + CIRCLE_R + 22,
+                                      text="0", font=(FONT, 7), fill=SUBTEXT)
+            self._paso_cx.append(cx)
+            self._paso_cy.append(cy)
+            self._paso_circles.append(cid)
+            self._paso_nums.append(nid)
+            self._paso_prog.append(cnt)
+            # Guardar referencias para _activar_paso_ui (compatibilidad)
+            self._paso_frames.append((None, None, None, None))
+
+        # Etiqueta de instrucción del paso actual
         self.paso_desc_var = tk.StringVar(value="Completa los campos e inicia")
-        tk.Label(left, textvariable=self.paso_desc_var,
-                 font=self.f_label, fg=ACCENT, bg=PANEL,
-                 wraplength=284, justify="center"
-                 ).place(x=18, y=394, width=284)
+        self._paso_desc_lbl = tk.Label(right, textvariable=self.paso_desc_var,
+                 font=(FONT, 9), fg=ACCENT, bg=BG,
+                 wraplength=CAM_W - 24, justify="center")
+        self._paso_desc_lbl.place(x=8, y=step_y + 56, width=CAM_W - 16)
 
+        # ── Barra de progreso global ───────────────────────────────────────────
+        bar_y = step_y + 84
+        tk.Label(right, textvariable=self.status_var,
+                 font=(FONT, 8), fg=ACCENT, bg=BG).place(x=12, y=bar_y - 16)
+        self.prog_frame = tk.Frame(right, bg=BORDER, width=CAM_W - 32, height=5)
+        self.prog_frame.place(x=16, y=bar_y)
+        self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=5)
+        self.prog_bar.place(x=0, y=0)
+
+        # ── Mensajes de estado ────────────────────────────────────────────────
+        self.progreso_var = tk.StringVar(value="")
+        self.prog_label   = tk.Label(right, textvariable=self.progreso_var,
+                                     font=(FONT, 8, "bold"), fg=WARNING,
+                                     bg=BG, justify="center",
+                                     wraplength=CAM_W - 24)
+        self.prog_label.place(x=8, y=bar_y + 10, width=CAM_W - 16)
+
+        self.timer_var    = tk.StringVar(value="")
+        self.paso_txt_var = tk.StringVar(value="")
+        tk.Label(right, textvariable=self.timer_var,
+                 font=(FONT, 14, "bold"), fg=ACCENT, bg=BG
+                 ).place(x=16, y=bar_y + 28, anchor="nw")
+        tk.Label(right, textvariable=self.paso_txt_var,
+                 font=(FONT, 8), fg=SUBTEXT, bg=BG,
+                 wraplength=160).place(x=60, y=bar_y + 36, anchor="nw")
+
+        # ── Botón INICIAR CAPTURA ────────────────────────────────────────────
         self.cap_btn = tk.Button(
-            left, text="⬤  INICIAR ESCANEO", font=("Courier New", 9, "bold"),
+            right, text="⬤  INICIAR CAPTURA",
+            font=(FONT, 10, "bold"),
             fg=BG, bg=ACCENT, relief="flat", cursor="hand2",
-            padx=8, pady=7, command=self._iniciar_registro,
+            padx=8, pady=10, command=self._iniciar_registro,
             bd=0, highlightthickness=0)
-        self.cap_btn.place(x=18, y=416, width=284)
+        self.cap_btn.place(x=16, y=H - 52, width=CAM_W - 32, height=38)
         self.cap_btn.bind("<Enter>",
                           lambda e: self.cap_btn.config(bg=self._lighten(ACCENT)))
         self.cap_btn.bind("<Leave>",
                           lambda e: self.cap_btn.config(bg=ACCENT))
 
-        # ── Separador con etiqueta muestras ───────────────────────────────────
-        sep2_cv = tk.Canvas(left, width=284, height=20,
-                            bg=PANEL, highlightthickness=0)
-        sep2_cv.place(x=18, y=452)
-        sep2_cv.create_line(0, 10, 66, 10,    fill=BORDER, width=1)
-        sep2_cv.create_text(80, 10, text="MUESTRAS", font=("Courier New", 7),
-                            fill=SUBTEXT, anchor="center")
-        sep2_cv.create_line(94, 10, 284, 10,  fill=BORDER, width=1)
-
-        # ── Barras de muestras ────────────────────────────────────────────────
+        # ── Barras de muestras (ocultas, necesarias para _update_barra_paso) ──
         self._barra_pasos = []
-        barra_w = 56
-        for i, etiq in enumerate(["Frente", "Izquierda", "Derecha", "Frente"]):
-            fx = 18 + i * (barra_w + 6)
-            tk.Label(left, text=etiq, font=self.f_zona,
-                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=474)
-            bg_b = tk.Frame(left, bg="#0D0F14", width=barra_w, height=6)
-            bg_b.place(x=fx, y=486)
-            bar = tk.Frame(bg_b, bg=BORDER, width=0, height=6)
-            bar.place(x=0, y=0)
-            lbl = tk.Label(left, text="0", font=self.f_zona,
-                           fg=SUBTEXT, bg=PANEL)
-            lbl.place(x=fx + barra_w // 2, y=495, anchor="center")
+        barra_w = 60
+        for i in range(4):
+            bar  = tk.Frame(right, bg=BORDER, width=0, height=4)
+            lbl  = tk.Label(right, text="0", font=(FONT, 7), fg=SUBTEXT, bg=BG)
             self._barra_pasos.append((bar, lbl, barra_w))
 
-        # ── Separador + progreso ──────────────────────────────────────────────
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=506)
-
-        self.progreso_var = tk.StringVar(value="")
-        self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
-                                     font=self.f_status, fg=WARNING,
-                                     bg=PANEL, justify="center", wraplength=284)
-        self.prog_label.place(x=18, y=512, width=284)
-
-        self.timer_var    = tk.StringVar(value="")
-        self.paso_txt_var = tk.StringVar(value="")
-        tk.Label(left, textvariable=self.timer_var,
-                 font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=548, anchor="nw")
-        tk.Label(left, textvariable=self.paso_txt_var,
-                 font=self.f_zona, fg=SUBTEXT, bg=PANEL,
-                 wraplength=160).place(x=62, y=556, anchor="nw")
-
-        volver_f = _rounded_btn(left, text="◀  Volver", cmd=self._volver,
-                                width=110, height=30, bg=BORDER, fg=SUBTEXT,
-                                hover=CARD, font_size=8, bg_parent=PANEL)
-        volver_f.place(x=18, y=572)
-
-        right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
-        right.place(x=PANEL_W, y=0)
-        # Marco redondeado visual alrededor de la cámara
-        cam_cv = tk.Canvas(right, width=CAM_W, height=H,
-                           bg=BG, highlightthickness=0)
-        cam_cv.place(x=0, y=0)
-        _round_rect(cam_cv, 8, 8, CAM_W - 8, H - 42,
-                    r=12, fill="#080A0F", outline=BORDER, width=1)
-
-        self.cam_label = tk.Label(right, bg="#080A0F")
-        self.cam_label.place(x=16, y=16, width=CAM_W - 32, height=H - 66)
-
-        tk.Label(right, textvariable=self.status_var,
-                 font=self.f_status, fg=ACCENT, bg=BG).place(x=16, y=H - 38)
-
-        self.prog_frame = tk.Frame(right, bg=BORDER, width=CAM_W - 32, height=6)
-        self.prog_frame.place(x=16, y=H - 20)
-        self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=6)
-        self.prog_bar.place(x=0, y=0)
-
+        # ── Iniciar cámara ────────────────────────────────────────────────────
         self._start_cam()
         self.cam_running = True
         threading.Thread(target=self._loop_camara,
-                         kwargs={"max_w": CAM_W - 32, "max_h": H - 66},
+                         kwargs={"max_w": CAM_W - 32, "max_h": CAM_H - 16},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
 
@@ -814,38 +854,53 @@ class App(tk.Tk):
                  ).place(x=18, y=y+16, width=284, height=24)  # Más altura (24 en lugar de 22)
 
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
-        if not hasattr(self, "_paso_frames") or not self.cam_running:
+        if not hasattr(self, "_paso_canvas") or not self.cam_running:
             return
-        paso_w = 56
         try:
-            for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
+            cv = self._paso_canvas
+            for i in range(len(self._paso_circles)):
+                cid = self._paso_circles[i]
+                nid = self._paso_nums[i]
+                cnt = self._paso_prog[i]
+                cx  = self._paso_cx[i]
+                cy  = self._paso_cy[i]
+                r   = 14
                 if i < paso_idx:
-                    pf.config(bg=SUCCESS); li.config(fg=BG, bg=SUCCESS)
-                    ln.config(fg=BG, bg=SUCCESS); bp.master.config(bg=SUCCESS)
-                    bp.config(width=paso_w-4, bg=SUCCESS)
+                    cv.itemconfig(cid, fill=SUCCESS, outline=SUCCESS)
+                    cv.itemconfig(nid, fill=BG)
                 elif i == paso_idx:
-                    pf.config(bg=CARD); li.config(fg=ACCENT, bg=CARD)
-                    ln.config(fg=ACCENT, bg=CARD); bp.master.config(bg=BORDER)
-                    bp.config(width=int(progreso*(paso_w-4)), bg=ACCENT)
+                    cv.itemconfig(cid, fill=ACCENT, outline=ACCENT)
+                    cv.itemconfig(nid, fill=BG)
                 else:
-                    pf.config(bg=BORDER); li.config(fg=SUBTEXT, bg=BORDER)
-                    ln.config(fg=SUBTEXT, bg=BORDER); bp.master.config(bg="#111")
-                    bp.config(width=0, bg=SUBTEXT)
+                    cv.itemconfig(cid, fill=BORDER, outline=BORDER)
+                    cv.itemconfig(nid, fill=SUBTEXT)
         except:
             pass
 
     def _resetear_pasos_ui(self):
-        if not hasattr(self, "_paso_frames"):
+        if not hasattr(self, "_paso_canvas"):
             return
         try:
-            for pf, li, ln, bp in self._paso_frames:
-                pf.config(bg=BORDER); li.config(fg=SUBTEXT, bg=BORDER)
-                ln.config(fg=SUBTEXT, bg=BORDER); bp.master.config(bg="#111")
-                bp.config(width=0)
+            cv = self._paso_canvas
+            for i in range(len(self._paso_circles)):
+                cv.itemconfig(self._paso_circles[i], fill=BORDER, outline=BORDER)
+                cv.itemconfig(self._paso_nums[i], fill=SUBTEXT)
+                cv.itemconfig(self._paso_prog[i], text="0", fill=SUBTEXT)
         except:
             pass
 
     def _update_barra_paso(self, paso_idx, n_muestras):
+        # Actualizar contador en el canvas de círculos
+        if hasattr(self, "_paso_prog") and paso_idx < len(self._paso_prog):
+            try:
+                pct = min(1.0, n_muestras / MAX_MUESTRAS_PASO)
+                col = SUCCESS if pct >= 1.0 else ACCENT if pct > 0.4 else WARNING
+                self._paso_canvas.itemconfig(
+                    self._paso_prog[paso_idx],
+                    text=str(n_muestras), fill=col)
+            except:
+                pass
+        # Barra de muestras (ahora invisible pero se mantiene la lógica)
         if not hasattr(self, "_barra_pasos") or \
                 paso_idx >= len(self._barra_pasos):
             return
@@ -1148,79 +1203,99 @@ class App(tk.Tk):
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
         left.place(x=0, y=0)
 
-        # ── Header del panel ──────────────────────────────────────────────────
-        hdr_cv = tk.Canvas(left, width=PANEL_W, height=58,
+        # ── Header del panel — mismo estilo que registro ──────────────────────
+        hdr_cv = tk.Canvas(left, width=PANEL_W, height=72,
                            bg=PANEL, highlightthickness=0)
         hdr_cv.place(x=0, y=0)
-        hdr_cv.create_rectangle(0, 0, PANEL_W, 4, fill=SUCCESS, outline="")
-        hdr_cv.create_text(18, 22,
-                           text="◈  ACCESO",
-                           font=("Courier New", 13, "bold"), fill=SUCCESS,
+        # Banda vertical de acento izquierda (verde para acceso)
+        hdr_cv.create_rectangle(0, 0, 5, 72, fill=SUCCESS, outline="")
+        # Fondo del header
+        hdr_cv.create_rectangle(5, 0, PANEL_W, 72, fill="#141E18", outline="")
+        # Icono: escáner facial
+        hdr_cv.create_oval(18, 16, 48, 46, outline=SUCCESS, width=2)
+        hdr_cv.create_oval(28, 26, 38, 36, fill=SUCCESS, outline="")
+        # Puntos de esquina del escáner
+        hdr_cv.create_line(18, 16, 26, 16, fill=SUCCESS, width=2)
+        hdr_cv.create_line(18, 16, 18, 24, fill=SUCCESS, width=2)
+        hdr_cv.create_line(48, 16, 40, 16, fill=SUCCESS, width=2)
+        hdr_cv.create_line(48, 16, 48, 24, fill=SUCCESS, width=2)
+        hdr_cv.create_line(18, 46, 26, 46, fill=SUCCESS, width=2)
+        hdr_cv.create_line(18, 46, 18, 38, fill=SUCCESS, width=2)
+        hdr_cv.create_line(48, 46, 40, 46, fill=SUCCESS, width=2)
+        hdr_cv.create_line(48, 46, 48, 38, fill=SUCCESS, width=2)
+        # Textos
+        hdr_cv.create_text(58, 28, text="ACCESO",
+                           font=("Segoe UI", 13, "bold"), fill=SUCCESS,
                            anchor="w")
-        hdr_cv.create_text(18, 42,
-                           text="Verificación de identidad en tiempo real",
-                           font=("Courier New", 7), fill=SUBTEXT, anchor="w")
-        hdr_cv.create_rectangle(18, 56, PANEL_W - 18, 57,
-                                fill=BORDER, outline="")
+        hdr_cv.create_text(58, 50, text="Verificación de identidad en tiempo real",
+                           font=("Segoe UI", 6), fill=SUBTEXT, anchor="w")
+        # Línea separadora inferior
+        hdr_cv.create_rectangle(0, 71, PANEL_W, 72, fill=BORDER, outline="")
 
         # Separador vertical derecho
         tk.Frame(self, bg=BORDER, width=1, height=H).place(x=PANEL_W - 1, y=0)
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=62)
+        # ── Etiqueta de sección posición ──────────────────────────────────────
+        sec_pos = tk.Canvas(left, width=284, height=20, bg=PANEL, highlightthickness=0)
+        sec_pos.place(x=18, y=76)
+        sec_pos.create_rectangle(0, 7, 3, 15, fill=ACCENT, outline="")
+        sec_pos.create_text(9, 10, text="POSICIÓN FACIAL", anchor="w",
+                            font=("Segoe UI", 6, "bold"), fill=ACCENT)
+        sec_pos.create_line(102, 10, 284, 10, fill=BORDER, width=1)
 
         self.posicion_var   = tk.StringVar(value="Mira directo a la camara.")
         self.posicion_label = tk.Label(left, textvariable=self.posicion_var,
                  font=self.f_btn, fg=WARNING, bg=PANEL,
                  wraplength=284, justify="center")
-        self.posicion_label.place(x=18, y=76, width=284)
+        self.posicion_label.place(x=18, y=96, width=284)
 
-        # Separador con etiqueta "RESULTADO"
+        # ── Sección RESULTADO ─────────────────────────────────────────────────
         sep1 = tk.Canvas(left, width=284, height=20, bg=PANEL, highlightthickness=0)
-        sep1.place(x=18, y=224)
-        sep1.create_line(0, 10, 60, 10,    fill=BORDER, width=1)
-        sep1.create_text(74, 10, text="RESULTADO", font=("Courier New", 7),
-                         fill=SUBTEXT, anchor="center")
-        sep1.create_line(90, 10, 284, 10,  fill=BORDER, width=1)
+        sep1.place(x=18, y=230)
+        sep1.create_rectangle(0, 7, 3, 15, fill=ACCENT, outline="")
+        sep1.create_text(9, 10, text="RESULTADO DE VERIFICACIÓN", anchor="w",
+                         font=("Segoe UI", 6, "bold"), fill=ACCENT)
+        sep1.create_line(164, 10, 284, 10, fill=BORDER, width=1)
 
         self.resultado_var   = tk.StringVar(value="Esperando...")
         self.resultado_label = tk.Label(
             left, textvariable=self.resultado_var,
-            font=("Courier New", 11, "bold"), fg=ACCENT, bg=PANEL,
+            font=("Segoe UI", 11, "bold"), fg=ACCENT, bg=PANEL,
             wraplength=284, justify="center")
-        self.resultado_label.place(x=18, y=248, width=284)
+        self.resultado_label.place(x=18, y=254, width=284)
 
         self.candidato_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.candidato_var,
                  font=self.f_label, fg=TEXT, bg=PANEL,
                  wraplength=284, justify="center"
-                 ).place(x=18, y=286, width=284)
+                 ).place(x=18, y=290, width=284)
 
-        # Separador con etiqueta "SIMILITUD"
+        # ── Sección SIMILITUD ─────────────────────────────────────────────────
         sep2 = tk.Canvas(left, width=284, height=20, bg=PANEL, highlightthickness=0)
-        sep2.place(x=18, y=396)
-        sep2.create_line(0, 10, 62, 10,    fill=BORDER, width=1)
-        sep2.create_text(76, 10, text="SIMILITUD", font=("Courier New", 7),
-                         fill=SUBTEXT, anchor="center")
-        sep2.create_line(92, 10, 284, 10,  fill=BORDER, width=1)
+        sep2.place(x=18, y=400)
+        sep2.create_rectangle(0, 7, 3, 15, fill=WARNING, outline="")
+        sep2.create_text(9, 10, text="NIVEL DE SIMILITUD", anchor="w",
+                         font=("Segoe UI", 6, "bold"), fill=WARNING)
+        sep2.create_line(118, 10, 284, 10, fill=BORDER, width=1)
 
         # Barra de similitud con fondo oscuro
-        self.sim_bg  = tk.Frame(left, bg="#0D0F14", width=284, height=20)
-        self.sim_bg.place(x=18, y=420)
-        self.sim_bar = tk.Frame(self.sim_bg, bg=BORDER, width=0, height=20)
+        self.sim_bg  = tk.Frame(left, bg="#0D0F14", width=284, height=22)
+        self.sim_bg.place(x=18, y=424)
+        self.sim_bar = tk.Frame(self.sim_bg, bg=BORDER, width=0, height=22)
         self.sim_bar.place(x=0, y=0)
         self.sim_lbl = tk.Label(self.sim_bg, text="", font=self.f_zona,
                                 fg=BG, bg=BORDER)
-        self.sim_lbl.place(x=4, y=3)
+        self.sim_lbl.place(x=4, y=4)
 
         self.detalle_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.detalle_var, font=self.f_zona,
                  fg=SUBTEXT, bg=PANEL, wraplength=284, justify="center"
-                 ).place(x=18, y=448, width=284)
+                 ).place(x=18, y=454, width=284)
 
         volver_f = _rounded_btn(left, text="◀  Volver", cmd=self._volver,
-                                width=110, height=30, bg=BORDER, fg=SUBTEXT,
+                                width=110, height=28, bg=BORDER, fg=SUBTEXT,
                                 hover=CARD, font_size=8, bg_parent=PANEL)
-        volver_f.place(x=18, y=558)
+        volver_f.place(x=18, y=560)
 
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
