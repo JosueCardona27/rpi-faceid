@@ -653,7 +653,7 @@ class App(tk.Tk):
 
         # ── Indicadores de los 4 pasos (tarjetas redondeadas con Canvas) ──────
         self._paso_frames = []
-        paso_w = 60
+        paso_w = 56
         paso_gap = 6
         for i, (_, icono, _, etiq, _, _, _, _) in enumerate(PASOS_REGISTRO):
             fx = 18 + i * (paso_w + paso_gap)
@@ -707,8 +707,8 @@ class App(tk.Tk):
 
         # ── Barras de muestras ────────────────────────────────────────────────
         self._barra_pasos = []
-        barra_w = 60
-        for i, etiq in enumerate(["Frente", "Izqda.", "Decha.", "Frente"]):
+        barra_w = 56
+        for i, etiq in enumerate(["Frente", "Izquierda", "Derecha", "Frente"]):
             fx = 18 + i * (barra_w + 6)
             tk.Label(left, text=etiq, font=self.f_zona,
                      fg=SUBTEXT, bg=PANEL).place(x=fx, y=474)
@@ -812,7 +812,7 @@ class App(tk.Tk):
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
         if not hasattr(self, "_paso_frames") or not self.cam_running:
             return
-        paso_w = 60
+        paso_w = 56
         try:
             for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
                 if i < paso_idx:
