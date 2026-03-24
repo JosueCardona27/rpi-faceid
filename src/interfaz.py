@@ -39,11 +39,14 @@ from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          validar_grupo, ROLES_VALIDOS)
 
 try:
-    from servo_control import servo
-except Exception:
+    from servo_puerta.servo_control import servo
+except Exception as e:
+    print(f"[SERVO] Error al importar servo_control: {e}")
     class _ServoStub:
-        def abrir(self): pass
-        def desconectar(self): pass
+        def abrir(self, nombre=""): pass
+        def denegar(self):          pass
+        def espera(self):           pass
+        def desconectar(self):      pass
     servo = _ServoStub()
     print("[SERVO] Modulo no disponible — continuando sin servo.")
 
@@ -220,6 +223,7 @@ class App(tk.Tk):
         self._ov_color = None
         self._ov_texto = ""
         self._modo_acceso = False
+        self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
         self._build_main()
@@ -1304,7 +1308,9 @@ class App(tk.Tk):
                 "Persona no reconocida." if hay
                 else "No hay usuarios registrados."))
             self.after(0, lambda: self._set_sim_bar(0, BORDER))
-            if hay: self._set_overlay((255, 59, 92), "Desconocido")
+            if hay:
+                self._set_overlay((255, 59, 92), "Desconocido")
+                self.after(0, lambda: servo.denegar())   # ← línea nueva
             self.after(4000, self._lanzar_verificacion); return
 
         sim         = resultado["similitud_pct"]
@@ -1320,6 +1326,7 @@ class App(tk.Tk):
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
     def _resultado_ok(self, r):
+        self._t_acceso_ok = time.time()
         self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
         self.resultado_label.config(fg=SUCCESS)
@@ -1330,16 +1337,21 @@ class App(tk.Tk):
             f"Similitud: {r['similitud_pct']}%")
         self.after(0, lambda: self._safe(
             lambda: self.posicion_label.config(fg=SUCCESS)))
-        servo.abrir()
+        servo.abrir(r["nombre"])
         self.after(4000, self._lanzar_verificacion)
 
     def _resultado_negado(self, r):
+    # Ignorar si el acceso fue concedido hace menos de 5 segundos
+        if time.time() - self._t_acceso_ok < 5:
+            self.after(4000, self._lanzar_verificacion)
+            return
         self._set_overlay((255, 59, 92), "Denegado")
         self.resultado_var.set("ACCESO DENEGADO")
         self.resultado_label.config(fg=DANGER)
         self.candidato_var.set(
             f"Mas parecido a:\n{r['nombre']}\n"
             f"Similitud: {r['similitud_pct']}%")
+        servo.denegar()
         self.after(4000, self._lanzar_verificacion)
 
     def _guia_posicion(self):
