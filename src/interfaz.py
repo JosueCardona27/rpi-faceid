@@ -59,6 +59,11 @@ TEXT    = "#E8EAF0"
 SUBTEXT = "#6B7280"
 BORDER  = "#252A38"
 
+# Paleta inspirada en vista_login (modo oscuro)
+NAVY_LN = "#1E4D8C"   # azul marino institucional
+TEAL_LN = "#0E9975"   # verde azulado
+GOLD_LN = "#B5860D"   # dorado institucional
+
 COLOR_ROL = {"estudiante": ACCENT, "maestro": WARNING, "admin": DANGER}
 
 W, H    = 1024, 600
@@ -93,6 +98,78 @@ def _imgtk(frame, max_w, max_h):
     fr = cv2.resize(frame, (int(w0*r), int(h0*r)))
     return ImageTk.PhotoImage(
         image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)))
+
+
+# ── Helpers de dibujo ─────────────────────────────────────────────────────────
+def _round_rect(cv, x1, y1, x2, y2, r=14,
+                fill=None, outline=None, width=1, tags=""):
+    """Rectángulo con esquinas redondeadas dibujado en un Canvas."""
+    fill    = fill    or PANEL
+    outline = outline or BORDER
+    cv.create_arc(x1,     y1,     x1+2*r, y1+2*r, start=90,  extent=90,
+                  fill=fill, outline=fill, tags=tags)
+    cv.create_arc(x2-2*r, y1,     x2,     y1+2*r, start=0,   extent=90,
+                  fill=fill, outline=fill, tags=tags)
+    cv.create_arc(x1,     y2-2*r, x1+2*r, y2,     start=180, extent=90,
+                  fill=fill, outline=fill, tags=tags)
+    cv.create_arc(x2-2*r, y2-2*r, x2,     y2,     start=270, extent=90,
+                  fill=fill, outline=fill, tags=tags)
+    cv.create_rectangle(x1+r, y1,   x2-r, y2,   fill=fill, outline="", tags=tags)
+    cv.create_rectangle(x1,   y1+r, x2,   y2-r, fill=fill, outline="", tags=tags)
+    if width > 0:
+        cv.create_arc(x1,     y1,     x1+2*r, y1+2*r, start=90,  extent=90,
+                      style="arc", outline=outline, width=width, tags=tags)
+        cv.create_arc(x2-2*r, y1,     x2,     y1+2*r, start=0,   extent=90,
+                      style="arc", outline=outline, width=width, tags=tags)
+        cv.create_arc(x1,     y2-2*r, x1+2*r, y2,     start=180, extent=90,
+                      style="arc", outline=outline, width=width, tags=tags)
+        cv.create_arc(x2-2*r, y2-2*r, x2,     y2,     start=270, extent=90,
+                      style="arc", outline=outline, width=width, tags=tags)
+        cv.create_line(x1+r, y1,   x2-r, y1,   fill=outline, width=width, tags=tags)
+        cv.create_line(x1+r, y2,   x2-r, y2,   fill=outline, width=width, tags=tags)
+        cv.create_line(x1,   y1+r, x1,   y2-r, fill=outline, width=width, tags=tags)
+        cv.create_line(x2,   y1+r, x2,   y2-r, fill=outline, width=width, tags=tags)
+
+
+def _rounded_btn(parent, text, cmd, width=284, height=40,
+                 bg=None, fg="#FFFFFF", hover=None, font_size=9, bg_parent=None):
+    """Botón completamente redondeado usando Canvas + Label."""
+    bg        = bg        or ACCENT
+    hover     = hover     or ACCENT2
+    bg_parent = bg_parent or PANEL
+    r = height // 2
+    frame = tk.Frame(parent, bg=bg_parent, width=width, height=height)
+    frame.pack_propagate(False)
+    cv2_ = tk.Canvas(frame, width=width, height=height,
+                     bg=bg_parent, highlightthickness=0)
+    cv2_.place(x=0, y=0)
+
+    def _draw(color):
+        cv2_.delete("all")
+        _round_rect(cv2_, 0, 0, width, height, r=r,
+                    fill=color, outline=color, width=0)
+
+    _draw(bg)
+    lbl = tk.Label(frame, text=text,
+                   font=("Courier New", font_size, "bold"),
+                   fg=fg, bg=bg, cursor="hand2")
+    lbl.place(relx=.5, rely=.5, anchor="center")
+
+    def on_enter(e):  _draw(hover); lbl.config(bg=hover)
+    def on_leave(e):  _draw(bg);    lbl.config(bg=bg)
+    def on_click(e):  cmd()
+
+    for w in (cv2_, lbl):
+        w.bind("<Enter>",    on_enter)
+        w.bind("<Leave>",    on_leave)
+        w.bind("<Button-1>", on_click)
+    return frame
+
+
+def _lighten_color(hx):
+    h = hx.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"#{min(255,r+40):02x}{min(255,g+40):02x}{min(255,b+40):02x}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -296,66 +373,177 @@ class App(tk.Tk):
     def _build_main(self):
         self._clear()
         self.geometry(f"{W}x{H}+0+0")
+        self.configure(bg=BG)
 
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
         cv.place(x=0, y=0)
-        cv.create_rectangle(0, 0, W, 3, fill=ACCENT, outline="")
 
-        IY = 30; cx = W // 2
-        cv.create_oval(cx-20, IY,    cx+20, IY+44, outline=ACCENT,  width=2)
-        cv.create_oval(cx-11, IY+9,  cx+11, IY+33, outline=ACCENT2, width=2)
-        cv.create_line(cx,    IY+44, cx,    IY+62, fill=ACCENT, width=2)
-        cv.create_line(cx-20, IY+53, cx+20, IY+53, fill=ACCENT, width=2)
+        # ── Barra superior ────────────────────────────────────────────────────
+        cv.create_rectangle(0, 0, W, 54, fill=PANEL, outline="")
+        cv.create_rectangle(0, 54, W, 56, fill=ACCENT, outline="")
+        cv.create_text(W // 2, 27,
+                       text="SISTEMA DE CONTROL DE ACCESO  ·  FACIAL",
+                       font=("Courier New", 11, "bold"), fill=TEXT)
+        # ── Barra inferior ────────────────────────────────────────────────────
+        cv.create_rectangle(0, H - 30, W, H, fill=PANEL, outline="")
+        cv.create_rectangle(0, H - 30, W, H - 29, fill=BORDER, outline="")
+        cv.create_text(W // 2, H - 15,
+                       text=f"Universidad de Colima  ·  Facultad de Ingeniería Electromecanica  "
+                            f"|  v5.5  |  {int(TIEMPO_ESCANEO)}s  |  max {MAX_MUESTRAS_PASO} muestras/paso",
+                       font=("Courier New", 7), fill=SUBTEXT)
 
-        TY = IY + 74
-        tk.Label(self, text="SISTEMA DE ACCESO FACIAL",
-                 font=self.f_title, fg=ACCENT, bg=BG
-                 ).place(x=W//2, y=TY, anchor="center")
-        SY = TY + 22
-        modo_txt = "Raspberry Pi" if USAR_PICAM else "Webcam"
-        tk.Label(self,
-                 text=f"MobileFaceNet 512 dims  |  4 pasos  |  {modo_txt}",
-                 font=self.f_sub, fg=SUBTEXT, bg=BG
-                 ).place(x=W//2, y=SY, anchor="center")
+        # ── Subtítulo central ─────────────────────────────────────────────────
+        cv.create_text(W // 2, 86,
+                       text="Bienvenido — selecciona una opción",
+                       font=("Courier New", 10), fill=SUBTEXT)
 
-        LY = SY + 16
-        cv.create_line(W//2-280, LY, W//2+280, LY, fill=BORDER, width=1)
+        # ── Botones horizontales tipo pill (boceto) ───────────────────────────
+        BW, BH = 680, 122
+        BX = (W - BW) // 2
+        BY1 = H // 2 - BH - 26   # centrados verticalmente
+        BY2 = H // 2 + 26
 
-        CY = LY + 16
-        CW, CH = 230, 180; GAP = 40
-        CX1 = W//2 - (CW*2+GAP)//2
-        CX2 = CX1 + CW + GAP
+        self._horiz_card_btn(cv, BX, BY1, BW, BH,
+                             "REGISTRAR",
+                             "Nuevo usuario",
+                             "Captura biométrica guiada en 4 ángulos",
+                             NAVY_LN, self._show_registro)
+        self._horiz_card_btn(cv, BX, BY2, BW, BH,
+                             "ACCESO",
+                             "Verificar identidad",
+                             "Reconocimiento facial en tiempo real",
+                             TEAL_LN, self._show_acceso)
 
-        self._card_btn(cv, CX1, CY, CW, CH, "REGISTRAR",
-                       "Iniciar sesion en el\npanel de registro",
-                       ACCENT, self._show_registro)
-        self._card_btn(cv, CX2, CY, CW, CH, "ACCESO",
-                       "Verificar identidad\nmediante reconocimiento facial",
-                       SUCCESS, self._show_acceso)
+    def _card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd):
+        r = 18
+        # Sombra suave
+        _round_rect(cv, x+4, y+4, x+w+4, y+h+4,
+                    r=r, fill="#080A10", outline="#080A10", width=0)
+        # Cuerpo de la tarjeta
+        _round_rect(cv, x, y, x+w, y+h,
+                    r=r, fill=CARD, outline=BORDER, width=1)
+        # Franja de color superior (acento)
+        cv.create_rectangle(x+r, y, x+w-r, y+5, fill=color, outline="")
+        cv.create_arc(x,     y,     x+2*r, y+2*r, start=90, extent=90,
+                      fill=color, outline=color)
+        cv.create_arc(x+w-2*r, y, x+w, y+2*r, start=0, extent=90,
+                      fill=color, outline=color)
+        cv.create_rectangle(x, y+r, x+w, y+5, fill=color, outline="")
 
-        cv.create_line(0, H-26, W, H-26, fill=BORDER, width=1)
-        tk.Label(self,
-                 text=f"v5.5  |  4 pasos ({int(TIEMPO_ESCANEO)}s)  |  "
-                      f"max {MAX_MUESTRAS_PASO} muestras/paso  |  {modo_txt}",
-                 font=self.f_zona, fg=SUBTEXT, bg=BG
-                 ).place(x=W//2, y=H-13, anchor="center")
-
-    def _card_btn(self, cv, x, y, w, h, titulo, desc, color, cmd):
-        cv.create_rectangle(x+3, y+3, x+w+3, y+h+3, fill="#080A0F", outline="")
-        cv.create_rectangle(x,   y,   x+w,   y+h,   fill=CARD, outline=BORDER, width=1)
-        cv.create_rectangle(x,   y,   x+w,   y+3,   fill=color, outline="")
         fr = tk.Frame(self, bg=CARD, width=w, height=h)
         fr.place(x=x, y=y)
-        tk.Label(fr, text=titulo, font=self.f_btn,   fg=color,  bg=CARD
-                 ).place(relx=.5, y=30,  anchor="center")
-        tk.Label(fr, text=desc,   font=self.f_label, fg=SUBTEXT, bg=CARD,
-                 justify="center").place(relx=.5, y=76,  anchor="center")
-        btn = tk.Button(fr, text="INICIAR  ->", font=self.f_status,
-                        fg=BG, bg=color, relief="flat", cursor="hand2",
-                        command=cmd, padx=14, pady=5)
-        btn.place(relx=.5, y=140, anchor="center")
-        btn.bind("<Enter>", lambda e,b=btn,c=color: b.config(bg=self._lighten(c)))
-        btn.bind("<Leave>", lambda e,b=btn,c=color: b.config(bg=c))
+
+        # Icono biométrico — círculo exterior + pupila
+        ic = tk.Canvas(fr, width=52, height=52, bg=CARD, highlightthickness=0)
+        ic.place(relx=.5, y=42, anchor="center")
+        ic.create_oval(4,  4, 48, 48, outline=color, width=2)
+        ic.create_oval(18, 18, 34, 34, fill=color, outline="")
+
+        # Textos
+        tk.Label(fr, text=titulo,
+                 font=("Courier New", 13, "bold"),
+                 fg=TEXT, bg=CARD
+                 ).place(relx=.5, y=82, anchor="center")
+        tk.Label(fr, text=subtitulo,
+                 font=("Courier New", 8, "bold"),
+                 fg=color, bg=CARD
+                 ).place(relx=.5, y=102, anchor="center")
+        tk.Label(fr, text=desc,
+                 font=("Courier New", 8),
+                 fg=SUBTEXT, bg=CARD, justify="center"
+                 ).place(relx=.5, y=130, anchor="center")
+
+        # Botón completamente redondeado (pill)
+        btn_f = _rounded_btn(fr, text="ENTRAR  ▶",
+                             cmd=cmd,
+                             width=w - 48, height=36,
+                             bg=color, fg=BG,
+                             hover=_lighten_color(color),
+                             font_size=9, bg_parent=CARD)
+        btn_f.place(relx=.5, y=h - 30, anchor="center")
+
+    def _horiz_card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd):
+        """
+        Tarjeta horizontal pill — todo dibujado en un solo Canvas por tarjeta.
+        Layout: [banda·icono redondeada izquierda | sep | textos | ENTRAR pill]
+        """
+        r       = 22      # radio bordes tarjeta
+        band_w  = 120     # ancho banda colorida izquierda
+        hover_c = _lighten_color(color)
+
+        # ── Sombra en el canvas de fondo ─────────────────────────────────────
+        _round_rect(cv, x+5, y+5, x+w+5, y+h+5,
+                    r=r, fill="#060810", outline="#060810", width=0)
+
+        # ── Canvas de la tarjeta (reemplaza Frame + Canvas separados) ─────────
+        cc = tk.Canvas(self, width=w, height=h, bg=BG,
+                       highlightthickness=0)
+        cc.place(x=x, y=y)
+
+        # Cuerpo tarjeta redondeado completo
+        _round_rect(cc, 0, 0, w, h,
+                    r=r, fill=CARD, outline=BORDER, width=1)
+
+        # ── Banda colorida izquierda (solo esquinas izquierdas redondeadas) ───
+        bw = band_w
+        # Relleno de la banda: arcos izq + rectángulos
+        cc.create_arc(0,      0,      2*r, 2*r,   start=90,  extent=90,
+                      fill=color, outline=color)
+        cc.create_arc(0,      h-2*r,  2*r, h,     start=180, extent=90,
+                      fill=color, outline=color)
+        cc.create_rectangle(r,  0,  bw, h,   fill=color, outline="")
+        cc.create_rectangle(0,  r,  r,  h-r, fill=color, outline="")
+        # Tapa el borde del CARD que quedó en la esquina superior izquierda
+        cc.create_rectangle(0, 0, r, r, fill=CARD, outline="")
+        cc.create_rectangle(0, h-r, r, h, fill=CARD, outline="")
+        # Redibuja arcos del cuerpo sobre la esquina para limpiar
+        cc.create_arc(0, 0,    2*r, 2*r,   start=90,  extent=90,
+                      fill=color, outline=color)
+        cc.create_arc(0, h-2*r, 2*r, h,    start=180, extent=90,
+                      fill=color, outline=color)
+        cc.create_rectangle(0, r,  r, h-r, fill=color, outline="")
+
+        # ── Ícono biométrico centrado en la banda ─────────────────────────────
+        ic_cx, ic_cy = bw // 2, h // 2
+        cc.create_oval(ic_cx-30, ic_cy-30, ic_cx+30, ic_cy+30,
+                       outline="#FFFFFF", width=2)
+        cc.create_oval(ic_cx-13, ic_cy-13, ic_cx+13, ic_cy+13,
+                       fill="#FFFFFF", outline="")
+        for dx, dy in [(-22, -22), (22, -22), (-22, 22), (22, 22)]:
+            cc.create_oval(ic_cx+dx-4, ic_cy+dy-4,
+                           ic_cx+dx+4, ic_cy+dy+4,
+                           fill="#FFFFFF", outline="")
+
+        # ── Línea separadora vertical ─────────────────────────────────────────
+        cc.create_line(bw+10, 14, bw+10, h-14, fill=BORDER, width=1)
+
+        # ── Textos ────────────────────────────────────────────────────────────
+        tx = bw + 26
+        cc.create_text(tx, 28,  text=titulo,    anchor="w",
+                       font=("Courier New", 16, "bold"), fill=TEXT)
+        cc.create_text(tx, 56,  text=subtitulo, anchor="w",
+                       font=("Courier New", 9, "bold"),  fill=color)
+        cc.create_text(tx, 76,  text=desc,      anchor="w",
+                       font=("Courier New", 8),          fill=SUBTEXT)
+
+        # ── Botón pill ENTRAR (Canvas embebido via create_window) ─────────────
+        btn_w2, btn_h2 = 150, 46
+        btn_f = _rounded_btn(cc, "ENTRAR  ▶", cmd,
+                             width=btn_w2, height=btn_h2,
+                             bg=color, fg="#FFFFFF",
+                             hover=hover_c,
+                             font_size=9, bg_parent=CARD)
+        cc.create_window(w - btn_w2 - 18, (h - btn_h2) // 2,
+                         anchor="nw", window=btn_f)
+
+        # ── Card completa clickable ───────────────────────────────────────────
+        cc.bind("<Button-1>", lambda e: cmd())
+
+    @staticmethod
+    def _lighten_static(hx):
+        h = hx.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"#{min(255,r+40):02x}{min(255,g+40):02x}{min(255,b+40):02x}"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA REGISTRO
@@ -367,12 +555,25 @@ class App(tk.Tk):
 
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
         left.place(x=0, y=0)
-        tk.Frame(left, bg=ACCENT, width=PANEL_W, height=3).place(x=0, y=0)
-        tk.Label(left, text="REGISTRO",
-                 font=self.f_title, fg=ACCENT,  bg=PANEL).place(x=18, y=8)
-        tk.Label(left, text="Nuevo usuario",
-                 font=self.f_sub,   fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
+
+        # ── Header del panel ──────────────────────────────────────────────────
+        # Franja de acento curva superior (canvas recubre los primeros 58px)
+        hdr_cv = tk.Canvas(left, width=PANEL_W, height=58,
+                           bg=PANEL, highlightthickness=0)
+        hdr_cv.place(x=0, y=0)
+        hdr_cv.create_rectangle(0, 0, PANEL_W, 4, fill=ACCENT, outline="")
+        hdr_cv.create_text(18, 22,
+                           text="◈  REGISTRO",
+                           font=("Courier New", 13, "bold"), fill=ACCENT,
+                           anchor="w")
+        hdr_cv.create_text(18, 42,
+                           text="Nuevo usuario · captura biométrica guiada",
+                           font=("Courier New", 7), fill=SUBTEXT, anchor="w")
+        hdr_cv.create_rectangle(18, 56, PANEL_W - 18, 57,
+                                fill=BORDER, outline="")
+
+        # Separador vertical derecho
+        tk.Frame(self, bg=BORDER, width=1, height=H).place(x=PANEL_W - 1, y=0)
 
         # ── Campos fijos para todos (con más espacio entre ellos) ──
         # Aumenté la separación vertical de 36 a 42 píxeles
@@ -441,29 +642,39 @@ class App(tk.Tk):
         # Mostrar segun rol inicial
         self._actualizar_campos_rol()
 
-        # ── Separador (más abajo) ──
-        # Antes: y=296, ahora: y=316
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=316)
+        # ── Separador con etiqueta ────────────────────────────────────────────
+        sep_cv = tk.Canvas(left, width=284, height=20,
+                           bg=PANEL, highlightthickness=0)
+        sep_cv.place(x=18, y=312)
+        sep_cv.create_line(0, 10, 80, 10,  fill=BORDER, width=1)
+        sep_cv.create_text(92, 10, text="PASOS", font=("Courier New", 7),
+                           fill=SUBTEXT, anchor="center")
+        sep_cv.create_line(104, 10, 284, 10, fill=BORDER, width=1)
 
-        # ── Indicadores de los 4 pasos (ajustados) ──
-        # Antes: y=302, ahora: y=322
-        tk.Label(left, text="PASOS DE ESCANEO:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=322)
-
+        # ── Indicadores de los 4 pasos (tarjetas redondeadas con Canvas) ──────
         self._paso_frames = []
-        paso_w = 56
+        paso_w = 60
+        paso_gap = 6
         for i, (_, icono, _, etiq, _, _, _, _) in enumerate(PASOS_REGISTRO):
-            fx = 18 + i * (paso_w + 6)
-            pf = tk.Frame(left, bg=BORDER, width=paso_w, height=48)
-            pf.place(x=fx, y=334)  # +12 desde el label
-            li = tk.Label(pf, text=str(i+1), font=self.f_btn,
+            fx = 18 + i * (paso_w + paso_gap)
+            # Canvas que dibuja la tarjeta redondeada
+            pf_cv = tk.Canvas(left, width=paso_w, height=52,
+                               bg=PANEL, highlightthickness=0)
+            pf_cv.place(x=fx, y=334)
+            _round_rect(pf_cv, 0, 0, paso_w, 52,
+                        r=8, fill=BORDER, outline=BORDER, width=0)
+
+            # Usamos un Frame transparente para los Labels encima del Canvas
+            pf = tk.Frame(left, bg=BORDER, width=paso_w, height=52)
+            pf.place(x=fx, y=334)
+            li = tk.Label(pf, text=str(i + 1), font=self.f_btn,
                           fg=SUBTEXT, bg=BORDER)
-            li.place(relx=.5, y=10, anchor="center")
+            li.place(relx=.5, y=12, anchor="center")
             ln = tk.Label(pf, text=icono, font=self.f_label,
                           fg=SUBTEXT, bg=BORDER)
-            ln.place(relx=.5, y=26, anchor="center")
-            bpf = tk.Frame(pf, bg="#111", width=paso_w-4, height=4)
-            bpf.place(x=2, y=42)
+            ln.place(relx=.5, y=28, anchor="center")
+            bpf = tk.Frame(pf, bg="#0D0F14", width=paso_w - 8, height=4)
+            bpf.place(x=4, y=44)
             bp = tk.Frame(bpf, bg=SUBTEXT, width=0, height=4)
             bp.place(x=0, y=0)
             self._paso_frames.append((pf, li, ln, bp))
@@ -472,77 +683,91 @@ class App(tk.Tk):
         tk.Label(left, textvariable=self.paso_desc_var,
                  font=self.f_label, fg=ACCENT, bg=PANEL,
                  wraplength=284, justify="center"
-                 ).place(x=18, y=390, width=284)  # Ajustado desde 370
+                 ).place(x=18, y=394, width=284)
 
         self.cap_btn = tk.Button(
-            left, text="INICIAR ESCANEO", font=self.f_btn,
+            left, text="⬤  INICIAR ESCANEO", font=("Courier New", 9, "bold"),
             fg=BG, bg=ACCENT, relief="flat", cursor="hand2",
-            padx=8, pady=6, command=self._iniciar_registro)
-        self.cap_btn.place(x=18, y=412, width=284)  # Ajustado desde 392
+            padx=8, pady=7, command=self._iniciar_registro,
+            bd=0, highlightthickness=0)
+        self.cap_btn.place(x=18, y=416, width=284)
         self.cap_btn.bind("<Enter>",
                           lambda e: self.cap_btn.config(bg=self._lighten(ACCENT)))
         self.cap_btn.bind("<Leave>",
                           lambda e: self.cap_btn.config(bg=ACCENT))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=450)  # Ajustado desde 430
+        # ── Separador con etiqueta muestras ───────────────────────────────────
+        sep2_cv = tk.Canvas(left, width=284, height=20,
+                            bg=PANEL, highlightthickness=0)
+        sep2_cv.place(x=18, y=452)
+        sep2_cv.create_line(0, 10, 66, 10,    fill=BORDER, width=1)
+        sep2_cv.create_text(80, 10, text="MUESTRAS", font=("Courier New", 7),
+                            fill=SUBTEXT, anchor="center")
+        sep2_cv.create_line(94, 10, 284, 10,  fill=BORDER, width=1)
 
-        # ── Barras de muestras (ajustadas) ──
-        tk.Label(left, text="MUESTRAS POR PASO:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=456)  # Ajustado desde 436
-
+        # ── Barras de muestras ────────────────────────────────────────────────
         self._barra_pasos = []
-        barra_w = 56
-        for i, etiq in enumerate(["Frente", "Izquierda", "Derecha", "Frente"]):
+        barra_w = 60
+        for i, etiq in enumerate(["Frente", "Izqda.", "Decha.", "Frente"]):
             fx = 18 + i * (barra_w + 6)
-            tk.Label(left, text=etiq[:5], font=self.f_zona,
-                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=470)  # Ajustado desde 450
-            bg_b = tk.Frame(left, bg=BORDER, width=barra_w, height=8)
-            bg_b.place(x=fx, y=482)  # Ajustado desde 462
-            bar = tk.Frame(bg_b, bg=BORDER, width=0, height=8)
+            tk.Label(left, text=etiq, font=self.f_zona,
+                     fg=SUBTEXT, bg=PANEL).place(x=fx, y=474)
+            bg_b = tk.Frame(left, bg="#0D0F14", width=barra_w, height=6)
+            bg_b.place(x=fx, y=486)
+            bar = tk.Frame(bg_b, bg=BORDER, width=0, height=6)
             bar.place(x=0, y=0)
             lbl = tk.Label(left, text="0", font=self.f_zona,
                            fg=SUBTEXT, bg=PANEL)
-            lbl.place(x=fx + barra_w//2, y=492, anchor="center")  # Ajustado desde 472
+            lbl.place(x=fx + barra_w // 2, y=495, anchor="center")
             self._barra_pasos.append((bar, lbl, barra_w))
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=502)  # Ajustado desde 482
+        # ── Separador + progreso ──────────────────────────────────────────────
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=506)
 
         self.progreso_var = tk.StringVar(value="")
         self.prog_label   = tk.Label(left, textvariable=self.progreso_var,
                                      font=self.f_status, fg=WARNING,
                                      bg=PANEL, justify="center", wraplength=284)
-        self.prog_label.place(x=18, y=508, width=284)  # Ajustado desde 488
+        self.prog_label.place(x=18, y=512, width=284)
 
         self.timer_var    = tk.StringVar(value="")
         self.paso_txt_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.timer_var,
                  font=self.f_title, fg=ACCENT, bg=PANEL
-                 ).place(x=18, y=546, anchor="nw")  # Ajustado desde 526
+                 ).place(x=18, y=548, anchor="nw")
         tk.Label(left, textvariable=self.paso_txt_var,
                  font=self.f_zona, fg=SUBTEXT, bg=PANEL,
-                 wraplength=160).place(x=62, y=554, anchor="nw")  # Ajustado desde 534
+                 wraplength=160).place(x=62, y=556, anchor="nw")
 
-        tk.Button(left, text="<  Volver", font=self.f_label,
-                  fg=SUBTEXT, bg=PANEL, relief="flat",
-                  cursor="hand2", command=self._volver).place(x=18, y=570)  # Ajustado desde 565
+        volver_f = _rounded_btn(left, text="◀  Volver", cmd=self._volver,
+                                width=110, height=30, bg=BORDER, fg=SUBTEXT,
+                                hover=CARD, font_size=8, bg_parent=PANEL)
+        volver_f.place(x=18, y=572)
 
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
+        # Marco redondeado visual alrededor de la cámara
+        cam_cv = tk.Canvas(right, width=CAM_W, height=H,
+                           bg=BG, highlightthickness=0)
+        cam_cv.place(x=0, y=0)
+        _round_rect(cam_cv, 8, 8, CAM_W - 8, H - 42,
+                    r=12, fill="#080A0F", outline=BORDER, width=1)
+
         self.cam_label = tk.Label(right, bg="#080A0F")
-        self.cam_label.place(x=8, y=5, width=CAM_W-16, height=H-46)
+        self.cam_label.place(x=16, y=16, width=CAM_W - 32, height=H - 66)
 
         tk.Label(right, textvariable=self.status_var,
-                 font=self.f_status, fg=ACCENT, bg=BG).place(x=8, y=H-36)
+                 font=self.f_status, fg=ACCENT, bg=BG).place(x=16, y=H - 38)
 
-        self.prog_frame = tk.Frame(right, bg=BORDER, width=CAM_W-16, height=8)
-        self.prog_frame.place(x=8, y=H-18)
-        self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=8)
+        self.prog_frame = tk.Frame(right, bg=BORDER, width=CAM_W - 32, height=6)
+        self.prog_frame.place(x=16, y=H - 20)
+        self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=6)
         self.prog_bar.place(x=0, y=0)
 
         self._start_cam()
         self.cam_running = True
         threading.Thread(target=self._loop_camara,
-                         kwargs={"max_w": CAM_W-16, "max_h": H-46},
+                         kwargs={"max_w": CAM_W - 32, "max_h": H - 66},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
 
@@ -587,7 +812,7 @@ class App(tk.Tk):
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
         if not hasattr(self, "_paso_frames") or not self.cam_running:
             return
-        paso_w = 56
+        paso_w = 60
         try:
             for i, (pf, li, ln, bp) in enumerate(self._paso_frames):
                 if i < paso_idx:
@@ -918,27 +1143,47 @@ class App(tk.Tk):
 
         left = tk.Frame(self, bg=PANEL, width=PANEL_W, height=H)
         left.place(x=0, y=0)
-        tk.Frame(left, bg=SUCCESS, width=PANEL_W, height=3).place(x=0, y=0)
-        tk.Label(left, text="ACCESO", font=self.f_title,
-                 fg=SUCCESS, bg=PANEL).place(x=18, y=8)
-        tk.Label(left, text="Verificacion de identidad", font=self.f_sub,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=34)
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=52)
+
+        # ── Header del panel ──────────────────────────────────────────────────
+        hdr_cv = tk.Canvas(left, width=PANEL_W, height=58,
+                           bg=PANEL, highlightthickness=0)
+        hdr_cv.place(x=0, y=0)
+        hdr_cv.create_rectangle(0, 0, PANEL_W, 4, fill=SUCCESS, outline="")
+        hdr_cv.create_text(18, 22,
+                           text="◈  ACCESO",
+                           font=("Courier New", 13, "bold"), fill=SUCCESS,
+                           anchor="w")
+        hdr_cv.create_text(18, 42,
+                           text="Verificación de identidad en tiempo real",
+                           font=("Courier New", 7), fill=SUBTEXT, anchor="w")
+        hdr_cv.create_rectangle(18, 56, PANEL_W - 18, 57,
+                                fill=BORDER, outline="")
+
+        # Separador vertical derecho
+        tk.Frame(self, bg=BORDER, width=1, height=H).place(x=PANEL_W - 1, y=0)
+
+        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=62)
 
         self.posicion_var   = tk.StringVar(value="Mira directo a la camara.")
         self.posicion_label = tk.Label(left, textvariable=self.posicion_var,
                  font=self.f_btn, fg=WARNING, bg=PANEL,
                  wraplength=284, justify="center")
-        self.posicion_label.place(x=18, y=80, width=284)
+        self.posicion_label.place(x=18, y=76, width=284)
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=228)
+        # Separador con etiqueta "RESULTADO"
+        sep1 = tk.Canvas(left, width=284, height=20, bg=PANEL, highlightthickness=0)
+        sep1.place(x=18, y=224)
+        sep1.create_line(0, 10, 60, 10,    fill=BORDER, width=1)
+        sep1.create_text(74, 10, text="RESULTADO", font=("Courier New", 7),
+                         fill=SUBTEXT, anchor="center")
+        sep1.create_line(90, 10, 284, 10,  fill=BORDER, width=1)
 
         self.resultado_var   = tk.StringVar(value="Esperando...")
         self.resultado_label = tk.Label(
             left, textvariable=self.resultado_var,
-            font=self.f_btn, fg=ACCENT, bg=PANEL,
+            font=("Courier New", 11, "bold"), fg=ACCENT, bg=PANEL,
             wraplength=284, justify="center")
-        self.resultado_label.place(x=18, y=244, width=284)
+        self.resultado_label.place(x=18, y=248, width=284)
 
         self.candidato_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.candidato_var,
@@ -946,37 +1191,50 @@ class App(tk.Tk):
                  wraplength=284, justify="center"
                  ).place(x=18, y=286, width=284)
 
-        tk.Frame(left, bg=BORDER, height=1, width=284).place(x=18, y=400)
+        # Separador con etiqueta "SIMILITUD"
+        sep2 = tk.Canvas(left, width=284, height=20, bg=PANEL, highlightthickness=0)
+        sep2.place(x=18, y=396)
+        sep2.create_line(0, 10, 62, 10,    fill=BORDER, width=1)
+        sep2.create_text(76, 10, text="SIMILITUD", font=("Courier New", 7),
+                         fill=SUBTEXT, anchor="center")
+        sep2.create_line(92, 10, 284, 10,  fill=BORDER, width=1)
 
-        tk.Label(left, text="SIMILITUD:", font=self.f_zona,
-                 fg=SUBTEXT, bg=PANEL).place(x=18, y=408)
-        self.sim_bg  = tk.Frame(left, bg=BORDER, width=284, height=18)
-        self.sim_bg.place(x=18, y=422)
-        self.sim_bar = tk.Frame(self.sim_bg, bg=BORDER, width=0, height=18)
+        # Barra de similitud con fondo oscuro
+        self.sim_bg  = tk.Frame(left, bg="#0D0F14", width=284, height=20)
+        self.sim_bg.place(x=18, y=420)
+        self.sim_bar = tk.Frame(self.sim_bg, bg=BORDER, width=0, height=20)
         self.sim_bar.place(x=0, y=0)
         self.sim_lbl = tk.Label(self.sim_bg, text="", font=self.f_zona,
                                 fg=BG, bg=BORDER)
-        self.sim_lbl.place(x=4, y=2)
+        self.sim_lbl.place(x=4, y=3)
 
         self.detalle_var = tk.StringVar(value="")
         tk.Label(left, textvariable=self.detalle_var, font=self.f_zona,
                  fg=SUBTEXT, bg=PANEL, wraplength=284, justify="center"
                  ).place(x=18, y=448, width=284)
 
-        tk.Button(left, text="<  Volver", font=self.f_label,
-                  fg=SUBTEXT, bg=PANEL, relief="flat",
-                  cursor="hand2", command=self._volver).place(x=18, y=556)
+        volver_f = _rounded_btn(left, text="◀  Volver", cmd=self._volver,
+                                width=110, height=30, bg=BORDER, fg=SUBTEXT,
+                                hover=CARD, font_size=8, bg_parent=PANEL)
+        volver_f.place(x=18, y=558)
 
         right = tk.Frame(self, bg=BG, width=CAM_W, height=H)
         right.place(x=PANEL_W, y=0)
+        # Marco redondeado visual alrededor de la cámara
+        cam_cv = tk.Canvas(right, width=CAM_W, height=H,
+                           bg=BG, highlightthickness=0)
+        cam_cv.place(x=0, y=0)
+        _round_rect(cam_cv, 8, 8, CAM_W - 8, H - 8,
+                    r=12, fill="#080A0F", outline=BORDER, width=1)
+
         self.cam_label = tk.Label(right, bg="#080A0F")
-        self.cam_label.place(x=8, y=5, width=CAM_W-16, height=H-10)
+        self.cam_label.place(x=16, y=16, width=CAM_W - 32, height=H - 32)
 
         self._start_cam()
         self.cam_running = True
         self._ultima_cara_t = time.time()
         threading.Thread(target=self._loop_camara,
-                         kwargs={"max_w": CAM_W-16, "max_h": H-10},
+                         kwargs={"max_w": CAM_W - 32, "max_h": H - 32},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
         threading.Thread(target=self._monitor_cara,   daemon=True).start()
