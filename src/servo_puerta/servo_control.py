@@ -1,5 +1,5 @@
 """
-servo_control.py  —  Raspberry Pi 5  (reemplaza Arduino + comunicación serial)
+servo_control.py  —  Raspberry Pi 5  (usa lgpio, compatible con Pi 5)
 ================================================================================
 Controla directamente desde los GPIO de la Raspberry Pi:
   • Servomotor  → GPIO 18  (PWM hardware, pin físico 12)
@@ -8,58 +8,40 @@ Controla directamente desde los GPIO de la Raspberry Pi:
   • Buzzer      → GPIO 25  (pin físico 22)
   • Botón man.  → GPIO 17  (pin físico 11)  [INPUT con pull-up interno]
 
-Diagrama de pines Raspberry Pi 5:
-  ┌─────────────────────────────────┐
-  │  Pin 11 (GPIO17) ← Botón manual │
-  │  Pin 12 (GPIO18) → Servo PWM    │
-  │  Pin 16 (GPIO23) → LED Verde    │
-  │  Pin 18 (GPIO24) → LED Rojo     │
-  │  Pin 22 (GPIO25) → Buzzer       │
-  │  Pin 6  (GND)    → GND común    │
-  └─────────────────────────────────┘
-
-Mismos comportamientos que el Arduino:
-  • acceso  → LED verde ON, servo abre, buzzer tono corto 200ms,
-              cierre automático a los 4 s, LED verde OFF
-  • denegado → LED rojo parpadea 3 s, servo cierra, triple beep buzzer
-  • espera  → todo apagado, servo cierra
-  • botón   → igual que acceso (apertura manual)
-
 Dependencias:
-  pip install RPi.GPIO        (ya viene en Raspberry Pi OS)
-  pip install pigpio          (alternativa para PWM más suave en el servo)
-
-NOTA: Si no hay GPIO disponible (PC de desarrollo), el módulo carga un
-      _ServoStub silencioso para no romper la interfaz.
+  pip install lgpio --break-system-packages
+  pip install gpiozero --break-system-packages
 """
 
 import time
 import threading
 
-# ── Intentar importar GPIO ────────────────────────────────────────────────────
+# ── Intentar importar lgpio ───────────────────────────────────────────────────
 try:
-    import RPi.GPIO as GPIO
+    import lgpio
     _GPIO_OK = True
 except ImportError:
     _GPIO_OK = False
-    print("[HW] RPi.GPIO no disponible — modo simulado activado")
+    print("[HW] lgpio no disponible — modo simulado activado")
 
 
 # ── Configuración de pines (BCM) ──────────────────────────────────────────────
-PIN_SERVO     = 18   # PWM hardware (GPIO18 / pin físico 12)
+PIN_SERVO     = 18
 PIN_LED_VERDE = 23
 PIN_LED_ROJO  = 24
 PIN_BUZZER    = 25
-PIN_BOTON     = 17   # INPUT_PULLUP
+PIN_BOTON     = 17
 
 # ── Ángulos del servo ─────────────────────────────────────────────────────────
-SERVO_ABIERTO  = 90   # grados
-SERVO_CERRADO  =  0   # grados
+SERVO_ABIERTO  = 90
+SERVO_CERRADO  =  0
 
-# Conversión de ángulo → duty cycle para PWM a 50 Hz
-# duty = 2.5 + (angulo / 180) * 10   →  0°=2.5%  90°=7.5%  180°=12.5%
-def _angulo_a_duty(grados: float) -> float:
-    return 2.5 + (grados / 180.0) * 10.0
+# Conversión de ángulo → ancho de pulso en microsegundos
+# 0°   → 500 µs
+# 90°  → 1500 µs
+# 180° → 2500 µs
+def _angulo_a_pulso(grados: float) -> int:
+    return int(500 + (grados / 180.0) * 2000)
 
 
 # ── Tiempos (segundos) ────────────────────────────────────────────────────────
@@ -67,94 +49,85 @@ T_PUERTA_ABIERTA = 4.0
 T_LED_DENEGADO   = 3.0
 T_PARPADEO       = 0.3
 T_BUZZER_ACCESO  = 0.2
-T_BEEP           = 0.3    # duración de cada beep del triple beep
+T_BEEP           = 0.3
 DEBOUNCE_S       = 0.05
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 class _ControladorHW:
-    """
-    Gestiona el hardware GPIO en hilos no bloqueantes.
-    Expone la misma API que el stub: abrir(), denegar(), espera(), desconectar()
-    """
 
     def __init__(self):
-        self._lock          = threading.Lock()
-        self._servo_pwm     = None
-        self._puerta_timer  = None
-        self._denegado_timer = None
-        self._beep_thread   = None
-        self._boton_thread  = None
-        self._running       = True
+        self._lock           = threading.Lock()
+        self._handle         = None   # handle lgpio
+        self._puerta_timer   = None
+        self._running        = True
 
         self._setup_gpio()
         self._iniciar_monitor_boton()
 
     # ── Inicialización GPIO ───────────────────────────────────────────────────
     def _setup_gpio(self):
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+        # Abrir chip GPIO (gpiochip4 en Raspberry Pi 5)
+        try:
+            self._handle = lgpio.gpiochip_open(4)
+        except Exception:
+            self._handle = lgpio.gpiochip_open(0)
 
-        GPIO.setup(PIN_LED_VERDE, GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(PIN_LED_ROJO,  GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(PIN_BUZZER,    GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(PIN_BOTON,     GPIO.IN,  pull_up_down=GPIO.PUD_UP)
+        # Salidas
+        lgpio.gpio_claim_output(self._handle, PIN_LED_VERDE, 0)
+        lgpio.gpio_claim_output(self._handle, PIN_LED_ROJO,  0)
+        lgpio.gpio_claim_output(self._handle, PIN_BUZZER,    0)
+        lgpio.gpio_claim_output(self._handle, PIN_SERVO,     0)
 
-        # Servo con PWM a 50 Hz
-        GPIO.setup(PIN_SERVO, GPIO.OUT)
-        self._servo_pwm = GPIO.PWM(PIN_SERVO, 50)
-        self._servo_pwm.start(_angulo_a_duty(SERVO_CERRADO))
+        # Entrada con pull-up para el botón
+        lgpio.gpio_claim_input(self._handle, PIN_BOTON, lgpio.SET_PULL_UP)
 
-        print("[HW] GPIO inicializado correctamente")
+        # Servo en posición cerrada al inicio
+        self._mover_servo(SERVO_CERRADO)
+
+        print("[HW] GPIO inicializado correctamente (lgpio)")
         print(f"[HW] Servo GPIO{PIN_SERVO} | LED Verde GPIO{PIN_LED_VERDE} "
               f"| LED Rojo GPIO{PIN_LED_ROJO} | Buzzer GPIO{PIN_BUZZER} "
               f"| Botón GPIO{PIN_BOTON}")
 
     # ── Control del servo ─────────────────────────────────────────────────────
     def _mover_servo(self, grados: float):
-        if self._servo_pwm:
-            self._servo_pwm.ChangeDutyCycle(_angulo_a_duty(grados))
-            time.sleep(0.4)   # dar tiempo al servo para moverse
-            # Detener la señal PWM para evitar vibración (servo pasivo)
-            self._servo_pwm.ChangeDutyCycle(0)
+        pulso = _angulo_a_pulso(grados)
+        lgpio.tx_servo(self._handle, PIN_SERVO, pulso)
+        time.sleep(0.5)   # tiempo para que el servo llegue a la posición
+        lgpio.tx_servo(self._handle, PIN_SERVO, 0)   # detener señal (evita vibración)
 
     # ── Buzzer ────────────────────────────────────────────────────────────────
     def _beep_acceso(self):
-        """Un beep corto de 200 ms para acceso permitido."""
-        GPIO.output(PIN_BUZZER, GPIO.HIGH)
+        lgpio.gpio_write(self._handle, PIN_BUZZER, 1)
         time.sleep(T_BUZZER_ACCESO)
-        GPIO.output(PIN_BUZZER, GPIO.LOW)
+        lgpio.gpio_write(self._handle, PIN_BUZZER, 0)
 
     def _triple_beep(self):
-        """Triple beep no bloqueante para acceso denegado (en hilo aparte)."""
         def _run():
             for _ in range(3):
                 if not self._running:
                     break
-                GPIO.output(PIN_BUZZER, GPIO.HIGH)
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 1)
                 time.sleep(T_BEEP)
-                GPIO.output(PIN_BUZZER, GPIO.LOW)
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 0)
                 time.sleep(T_BEEP)
-        self._beep_thread = threading.Thread(target=_run, daemon=True)
-        self._beep_thread.start()
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Parpadeo LED rojo ─────────────────────────────────────────────────────
     def _parpadeo_rojo(self):
-        """Parpadea el LED rojo durante T_LED_DENEGADO segundos en hilo aparte."""
         def _run():
             t_fin = time.time() + T_LED_DENEGADO
             while time.time() < t_fin and self._running:
-                GPIO.output(PIN_LED_ROJO, GPIO.HIGH)
+                lgpio.gpio_write(self._handle, PIN_LED_ROJO, 1)
                 time.sleep(T_PARPADEO)
-                GPIO.output(PIN_LED_ROJO, GPIO.LOW)
+                lgpio.gpio_write(self._handle, PIN_LED_ROJO, 0)
                 time.sleep(T_PARPADEO)
-            GPIO.output(PIN_LED_ROJO, GPIO.LOW)
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+            lgpio.gpio_write(self._handle, PIN_LED_ROJO, 0)
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Cierre automático ─────────────────────────────────────────────────────
     def _programar_cierre(self):
-        """Cierra la puerta automáticamente después de T_PUERTA_ABIERTA s."""
         if self._puerta_timer:
             self._puerta_timer.cancel()
         self._puerta_timer = threading.Timer(T_PUERTA_ABIERTA, self._cerrar_puerta)
@@ -164,87 +137,76 @@ class _ControladorHW:
     def _cerrar_puerta(self):
         with self._lock:
             self._mover_servo(SERVO_CERRADO)
-            GPIO.output(PIN_LED_VERDE, GPIO.LOW)
+            lgpio.gpio_write(self._handle, PIN_LED_VERDE, 0)
         print("[HW] Puerta cerrada (auto)")
 
     # ── Botón manual ──────────────────────────────────────────────────────────
     def _iniciar_monitor_boton(self):
-        """Hilo que monitorea el botón con anti-rebote por software."""
         def _monitor():
-            estado_anterior = GPIO.HIGH
+            estado_anterior = 1
             while self._running:
-                lectura = GPIO.input(PIN_BOTON)
-                if lectura == GPIO.LOW and estado_anterior == GPIO.HIGH:
-                    time.sleep(DEBOUNCE_S)   # anti-rebote
-                    if GPIO.input(PIN_BOTON) == GPIO.LOW:
-                        print("[HW] Botón presionado — apertura manual")
-                        self.abrir("Manual")
-                estado_anterior = lectura
+                try:
+                    lectura = lgpio.gpio_read(self._handle, PIN_BOTON)
+                    if lectura == 0 and estado_anterior == 1:
+                        time.sleep(DEBOUNCE_S)
+                        if lgpio.gpio_read(self._handle, PIN_BOTON) == 0:
+                            print("[HW] Botón presionado — apertura manual")
+                            self.abrir("Manual")
+                    estado_anterior = lectura
+                except Exception:
+                    pass
                 time.sleep(0.02)
-
-        self._boton_thread = threading.Thread(target=_monitor, daemon=True)
-        self._boton_thread.start()
+        threading.Thread(target=_monitor, daemon=True).start()
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  API PÚBLICA  (misma que _ServoStub en interfaz.py)
+    #  API PÚBLICA
     # ══════════════════════════════════════════════════════════════════════════
 
     def abrir(self, nombre: str = ""):
-        """Acceso PERMITIDO: LED verde, servo abre, beep corto, cierre en 4 s."""
         print(f"[HW] ACCESO PERMITIDO — {nombre}")
         with self._lock:
-            # Apagar cualquier estado de denegado activo
-            GPIO.output(PIN_LED_ROJO, GPIO.LOW)
-
-            GPIO.output(PIN_LED_VERDE, GPIO.HIGH)
+            lgpio.gpio_write(self._handle, PIN_LED_ROJO,  0)
+            lgpio.gpio_write(self._handle, PIN_LED_VERDE, 1)
             self._mover_servo(SERVO_ABIERTO)
-
-        # Beep en hilo para no bloquear
         threading.Thread(target=self._beep_acceso, daemon=True).start()
-
-        # Cierre automático
         self._programar_cierre()
 
     def denegar(self):
-        """Acceso DENEGADO: LED rojo parpadea 3 s, servo cierra, triple beep."""
         print("[HW] ACCESO DENEGADO")
         with self._lock:
-            GPIO.output(PIN_LED_VERDE, GPIO.LOW)
+            lgpio.gpio_write(self._handle, PIN_LED_VERDE, 0)
             self._mover_servo(SERVO_CERRADO)
-
-        # Parpadeo y beeps en hilos separados (no bloqueantes)
         self._parpadeo_rojo()
         self._triple_beep()
 
     def espera(self):
-        """MODO ESPERA: todo apagado, servo cerrado."""
         print("[HW] MODO ESPERA")
         if self._puerta_timer:
             self._puerta_timer.cancel()
         with self._lock:
-            GPIO.output(PIN_LED_VERDE, GPIO.LOW)
-            GPIO.output(PIN_LED_ROJO,  GPIO.LOW)
-            GPIO.output(PIN_BUZZER,    GPIO.LOW)
+            lgpio.gpio_write(self._handle, PIN_LED_VERDE, 0)
+            lgpio.gpio_write(self._handle, PIN_LED_ROJO,  0)
+            lgpio.gpio_write(self._handle, PIN_BUZZER,    0)
             self._mover_servo(SERVO_CERRADO)
 
     def desconectar(self):
-        """Limpieza al cerrar la aplicación."""
         print("[HW] Desconectando GPIO...")
         self._running = False
         if self._puerta_timer:
             self._puerta_timer.cancel()
-        if self._servo_pwm:
-            self._servo_pwm.stop()
-        GPIO.output(PIN_LED_VERDE, GPIO.LOW)
-        GPIO.output(PIN_LED_ROJO,  GPIO.LOW)
-        GPIO.output(PIN_BUZZER,    GPIO.LOW)
-        GPIO.cleanup()
+        try:
+            lgpio.gpio_write(self._handle, PIN_LED_VERDE, 0)
+            lgpio.gpio_write(self._handle, PIN_LED_ROJO,  0)
+            lgpio.gpio_write(self._handle, PIN_BUZZER,    0)
+            lgpio.tx_servo(self._handle, PIN_SERVO, 0)
+            lgpio.gpiochip_close(self._handle)
+        except Exception:
+            pass
         print("[HW] GPIO liberado.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 class _ServoStub:
-    """Fallback silencioso cuando no hay GPIO disponible (PC de desarrollo)."""
     def abrir(self, nombre: str = ""):
         print(f"[STUB] abrir() — {nombre}")
     def denegar(self):
@@ -255,7 +217,7 @@ class _ServoStub:
         print("[STUB] desconectar()")
 
 
-# ── Instancia global exportada (interfaz.py hace: from servo_control import servo)
+# ── Instancia global exportada
 if _GPIO_OK:
     try:
         servo = _ControladorHW()
