@@ -398,19 +398,21 @@ class App(tk.Tk):
 
         self._logo_img = None
         try:
-            _logo_pil = Image.open("img/UdeC_2L_izq_Negro.png").convert("RGBA")
+            import os as _os
+            _base    = _os.path.dirname(_os.path.abspath(__file__))
+            _path    = _os.path.join(_base, "img", "UdeC_2L_izq_Negro.png")
+            _logo_pil = Image.open(_path).convert("RGBA")
             _logo_h   = 50
             _logo_w   = int(_logo_pil.width * _logo_h / _logo_pil.height)
             _logo_pil = _logo_pil.resize((_logo_w, _logo_h), Image.LANCZOS)
-            self._logo_img = ImageTk.PhotoImage(_logo_pil)
+            # Componer sobre fondo blanco para compatibilidad con ImageTk
+            _bg = Image.new("RGBA", (_logo_w, _logo_h), (255, 255, 255, 255))
+            _bg.paste(_logo_pil, (0, 0), _logo_pil)
+            self._logo_img = ImageTk.PhotoImage(_bg.convert("RGB"))
             cv.create_image(10, (TOP_H - _logo_h) // 2,
                             anchor="nw", image=self._logo_img)
         except Exception:
             pass
-
-        # Título central (SICEUC)
-        cv.create_text(W // 2, 32, text="SICEUC",
-                       font=("Segoe UI", 13, "bold"), fill=NAVY_LN)
 
         # ── Botón SALIR (visible, con icono X y texto) ───────────────────────
         close_btn = tk.Button(
@@ -455,10 +457,10 @@ class App(tk.Tk):
 
         # Texto del sistema sobre la barra
         cv.create_text(14, SUB_Y + 23, text="SISTEMA DE CONTROL DE ACCESO FACIAL",
-                       font=("Segoe UI", 8, "bold"), fill="#FFFFFF", anchor="w")
+                       font=("Segoe UI", 11, "bold"), fill="#FFFFFF", anchor="w")
         cv.create_text(W - 14, SUB_Y + 23,
                        text="Facultad de Ingeniería Electromecánica",
-                       font=("Segoe UI", 7), fill="#AABBCC", anchor="e")
+                       font=("Segoe UI", 9), fill="#AABBCC", anchor="e")
 
         # ── Zona central: título selección ────────────────────────────────────
         CONTENT_Y = SUB_Y + SUB_H + 28
@@ -870,22 +872,26 @@ class App(tk.Tk):
         # ── Botón flotante de formulario (FAB) ────────────────────────────────
         BTN_R    = 28
         BTN_X    = W - BTN_R * 2 - 16
-        # Centrado verticalmente sobre el borde superior del panel inferior
-        BTN_Y_fab = WIN_H - BOT_H - BTN_R - 2   # mitad dentro cámara, mitad en panel
+        # Arriba del botón de escaneo, con un pequeño margen
+        BTN_Y_fab = BTN_Y_b - BTN_R * 2 - 10
 
-        fab_cv = tk.Canvas(self, width=BTN_R * 2, height=BTN_R * 2,
+        # Canvas con padding extra para que el bg coincida con la cámara y no haya bordes
+        FAB_PAD = 4   # píxeles de margen alrededor del círculo
+        FAB_SIZE = BTN_R * 2 + FAB_PAD * 2
+        fab_cv = tk.Canvas(self, width=FAB_SIZE, height=FAB_SIZE,
                            bg="#1A1A1A", highlightthickness=0)
-        fab_cv.place(x=BTN_X, y=BTN_Y_fab)
+        fab_cv.place(x=BTN_X - FAB_PAD, y=BTN_Y_fab - FAB_PAD)
         self._fab_cv = fab_cv
 
         def _draw_fab(color):
             fab_cv.delete("all")
-            # Fondo dividido: mitad superior = cámara, mitad inferior = panel
-            fab_cv.create_rectangle(0, 0,        BTN_R*2, BTN_R, fill="#1A1A1A", outline="")
-            fab_cv.create_rectangle(0, BTN_R,    BTN_R*2, BTN_R*2, fill=NAVY_LN, outline="")
-            # Círculo encima
-            fab_cv.create_oval(0, 0, BTN_R*2, BTN_R*2, fill=color, outline="")
-            cx, cy = BTN_R, BTN_R
+            # Fondo del canvas = color de la cámara (sin bordes visibles)
+            fab_cv.create_rectangle(0, 0, FAB_SIZE, FAB_SIZE, fill="#1A1A1A", outline="")
+            # Círculo centrado con padding para evitar cortes en esquinas
+            fab_cv.create_oval(FAB_PAD, FAB_PAD,
+                               FAB_PAD + BTN_R * 2, FAB_PAD + BTN_R * 2,
+                               fill=color, outline="")
+            cx, cy = FAB_PAD + BTN_R, FAB_PAD + BTN_R
             fab_cv.create_rectangle(cx-10, cy-12, cx+10, cy+13,
                                     fill="#FFFFFF", outline="")
             fab_cv.create_arc(cx-5, cy-15, cx+5, cy-9,
