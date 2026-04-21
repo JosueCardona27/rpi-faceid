@@ -554,18 +554,16 @@ class App(tk.Tk):
         band_w  = 120     # ancho banda colorida izquierda
         hover_c = _lighten_color(color)
 
-        # ── Sombra en el canvas de fondo ─────────────────────────────────────
-        _round_rect(cv, x+5, y+5, x+w+5, y+h+5,
-                    r=r, fill="#C5BFB0", outline="#C5BFB0", width=0)
+        # Sin sombra externa para evitar barras visibles alrededor de las tarjetas
 
         # ── Canvas de la tarjeta (reemplaza Frame + Canvas separados) ─────────
-        cc = tk.Canvas(self, width=w, height=h, bg=BG,
+        cc = tk.Canvas(self, width=w, height=h, bg=PANEL,
                        highlightthickness=0)
         cc.place(x=x, y=y)
 
         # Cuerpo tarjeta redondeado completo
         _round_rect(cc, 0, 0, w, h,
-                    r=r, fill=PANEL, outline=BORDER, width=1)
+                    r=r, fill=PANEL, outline=color, width=3)
 
         # ── Banda colorida izquierda (solo esquinas izquierdas redondeadas) ───
         bw = band_w
@@ -761,7 +759,7 @@ class App(tk.Tk):
                                         start=270, extent=180, fill=color, outline=color)
             self.scan_btn_cv.create_rectangle(r, 0, BTN_W - r, BTN_H_b,
                                               fill=color, outline="")
-            icono = "⬤  INICIAR ESCANEO" if listo else "🔒  Completa el formulario para continuar"
+            icono = "⬤  INICIAR ESCANEO" if listo else "Completa el formulario para continuar"
             self.scan_btn_cv.create_text(BTN_W // 2, BTN_H_b // 2,
                                          text=icono, font=(FONT, 10, "bold"), fill=tc)
 
