@@ -301,11 +301,19 @@ class App(tk.Tk):
             self.cam_running = False
 
     def _desactivar_camara_acceso(self):
-        """Apaga la cámara y muestra pantalla de espera."""
+        """Apaga la cámara y muestra pantalla negra de espera."""
         if not self.cam_running:
             return
         self._stop_cam()
         servo.espera()
+        try:
+            # ── Poner pantalla negra en el área de la cámara ──────────────────
+            negro = np.zeros((CAM_H_V, CAM_W, 3), dtype=np.uint8)
+            imgtk_negro = _imgtk(negro, CAM_W, CAM_H_V)
+            self.cam_label.imgtk = imgtk_negro
+            self.cam_label.configure(image=imgtk_negro)
+        except Exception:
+            pass
         try:
             self.resultado_var.set("Esperando persona...")
             self.resultado_label.config(fg=ACCENT)
