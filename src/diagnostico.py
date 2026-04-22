@@ -17,7 +17,7 @@ Uso para calibrar:
   1. Apunta la camara al fondo (sin nadie) → anota SCORE y LAPLACIAN
   2. Pon tu cara frente a la camara → anota SCORE y LAPLACIAN
   3. Ajusta _SCORE_MINIMO_CARA y _LAPLACIAN_MIN en face_engine.py
-     a valores que queden entre los dos grupos de lecturas.
+     a valores que queden entre los dos grupos de lecturas
 """
 
 import cv2

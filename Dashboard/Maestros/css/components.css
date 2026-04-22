@@ -44,7 +44,9 @@
 .btn-confirm.danger  { background: var(--red); }
 .btn-confirm.warning { background: var(--amber); }
 .btn-confirm.info    { background: var(--blue); }
+.btn-confirm.accent  { background: var(--accent); color: #0F1117; }
 .btn-confirm:hover   { filter: brightness(1.1); }
+.btn-confirm:disabled { opacity: .45; cursor: not-allowed; filter: none; }
 
 
 /* ================================================================
@@ -75,7 +77,7 @@
 /* ================================================================
    22. UTILIDADES Y COMPONENTES PEQUEÑOS
 ================================================================ */
-[title] { cursor: default; }  /* Tooltips nativos del navegador */
+[title] { cursor: default; }
 
 
 /* ================================================================
@@ -104,4 +106,159 @@
   .header-date { display: none; }
   .content    { padding: 14px; }
   .main-grid  { gap: 14px; }
+}
+
+
+/* ================================================================
+   24. GESTIÓN DE PERSONAS (CRUD)
+================================================================ */
+
+/* ── Tabla de gestión ── */
+.td-small { font-size: 11px; color: var(--text-2); }
+
+.person-cell {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.mini-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent-dim); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.mini-avatar.self { background: var(--amber-dim); color: var(--amber); }
+
+.self-row { background: rgba(245,158,11,0.04); }
+
+.self-badge {
+  display: inline-block; padding: 1px 6px;
+  background: var(--amber-dim); color: var(--amber);
+  border-radius: 4px; font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .4px;
+}
+
+/* ── Botones de acción en tabla ── */
+.action-btns { display: flex; gap: 4px; }
+
+.action-btn {
+  padding: 4px 8px; border: none; border-radius: 6px;
+  cursor: pointer; font-size: 13px; line-height: 1;
+  background: transparent; transition: background 0.15s;
+}
+.action-btn.edit:hover   { background: var(--blue-dim); }
+.action-btn.remove:hover { background: var(--red-dim);  }
+.action-btn:disabled     { opacity: .35; cursor: not-allowed; }
+
+
+/* ================================================================
+   25. MODAL DE GESTIÓN (formulario de persona)
+================================================================ */
+.person-modal { max-width: 500px; }
+
+.fm-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+
+.fm-field {
+  display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px;
+}
+
+.fm-label {
+  font-size: 11px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .8px;
+  font-family: var(--font-mono);
+}
+
+.fm-input {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+  width: 100%;
+}
+.fm-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.fm-input::placeholder { color: var(--text-3); }
+
+
+/* ================================================================
+   26. MODAL DE RECONOCIMIENTO FACIAL
+================================================================ */
+.face-modal { max-width: 440px; }
+
+.face-scanner-wrap {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 14px;
+  aspect-ratio: 4/3;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.face-video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1); /* efecto espejo */
+}
+
+.face-canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  transform: scaleX(-1);
+}
+
+.face-status {
+  font-size: 13px; font-weight: 600;
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  margin-bottom: 18px; text-align: center;
+}
+.face-status.waiting {
+  background: var(--amber-dim); color: var(--amber);
+}
+.face-status.ok {
+  background: var(--accent-dim); color: var(--accent);
+}
+.face-status.error {
+  background: var(--red-dim); color: var(--red);
+}
+
+.face-corner {
+  position: absolute;
+  width: 20px; height: 20px;
+  border-color: var(--accent);
+  border-style: solid;
+  opacity: 0.7;
+}
+.face-corner.tl { top:12px; left:12px;  border-width: 2px 0 0 2px; }
+.face-corner.tr { top:12px; right:12px; border-width: 2px 2px 0 0; }
+.face-corner.bl { bottom:12px; left:12px;  border-width: 0 0 2px 2px; }
+.face-corner.br { bottom:12px; right:12px; border-width: 0 2px 2px 0; }
+
+
+/* ================================================================
+   27. BANNER DE EXPORTAR BD
+================================================================ */
+.export-banner {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
+  background: var(--amber-dim); border-top: 1px solid var(--amber);
+  padding: 10px 20px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; color: var(--amber);
+}
+.export-banner span { flex: 1; }
+.export-banner button {
+  padding: 6px 14px; border-radius: var(--radius-xs);
+  background: var(--amber); color: #0F1117;
+  border: none; cursor: pointer; font-size: 12px; font-weight: 700;
 }
