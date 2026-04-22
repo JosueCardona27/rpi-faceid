@@ -41,9 +41,8 @@ from face_engine import extraer_caracteristicas
 from database import (
     distancia_chi2,
     cargar_vectores_por_angulo,
-    distancia_chi2,
     UMBRAL,
-    UMBRAL_RECHAZO,
+    RECHAZO as UMBRAL_RECHAZO,   # alias para no cambiar el resto del archivo
 )
 
 print("\n" + "="*70)

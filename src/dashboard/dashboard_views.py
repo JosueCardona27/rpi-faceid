@@ -1,0 +1,600 @@
+"""
+dashboard_views.py  (v3)
+========================
+Correcciones v3:
+  · TODAS las queries usan 'fecha_acceso' (nombre real en la BD).
+  · Joins via usuario_id directo (más fiable que numero_cuenta).
+  · ResumenView: KPIs correctos, últimos 4 accesos.
+  · AccesosView: #1 = más antiguo, columnas Grado/Grupo/Rol.
+  · StatsView: top 7 por total de accesos, con grado+grupo debajo.
+  · ConfigView: solo horario + info sesión.
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import datetime
+import json, os, re
+
+from dash_theme import (
+    BG, SIDEBAR, CARD, CARD2, ACCENT, RED, AMBER, BLUE,
+    T1, T2, T3, BORDER,
+    card_head, scrollable_frame, make_treeview, iniciales,
+)
+from lang_dict import t
+
+# ══════════════════════════════════════════════════════════════════════
+#  CAPA DE DATOS UNIFICADA
+#  Usa la API de la Raspberry Pi si está disponible, o la BD local si no.
+#  Para cambiar la IP de la Pi: edita .pi_config.json en la raíz.
+# ══════════════════════════════════════════════════════════════════════
+from data_source import (
+    kpi_dentro      as _kpi_dentro,
+    kpi_hoy         as _kpi_hoy,
+    kpi_semana      as _kpi_semana,
+    ultimos_accesos as _ultimos_accesos,
+    accesos_todos   as _accesos_todos,
+    top7            as _top7,
+    stats_rol       as _stats_rol,
+    stats_hora      as _stats_hora,
+    perfil_stats    as _perfil_stats,
+    fuente_activa,
+)
+
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "lab_config.json")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  HORARIO (JSON)
+# ═══════════════════════════════════════════════════════════════
+
+def _load_horario() -> dict:
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"hora_inicio": "00:00", "hora_fin": "00:00"}
+
+
+def _save_horario(inicio: str, fin: str):
+    data = _load_horario()
+    data.update({"hora_inicio": inicio, "hora_fin": fin})
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  BASE VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class BaseView(tk.Frame):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, bg=BG)
+        self.dash = dashboard
+
+    def on_show(self):
+        self.refresh()
+
+    def refresh(self):
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════
+#  RESUMEN VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class ResumenView(BaseView):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, dashboard)
+        self._build()
+
+    def _build(self):
+        _, inner = scrollable_frame(self)
+
+        # ── KPIs ──────────────────────────────────────────────
+        kpi_row = tk.Frame(inner, bg=BG)
+        kpi_row.pack(fill="x", padx=18, pady=10)
+        self._kv: dict[str, tk.StringVar] = {}
+        for key, lbl_key, color in [
+            ("dentro", "kpi_inside", ACCENT),
+            ("hoy",    "kpi_hoy",    BLUE),
+            ("semana", "kpi_semana", AMBER),
+        ]:
+            self._kv[key] = tk.StringVar(value="—")
+            self._kpi_card(kpi_row, t(lbl_key), key, color)
+
+        # ── Últimos 4 accesos ──────────────────────────────────
+        c4 = tk.Frame(inner, bg=CARD, padx=14, pady=12)
+        c4.pack(fill="x", padx=18, pady=(0, 10))
+        h4 = tk.Frame(c4, bg=CARD)
+        h4.pack(fill="x", pady=(0, 8))
+        card_head(h4, t("ultimos_accesos"), t("accesos_rt"))
+        tk.Label(h4, text=t("en_vivo"), bg=CARD, fg=ACCENT,
+                 font=("Arial", 8, "bold")).pack(side="right")
+        # Indicador de fuente de datos (Pi o local)
+        self._fuente_lbl = tk.Label(h4, text="", bg=CARD,
+                                     font=("Arial", 7))
+        self._fuente_lbl.pack(side="right", padx=8)
+        self._frame4 = tk.Frame(c4, bg=CARD)
+        self._frame4.pack(fill="x")
+
+        # ── Tabla recientes ────────────────────────────────────
+        c_rec = tk.Frame(inner, bg=CARD, padx=14, pady=12)
+        c_rec.pack(fill="x", padx=18, pady=(0, 14))
+        hrec = tk.Frame(c_rec, bg=CARD)
+        hrec.pack(fill="x", pady=(0, 8))
+        card_head(hrec, t("accesos_recientes"), t("movimientos_hoy"))
+        tk.Button(hrec, text=t("ver_todo"),
+                  command=lambda: self.dash.navigate("accesos"),
+                  bg=CARD2, fg=T2, relief="flat", font=("Arial", 8),
+                  padx=8, pady=3, cursor="hand2").pack(side="right")
+
+        cols = [
+            ("nombre", t("col_persona"), 240, "w"),
+            ("tipo",   t("col_tipo"),     90, "center"),
+            ("hora",   t("col_hora"),     70, "center"),
+            ("rol",    t("col_rol"),      90, "center"),
+        ]
+        wrap = tk.Frame(c_rec, bg=CARD)
+        wrap.pack(fill="x")
+        self.tree_rec = make_treeview(wrap, cols, height=7)
+
+    def _kpi_card(self, parent, label, key, color):
+        f = tk.Frame(parent, bg=CARD, padx=16, pady=14)
+        f.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        tk.Label(f, textvariable=self._kv[key], bg=CARD, fg=color,
+                 font=("Arial", 28, "bold")).pack(anchor="w")
+        tk.Label(f, text=label, bg=CARD, fg=T2,
+                 font=("Arial", 9)).pack(anchor="w")
+
+    def refresh(self):
+        self._kv["dentro"].set(str(_kpi_dentro()))
+        self._kv["hoy"].set(str(_kpi_hoy()))
+        self._kv["semana"].set(str(_kpi_semana()))
+
+        # Indicador de fuente
+        fuente = fuente_activa()
+        if fuente == "api":
+            self._fuente_lbl.configure(text="🟢 Raspberry Pi", fg="#22C55E")
+        else:
+            self._fuente_lbl.configure(text="🟡 BD local", fg="#F59E0B")
+
+        # Últimos 4 accesos en cards
+        for w in self._frame4.winfo_children():
+            w.destroy()
+        ultimos = _ultimos_accesos(4)
+        if not ultimos:
+            tk.Label(self._frame4, text=t("nadie_lab"),
+                     bg=CARD, fg=T3, font=("Arial", 9)).pack(pady=16)
+        else:
+            for p in ultimos:
+                row = tk.Frame(self._frame4, bg=CARD2, padx=10, pady=7)
+                row.pack(fill="x", pady=2)
+                partes = p["nombre"].split(" ", 1)
+                ini = iniciales(partes[0], partes[1] if len(partes) > 1 else "")
+                tk.Label(row, text=ini, bg=ACCENT, fg=BG,
+                         font=("Arial", 9, "bold"), width=3
+                         ).pack(side="left", padx=(0, 8))
+                info = tk.Frame(row, bg=CARD2)
+                info.pack(side="left", fill="x", expand=True)
+                tk.Label(info, text=p["nombre"], bg=CARD2, fg=T1,
+                         font=("Arial", 9), anchor="w").pack(anchor="w")
+                tk.Label(info, text=p["rol"], bg=CARD2, fg=T3,
+                         font=("Arial", 8), anchor="w").pack(anchor="w")
+                tipo_txt = t("entrada") if p["tipo"] == "entrada" else t("salida")
+                tk.Label(row, text=f"{tipo_txt}  {p['hora']}",
+                         bg=CARD2, fg=T2, font=("Arial", 8)
+                         ).pack(side="right")
+
+        # Tabla de accesos recientes (últimos 8)
+        self.tree_rec.delete(*self.tree_rec.get_children())
+        for r in _ultimos_accesos(8):
+            tipo_txt = t("entrada") if r["tipo"] == "entrada" else t("salida")
+            self.tree_rec.insert("", "end",
+                                  values=(r["nombre"], tipo_txt,
+                                          r["hora"], r["rol"]))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ACCESOS VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class AccesosView(BaseView):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, dashboard)
+        # Mapeo texto ↔ valor real de rol
+        self._rol_opts = [
+            ("",           t("filtro_todos")),
+            ("estudiante", t("filtro_estudiante")),
+            ("maestro",    t("filtro_maestro")),
+            ("admin",      t("filtro_admin")),
+        ]
+        self._display_to_rol = {v: k for k, v in self._rol_opts}
+        self._cb_var = tk.StringVar(value=t("filtro_todos"))
+        self._build()
+
+    def _build(self):
+        c = tk.Frame(self, bg=CARD, padx=14, pady=12)
+        c.pack(fill="both", expand=True, padx=18, pady=14)
+
+        hdr = tk.Frame(c, bg=CARD)
+        hdr.pack(fill="x", pady=(0, 10))
+        card_head(hdr, t("registro_completo"), t("hist_entradas"))
+
+        # Filtro por rol
+        frow = tk.Frame(hdr, bg=CARD)
+        frow.pack(side="right")
+        tk.Label(frow, text=t("filtro_rol"), bg=CARD, fg=T2,
+                 font=("Arial", 9)).pack(side="left")
+        self._rol_cb = ttk.Combobox(
+            frow, textvariable=self._cb_var,
+            values=[v for _, v in self._rol_opts],
+            state="readonly", width=13)
+        self._rol_cb.pack(side="left", padx=(4, 0))
+        self._rol_cb.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
+
+        self._lbl_count = tk.Label(c, text="", bg=CARD, fg=T2, font=("Arial", 9))
+        self._lbl_count.pack(anchor="w", pady=(0, 6))
+
+        cols = [
+            ("num",    t("col_num"),    45,  "center"),
+            ("nombre", t("col_nombre"), 200, "w"),
+            ("cuenta", t("col_cuenta"), 110, "center"),
+            ("grado",  t("col_grado"),   65, "center"),
+            ("grupo",  t("col_grupo"),   55, "center"),
+            ("rol",    t("col_rol"),     90, "center"),
+            ("fecha",  t("col_fecha"),   95, "center"),
+            ("hora",   t("col_hora"),    65, "center"),
+        ]
+        wrap = tk.Frame(c, bg=CARD)
+        wrap.pack(fill="both", expand=True)
+        self.tree = make_treeview(wrap, cols, height=24)
+
+    def refresh(self):
+        texto_sel  = self._cb_var.get()
+        rol_filtro = self._display_to_rol.get(texto_sel, "")
+        rows       = _accesos_todos(rol_filtro)
+
+        self._lbl_count.configure(
+            text=t("registros_encontrados", n=len(rows)))
+
+        self.tree.delete(*self.tree.get_children())
+        if not rows:
+            self.tree.insert("", "end", values=(
+                "—", t("sin_registros"), "", "", "", "", "", ""))
+            return
+        for r in rows:
+            self.tree.insert("", "end", values=(
+                r["num"], r["nombre"], r["cuenta"],
+                r["grado"], r["grupo"], r["rol"],
+                r["fecha"], r["hora"],
+            ))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  STATS VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class StatsView(BaseView):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, dashboard)
+        self._build()
+
+    def _build(self):
+        _, inner = scrollable_frame(self)
+
+        top_row = tk.Frame(inner, bg=BG)
+        top_row.pack(fill="x", padx=18, pady=(14, 0))
+
+        # Card: Top 7
+        self._c_top = tk.Frame(top_row, bg=CARD, padx=14, pady=12)
+        self._c_top.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        card_head(self._c_top, t("top_visitantes"), t("top_sub"))
+        self._top_inner = tk.Frame(self._c_top, bg=CARD)
+        self._top_inner.pack(fill="both", expand=True)
+
+        # Card: Por rol
+        self._c_rol = tk.Frame(top_row, bg=CARD, padx=14, pady=12)
+        self._c_rol.pack(side="left", fill="both", expand=True)
+        card_head(self._c_rol, t("accesos_por_rol"), t("dist_visitas"))
+        self._rol_inner = tk.Frame(self._c_rol, bg=CARD)
+        self._rol_inner.pack(fill="both", expand=True)
+
+        # Card: Por hora
+        self._c_hora = tk.Frame(inner, bg=CARD, padx=14, pady=12)
+        self._c_hora.pack(fill="x", padx=18, pady=14)
+        card_head(self._c_hora, t("accesos_por_hora"), t("franja_horaria"))
+        self._hora_inner = tk.Frame(self._c_hora, bg=CARD)
+        self._hora_inner.pack(fill="both", expand=True)
+
+    def refresh(self):
+        self._render_top(_top7())
+        self._render_rol(_stats_rol())
+        self._render_horas(_stats_hora())
+
+    def _render_top(self, rows):
+        for w in self._top_inner.winfo_children():
+            w.destroy()
+        if not rows:
+            tk.Label(self._top_inner, text=t("sin_datos"), bg=CARD, fg=T3,
+                     font=("Arial", 9)).pack(pady=12)
+            return
+        medal = ["🥇", "🥈", "🥉"]
+        for i, d in enumerate(rows):
+            row = tk.Frame(self._top_inner, bg=CARD2, padx=10, pady=7)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=medal[i] if i < 3 else f"  {i+1}.",
+                     bg=CARD2, fg=T1, font=("Arial", 10)
+                     ).pack(side="left", padx=(0, 8))
+            info = tk.Frame(row, bg=CARD2)
+            info.pack(side="left", fill="x", expand=True)
+            tk.Label(info, text=d["nombre"], bg=CARD2, fg=T1,
+                     font=("Arial", 9, "bold"), anchor="w").pack(anchor="w")
+            # Grado+grupo (o rol) debajo del nombre
+            tk.Label(info, text=d["sub"], bg=CARD2, fg=T3,
+                     font=("Arial", 8), anchor="w").pack(anchor="w")
+            tk.Label(row,
+                     text=f"{d['visitas']} {t('col_visitas')}",
+                     bg=CARD2, fg=ACCENT,
+                     font=("Arial", 9, "bold")).pack(side="right")
+
+    def _render_rol(self, rows):
+        for w in self._rol_inner.winfo_children():
+            w.destroy()
+        if not rows:
+            tk.Label(self._rol_inner, text=t("sin_datos"), bg=CARD, fg=T3,
+                     font=("Arial", 9)).pack(pady=12)
+            return
+        total  = sum(r[1] for r in rows) or 1
+        colors = {"admin": ACCENT, "maestro": BLUE, "estudiante": AMBER}
+        for rol, cnt in rows:
+            pct = int(cnt / total * 100)
+            row = tk.Frame(self._rol_inner, bg=CARD)
+            row.pack(fill="x", pady=5)
+            tk.Label(row, text=rol.capitalize(), bg=CARD, fg=T2,
+                     font=("Arial", 9), width=12, anchor="w").pack(side="left")
+            bar_bg = tk.Frame(row, bg=CARD2, height=14)
+            bar_bg.pack(side="left", fill="x", expand=True, padx=8)
+            bar_bg.pack_propagate(False)
+            tk.Frame(bar_bg, bg=colors.get(rol, ACCENT),
+                     width=max(4, pct * 2)).pack(side="left", fill="y")
+            tk.Label(row, text=f"{cnt} ({pct}%)", bg=CARD, fg=T2,
+                     font=("Arial", 9)).pack(side="right")
+
+    def _render_horas(self, rows):
+        for w in self._hora_inner.winfo_children():
+            w.destroy()
+        if not rows:
+            tk.Label(self._hora_inner, text=t("sin_datos_semana"),
+                     bg=CARD, fg=T3, font=("Arial", 9)).pack(pady=12)
+            return
+        max_cnt = max(r[1] for r in rows) or 1
+        canvas  = tk.Frame(self._hora_inner, bg=CARD)
+        canvas.pack(fill="x")
+        for hr, cnt in rows:
+            pct   = max(4, int(cnt / max_cnt * 80))
+            col_f = tk.Frame(canvas, bg=CARD, padx=3)
+            col_f.pack(side="left", fill="y")
+            tk.Frame(col_f, bg=CARD, height=80 - pct).pack(fill="x")
+            tk.Frame(col_f, bg=ACCENT if cnt == max_cnt else BLUE,
+                     height=pct, width=22).pack()
+            tk.Label(col_f, text=f"{hr:02d}", bg=CARD, fg=T3,
+                     font=("Arial", 7)).pack()
+            tk.Label(col_f, text=str(cnt), bg=CARD, fg=T2,
+                     font=("Arial", 7)).pack()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PERFIL VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class PerfilView(BaseView):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, dashboard)
+        self._build()
+
+    def _build(self):
+        _, inner = scrollable_frame(self)
+        u   = self.dash.usuario
+        ini = iniciales(u.get("nombre", ""), u.get("apellido_paterno", ""))
+
+        c = tk.Frame(inner, bg=CARD, padx=24, pady=20)
+        c.pack(fill="x", padx=18, pady=14)
+
+        tk.Label(c, text=ini, bg=ACCENT, fg=BG,
+                 font=("Arial", 32, "bold"), width=3, height=1
+                 ).pack(pady=(0, 12))
+        nombre_full = (f"{u.get('nombre','')} "
+                       f"{u.get('apellido_paterno','')} "
+                       f"{(u.get('apellido_materno') or '')}").strip()
+        tk.Label(c, text=nombre_full, bg=CARD, fg=T1,
+                 font=("Arial", 16, "bold")).pack()
+        rol_key = {"admin": "administrador", "maestro": "maestro"}.get(
+            u["rol"], "alumno")
+        tk.Label(c, text=t(rol_key), bg=CARD, fg=ACCENT,
+                 font=("Arial", 10)).pack(pady=(2, 14))
+
+        grid = tk.Frame(c, bg=CARD)
+        grid.pack()
+        for lbl_key, val in [
+            ("num_cuenta", u.get("numero_cuenta") or "—"),
+            ("correo",     u.get("correo")        or "—"),
+            ("col_rol",    u.get("rol", "").capitalize()),
+        ]:
+            row = tk.Frame(grid, bg=CARD)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=f"{t(lbl_key)}:", bg=CARD, fg=T3,
+                     font=("Arial", 9), width=18, anchor="e").pack(side="left")
+            tk.Label(row, text=val, bg=CARD, fg=T1,
+                     font=("Arial", 9, "bold"), anchor="w"
+                     ).pack(side="left", padx=10)
+
+        c2 = tk.Frame(inner, bg=CARD, padx=24, pady=16)
+        c2.pack(fill="x", padx=18, pady=(0, 14))
+        card_head(c2, t("actividad_mes"), "")
+        self._stat_frame = tk.Frame(c2, bg=CARD)
+        self._stat_frame.pack(fill="x")
+
+    def refresh(self):
+        for w in self._stat_frame.winfo_children():
+            w.destroy()
+        accesos, reg = _perfil_stats()
+        for lbl_key, val in [("accesos_mes", accesos), ("usuarios_mes", reg)]:
+            row = tk.Frame(self._stat_frame, bg=CARD2, padx=14, pady=10)
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=str(val), bg=CARD2, fg=ACCENT,
+                     font=("Arial", 22, "bold")).pack(side="left", padx=(0, 14))
+            tk.Label(row, text=t(lbl_key), bg=CARD2, fg=T2,
+                     font=("Arial", 9)).pack(side="left")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  CONFIG VIEW
+# ═══════════════════════════════════════════════════════════════
+
+class ConfigView(BaseView):
+    def __init__(self, parent, dashboard):
+        super().__init__(parent, dashboard)
+        self._build()
+
+    def _build(self):
+        _, inner = scrollable_frame(self)
+
+        c = tk.Frame(inner, bg=CARD, padx=20, pady=16)
+        c.pack(fill="x", padx=18, pady=14)
+        card_head(c, t("config_sistema"), t("prefs"))
+
+        f = tk.Frame(c, bg=CARD)
+        f.pack(fill="x")
+
+        # ── Horario de acceso ──────────────────────────────────
+        self._sep(f, "horario_acceso", "horario_desc")
+        hr_row = tk.Frame(f, bg=CARD2, padx=12, pady=10)
+        hr_row.pack(fill="x", pady=(4, 0))
+        self._lbl_horario = tk.Label(
+            hr_row, text=self._horario_text(), bg=CARD2, fg=T2,
+            font=("Arial", 9), anchor="w")
+        self._lbl_horario.pack(side="left", fill="x", expand=True)
+        tk.Button(hr_row, text=t("btn_config_horario"),
+                  command=self._open_horario,
+                  bg=ACCENT, fg=BG, relief="flat",
+                  font=("Arial", 9, "bold"), padx=12, pady=5,
+                  cursor="hand2").pack(side="right")
+
+        # ── Actualización automática ───────────────────────────
+        self._sep(f, "autoactualizacion", "autoactualizacion_desc")
+        ar = tk.Frame(f, bg=CARD2, padx=12, pady=8)
+        ar.pack(fill="x", pady=(4, 0))
+        tk.Label(ar, text=t("activo_30s"), bg=CARD2, fg=ACCENT,
+                 font=("Arial", 9)).pack(anchor="w")
+
+        # ── Info sesión ────────────────────────────────────────
+        self._sep(f, "info_sesion", "info_sesion_desc")
+        ir = tk.Frame(f, bg=CARD2, padx=12, pady=10)
+        ir.pack(fill="x", pady=(4, 0))
+        u = self.dash.usuario
+        for lbl_k, val in [
+            ("col_nombre", f"{u.get('nombre','')} {u.get('apellido_paterno','')}"),
+            ("num_cuenta", u.get("numero_cuenta") or "—"),
+            ("correo",     u.get("correo") or "—"),
+            ("col_rol",    u.get("rol", "").capitalize()),
+        ]:
+            tk.Label(ir, text=f"{t(lbl_k)}: {val}", bg=CARD2, fg=T2,
+                     font=("Arial", 9), anchor="w").pack(anchor="w")
+
+    def _sep(self, parent, title_key, desc_key):
+        tk.Label(parent, text=t(title_key), bg=CARD, fg=T1,
+                 font=("Arial", 10, "bold"), anchor="w"
+                 ).pack(fill="x", pady=(18, 0))
+        tk.Label(parent, text=t(desc_key), bg=CARD, fg=T3,
+                 font=("Arial", 8), anchor="w").pack(fill="x")
+
+    def _horario_text(self) -> str:
+        cfg = _load_horario()
+        ini = cfg.get("hora_inicio", "00:00")
+        fin = cfg.get("hora_fin",    "00:00")
+        fin_txt = t("sin_limite") if fin == "00:00" else fin
+        return t("horario_actual", ini=ini, fin=fin_txt)
+
+    def _open_horario(self):
+        HorarioDialog(self.dash.root, on_save=lambda: self._lbl_horario.configure(
+            text=self._horario_text()))
+
+    def on_show(self):
+        self._lbl_horario.configure(text=self._horario_text())
+
+
+# ═══════════════════════════════════════════════════════════════
+#  DIÁLOGO HORARIO
+# ═══════════════════════════════════════════════════════════════
+
+class HorarioDialog(tk.Toplevel):
+    def __init__(self, parent, on_save=None):
+        super().__init__(parent)
+        self.on_save = on_save
+        self.title(t("horario_titulo"))
+        self.resizable(False, False)
+        self.configure(bg=CARD)
+        self.transient(parent)
+
+        cfg = _load_horario()
+        self._ini = tk.StringVar(value=cfg.get("hora_inicio", "07:00"))
+        self._fin = tk.StringVar(value=cfg.get("hora_fin",    "22:00"))
+        self._err = tk.StringVar(value="")
+
+        # 1. Construir primero el contenido
+        self._build()
+
+        # 2. Dar tamaño fijo y centrar DESPUÉS de construir
+        W_DLG, H_DLG = 380, 310
+        px = parent.winfo_rootx() + parent.winfo_width()  // 2 - W_DLG // 2
+        py = parent.winfo_rooty() + parent.winfo_height() // 2 - H_DLG // 2
+        self.geometry(f"{W_DLG}x{H_DLG}+{px}+{py}")
+
+        # 3. grab_set() DESPUÉS de que la ventana tiene contenido
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+    def _build(self):
+        pad = {"padx": 24, "pady": 6}
+        # Opción 1 - La más segura (recomendada):
+        tk.Label(self, text=t("horario_titulo"), bg=CARD, fg=T1,
+            font=("Arial", 13, "bold")).pack(pady=(18, 4))
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24)
+
+        form = tk.Frame(self, bg=CARD)
+        form.pack(fill="x", **pad)
+        for lbl_key, var in [("hora_inicio", self._ini), ("hora_fin", self._fin)]:
+            tk.Label(form, text=t(lbl_key), bg=CARD, fg=T2,
+                     font=("Arial", 9), anchor="w").pack(fill="x", pady=(10, 0))
+            tk.Entry(form, textvariable=var, bg=CARD2, fg=T1,
+                     insertbackground=T1, relief="flat",
+                     font=("Arial", 12), justify="center"
+                     ).pack(fill="x", ipady=6)
+
+        tk.Label(self, text="HH:MM  (ej: 07:00 — 21:00)",
+                 bg=CARD, fg=T3, font=("Arial", 8)).pack(**pad)
+        tk.Label(self, textvariable=self._err, bg=CARD, fg=RED,
+                 font=("Arial", 8)).pack(padx=24)
+
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24)
+        brow = tk.Frame(self, bg=CARD)
+        brow.pack(fill="x", padx=24, pady=(8, 18))
+        tk.Button(brow, text=t("cancelar"), command=self.destroy,
+                  bg=CARD2, fg=T2, relief="flat", font=("Arial", 9),
+                  padx=12, pady=6, cursor="hand2").pack(side="left")
+        tk.Button(brow, text=t("aplicar"), command=self._save,
+                  bg=ACCENT, fg=BG, relief="flat", font=("Arial", 9, "bold"),
+                  padx=16, pady=6, cursor="hand2").pack(side="right")
+
+    def _save(self):
+        ini = self._ini.get().strip()
+        fin = self._fin.get().strip()
+        if not re.fullmatch(r"\d{2}:\d{2}", ini) or \
+           not re.fullmatch(r"\d{2}:\d{2}", fin):
+            self._err.set(t("err_hora")); return
+        _save_horario(ini, fin)
+        messagebox.showinfo(t("exito"), t("horario_guardado"), parent=self)
+        if self.on_save: self.on_save()
+        self.destroy()

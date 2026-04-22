@@ -2015,6 +2015,33 @@ class App(tk.Tk):
         if self.sensor:
             self.sensor.detener()
         self.destroy()
+    
+    def _modo_captura_biometrica(self, cuenta):
+        """
+        Modo especial para capturar rostro de un estudiante ya registrado.
+        Solo muestra la cámara y el proceso de captura biométrica.
+        """
+        print(f"[INTERFAZ] Modo captura biométrica para cuenta: {cuenta}")
+        self._clear()
+    
+        # Cargar datos del estudiante
+        from database import conectar
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("""
+            SELECT u.id, u.nombre, u.apellido_paterno, u.apellido_materno,
+               ed.grado, ed.grupo
+            FROM usuarios u
+            LEFT JOIN estudiantes_detalle ed ON ed.usuario_id = u.id
+            WHERE u.numero_cuenta = ? AND u.rol = 'estudiante'
+        """, (cuenta,))
+        row = c.fetchone()
+        conn.close()
+    
+        if not row:
+            messagebox.showerror("Error", f"No se encontró estudiante con cuenta {cuenta}")
+            self.destroy()
+            return
 
 
 if __name__ == "__main__":
