@@ -31,7 +31,7 @@ PIN_ECHO = 21   # pin físico 40
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 DISTANCIA_ACTIVACION_CM = 70     # distancia máxima para activar cámara
-TIEMPO_SIN_PERSONA_S    = 3.0    # segundos sin detectar antes de apagar cámara
+TIEMPO_SIN_PERSONA_S    = 6.0    # segundos sin detectar antes de apagar cámara
 INTERVALO_MEDICION_S    = 0.2    # cada cuánto mide (5 veces por segundo)
 TIMEOUT_ECHO_S          = 0.03   # timeout si el echo no llega (objeto muy lejos)
 
