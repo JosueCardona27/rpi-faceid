@@ -38,6 +38,7 @@ from data_source import (
     stats_hora      as _stats_hora,
     perfil_stats    as _perfil_stats,
     fuente_activa,
+    ultima_persona_acceso as _ultima_persona,
 )
 
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -102,6 +103,17 @@ class ResumenView(BaseView):
         ]:
             self._kv[key] = tk.StringVar(value="—")
             self._kpi_card(kpi_row, t(lbl_key), key, color)
+
+        # ── Tarjeta: Última persona que entró ─────────────────
+        c_ult = tk.Frame(inner, bg=CARD, padx=14, pady=12)
+        c_ult.pack(fill="x", padx=18, pady=(0, 10))
+ 
+        hult = tk.Frame(c_ult, bg=CARD)
+        hult.pack(fill="x", pady=(0, 8))
+        card_head(hult, "Última entrada", "Persona más reciente")
+ 
+        self._ult_frame = tk.Frame(c_ult, bg=CARD)
+        self._ult_frame.pack(fill="x")
 
         # ── Últimos 4 accesos ──────────────────────────────────
         c4 = tk.Frame(inner, bg=CARD, padx=14, pady=12)
@@ -193,6 +205,64 @@ class ResumenView(BaseView):
             self.tree_rec.insert("", "end",
                                   values=(r["nombre"], tipo_txt,
                                           r["hora"], r["rol"]))
+            # ── Actualizar tarjeta de última entrada ──
+        for w in self._ult_frame.winfo_children():
+            w.destroy()
+ 
+        ultima = _ultima_persona()
+        if not ultima:
+            tk.Label(
+                self._ult_frame,
+                text="Aún no hay registros de entrada.",
+                bg=CARD, fg=T3, font=("Arial", 9)
+            ).pack(pady=10)
+        else:
+            row_u = tk.Frame(self._ult_frame, bg=CARD2, padx=12, pady=10)
+            row_u.pack(fill="x")
+ 
+            # Avatar con iniciales
+            partes = ultima["nombre"].split(" ", 1)
+            ini_u  = iniciales(partes[0], partes[1] if len(partes) > 1 else "")
+            tk.Label(
+                row_u, text=ini_u,
+                bg=ACCENT, fg=BG,
+                font=("Arial", 11, "bold"), width=3
+            ).pack(side="left", padx=(0, 12))
+ 
+            # Info
+            info_u = tk.Frame(row_u, bg=CARD2)
+            info_u.pack(side="left", fill="x", expand=True)
+            tk.Label(
+                info_u, text=ultima["nombre"],
+                bg=CARD2, fg=T1,
+                font=("Arial", 10, "bold"), anchor="w"
+            ).pack(anchor="w")
+            tk.Label(
+                info_u,
+                text=f"{ultima['rol'].capitalize()}  ·  Cuenta: {ultima['cuenta']}",
+                bg=CARD2, fg=T3, font=("Arial", 8), anchor="w"
+            ).pack(anchor="w")
+ 
+            # Contador de visitas (derecha)
+            cnt_f = tk.Frame(row_u, bg=CARD2)
+            cnt_f.pack(side="right", padx=(8, 0))
+            tk.Label(
+                cnt_f,
+                text=str(ultima["visitas_total"]),
+                bg=CARD2, fg=ACCENT,
+                font=("Arial", 22, "bold")
+            ).pack()
+            tk.Label(
+                cnt_f, text="visitas",
+                bg=CARD2, fg=T3, font=("Arial", 8)
+            ).pack()
+ 
+            # Hora de acceso
+            tk.Label(
+                row_u,
+                text=f"{ultima['fecha']}  {ultima['hora']}",
+                bg=CARD2, fg=T2, font=("Arial", 8)
+            ).pack(side="right", padx=(0, 12))
 
 
 # ═══════════════════════════════════════════════════════════════

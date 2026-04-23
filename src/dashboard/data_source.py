@@ -305,3 +305,90 @@ def perfil_stats() -> tuple[int, int]:
         conn.close(); return acc, reg
     except Exception as e:
         print(f"[DS] perfil_stats: {e}"); return 0, 0
+    
+def ultima_persona_acceso() -> dict | None:
+    """
+    Devuelve los datos de la última persona que registró una ENTRADA,
+    junto con el total acumulado de sus entradas.
+ 
+    Retorna un dict con claves:
+        nombre, cuenta, rol, hora, fecha, visitas_total
+    o None si no hay registros.
+    """
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT ra.usuario_id,
+                   ra.nombre || ' ' || ra.apellido_paterno AS nombre,
+                   ra.numero_cuenta,
+                   ra.rol,
+                   ra.fecha_acceso,
+                   ra.detalle
+            FROM registro_acceso ra
+            WHERE ra.tipo_evento = 'entrada'
+            ORDER BY ra.id DESC
+            LIMIT 1
+        """)
+        row = conn.cursor().fetchone()
+ 
+        # Re-ejecutar porque fetchone en cursor anterior ya avanzó
+        cur.execute("""
+            SELECT ra.usuario_id,
+                   ra.nombre || ' ' || ra.apellido_paterno,
+                   ra.numero_cuenta,
+                   ra.rol,
+                   ra.fecha_acceso,
+                   ra.detalle
+            FROM registro_acceso ra
+            WHERE ra.tipo_evento = 'entrada'
+            ORDER BY ra.id DESC
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return None
+ 
+        uid, nombre, cuenta, rol, fecha_acceso, detalle = row
+ 
+        # Contar total de entradas de esa persona
+        cur.execute("""
+            SELECT COUNT(*) FROM registro_acceso
+            WHERE usuario_id = ? AND tipo_evento = 'entrada'
+        """, (uid,))
+        total = cur.fetchone()[0]
+        conn.close()
+ 
+        return {
+            "usuario_id":    uid,
+            "nombre":        (nombre or "").strip(),
+            "cuenta":        cuenta or "—",
+            "rol":           rol or "—",
+            "hora":          (fecha_acceso or "")[11:16] or "—",
+            "fecha":         (fecha_acceso or "")[:10]   or "—",
+            "visitas_total": total,
+        }
+    except Exception as e:
+        print(f"[DS] ultima_persona_acceso: {e}")
+        return None
+ 
+ 
+def total_accesos_usuario(usuario_id: int) -> int:
+    """
+    Devuelve el número total de entradas registradas para un usuario_id.
+    Útil para mostrar el contador en tiempo real.
+    """
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM registro_acceso
+            WHERE usuario_id = ? AND tipo_evento = 'entrada'
+        """, (usuario_id,))
+        n = cur.fetchone()[0]
+        conn.close()
+        return n
+    except Exception as e:
+        print(f"[DS] total_accesos_usuario: {e}")
+        return 0

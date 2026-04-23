@@ -36,7 +36,8 @@ from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          eliminar_persona, verificar_duplicado_facial,
                          validar_numero_cuenta, validar_correo,
                          validar_contrasena, validar_grado,
-                         validar_grupo, ROLES_VALIDOS)
+                         validar_grupo, ROLES_VALIDOS,
+                         registrar_acceso)
 
 try:
     from servo_puerta.servo_control import servo
