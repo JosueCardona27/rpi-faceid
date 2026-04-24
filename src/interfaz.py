@@ -1872,7 +1872,9 @@ class App(tk.Tk):
             if hay:
                 self._set_overlay((255, 59, 92), "Desconocido")
                 self.after(0, lambda: servo.denegar())
-            self.after(4000, self._lanzar_verificacion); return
+            # ── REGISTRO EN BD (sin usuario_id conocido) ────────
+            # No tenemos uid → usamos None, la FK permite NULL
+                registrar_acceso_desconocido()   # ← ver función abajo
 
         sim         = resultado["similitud_pct"]
         color_barra = SUCCESS if resultado["acceso"] else \
@@ -1886,6 +1888,7 @@ class App(tk.Tk):
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
+    # interfaz.py  ~línea 1889
     def _resultado_ok(self, r):
         self._t_acceso_ok = time.time()
         self._set_overlay((0, 255, 136), r["nombre"])
@@ -1904,11 +1907,21 @@ class App(tk.Tk):
             self.detalle_lbl.config(fg="#AAFFAA")
         except Exception:
             pass
+
+        # ── REGISTRO EN BD ──────────────────────────────────────────
+        uid = r.get("usuario_id")
+        if uid:
+            ok = registrar_acceso(uid, "entrada",
+                                  detalle=f"sim={r.get('similitud_pct',0)}%")
+            if not ok:
+                print(f"[ACCESO] ADVERTENCIA: no se pudo guardar entrada uid={uid}")
+        # ────────────────────────────────────────────────────────────
+
         servo.abrir(r["nombre"])
         self.after(4000, self._lanzar_verificacion)
 
+    # interfaz.py  ~línea 1910
     def _resultado_negado(self, r):
-    # Ignorar si el acceso fue concedido hace menos de 5 segundos
         if time.time() - self._t_acceso_ok < 5:
             self.after(4000, self._lanzar_verificacion)
             return
@@ -1928,8 +1941,33 @@ class App(tk.Tk):
             self.detalle_lbl.config(fg="#FF8888")
         except Exception:
             pass
+
+        # ── REGISTRO EN BD ──────────────────────────────────────────
+        uid = r.get("usuario_id")
+        if uid:
+            registrar_acceso(uid, "intento_fallido",
+                             detalle=f"sim={r.get('similitud_pct',0)}% dist={r.get('distancia',0):.3f}")
+    # ────────────────────────────────────────────────────────────
+
         servo.denegar()
         self.after(4000, self._lanzar_verificacion)
+
+    def registrar_acceso_desconocido():
+        """Registra un intento fallido de persona no registrada."""
+        try:
+            from database import conectar
+            conn = conectar()
+            conn.execute("""
+                INSERT INTO registro_acceso
+                    (usuario_id, nombre, apellido_paterno, apellido_materno,
+                    numero_cuenta, rol, tipo_evento, detalle)
+                VALUES (NULL, 'Desconocido', '', '', NULL, 'estudiante',
+                        'intento_fallido', 'Rostro no reconocido')
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[ACCESO] Error registrando desconocido: {e}")
 
     def _guia_posicion(self):
         """Actualiza la instruccion de posicion en tiempo real."""
