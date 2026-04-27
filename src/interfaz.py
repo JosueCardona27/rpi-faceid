@@ -1910,19 +1910,6 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        uid = r.get("usuario_id")
-        if uid:
-            try:
-                from database import registrar_acceso
-                ok = registrar_acceso(uid, "entrada",
-                                      detalle=f"sim={r.get('similitud_pct', 0)}%")
-                if ok:
-                    print(f"[ACCESO] Entrada registrada uid={uid}")
-                else:
-                    print(f"[ACCESO] ADVERTENCIA: no se guardó entrada uid={uid}")
-            except Exception as e:
-                print(f"[ACCESO] Error registrando entrada: {e}")
-
         servo.abrir(r["nombre"])
         self.after(4000, self._lanzar_verificacion)
 
