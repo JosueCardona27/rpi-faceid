@@ -1888,9 +1888,11 @@ class App(tk.Tk):
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
-    # interfaz.py  ~línea 1889
     def _resultado_ok(self, r):
+        if time.time() - self._t_acceso_ok < 8:
+            return
         self._t_acceso_ok = time.time()
+
         self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
         self.resultado_label.config(fg=SUCCESS)
@@ -1908,21 +1910,24 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        # ── REGISTRO EN BD ──────────────────────────────────────────
         uid = r.get("usuario_id")
         if uid:
-            ok = registrar_acceso(uid, "entrada",
-                                  detalle=f"sim={r.get('similitud_pct',0)}%")
-            if not ok:
-                print(f"[ACCESO] ADVERTENCIA: no se pudo guardar entrada uid={uid}")
-        # ────────────────────────────────────────────────────────────
+            try:
+                from database import registrar_acceso
+                ok = registrar_acceso(uid, "entrada",
+                                      detalle=f"sim={r.get('similitud_pct', 0)}%")
+                if ok:
+                    print(f"[ACCESO] Entrada registrada uid={uid}")
+                else:
+                    print(f"[ACCESO] ADVERTENCIA: no se guardó entrada uid={uid}")
+            except Exception as e:
+                print(f"[ACCESO] Error registrando entrada: {e}")
 
         servo.abrir(r["nombre"])
         self.after(4000, self._lanzar_verificacion)
 
-    # interfaz.py  ~línea 1910
     def _resultado_negado(self, r):
-        if time.time() - self._t_acceso_ok < 5:
+        if time.time() - self._t_acceso_ok < 8:
             self.after(4000, self._lanzar_verificacion)
             return
         self._set_overlay((255, 59, 92), "Denegado")
@@ -1941,14 +1946,6 @@ class App(tk.Tk):
             self.detalle_lbl.config(fg="#FF8888")
         except Exception:
             pass
-
-        # ── REGISTRO EN BD ──────────────────────────────────────────
-        uid = r.get("usuario_id")
-        if uid:
-            registrar_acceso(uid, "intento_fallido",
-                             detalle=f"sim={r.get('similitud_pct',0)}% dist={r.get('distancia',0):.3f}")
-    # ────────────────────────────────────────────────────────────
-
         servo.denegar()
         self.after(4000, self._lanzar_verificacion)
 

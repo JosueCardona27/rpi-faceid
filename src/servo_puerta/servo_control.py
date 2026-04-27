@@ -56,7 +56,7 @@ DEBOUNCE_S       = 0.05
 # ══════════════════════════════════════════════════════════════════════════════
 class _ControladorHW:
 
-    def __init__(self):
+    def __init__(self, on_salida_manual=None):
         self._lock           = threading.Lock()
         self._handle         = None   # handle lgpio
         self._puerta_timer   = None
@@ -150,8 +150,12 @@ class _ControladorHW:
                     if lectura == 0 and estado_anterior == 1:
                         time.sleep(DEBOUNCE_S)
                         if lgpio.gpio_read(self._handle, PIN_BOTON) == 0:
-                            print("[HW] Botón presionado — apertura manual")
+                            print("[HW] Botón presionado — apertura manual / salida")
                             self.abrir("Manual")
+                            try:
+                                self._on_salida_manual()   # ← registra la salida en BD
+                            except Exception as e:
+                                print(f"[HW] Error en callback salida: {e}")
                     estado_anterior = lectura
                 except Exception:
                     pass
@@ -217,10 +221,30 @@ class _ServoStub:
         print("[STUB] desconectar()")
 
 
-# ── Instancia global exportada
+# Al fondo de servo_control.py, reemplaza la creación de la instancia:
+def _registrar_salida_bd():
+    """Registra una salida anónima (botón) en la base de datos."""
+    try:
+        import sys, os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from database import conectar
+        conn = conectar()
+        conn.execute("""
+            INSERT INTO registro_acceso
+                (usuario_id, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, rol, tipo_evento, detalle)
+            VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                    'estudiante', 'salida', 'Botón de salida presionado')
+        """)
+        conn.commit()
+        conn.close()
+        print("[HW] Salida registrada en BD")
+    except Exception as e:
+        print(f"[HW] Error registrando salida: {e}")
+
 if _GPIO_OK:
     try:
-        servo = _ControladorHW()
+        servo = _ControladorHW(on_salida_manual=_registrar_salida_bd)
     except Exception as e:
         print(f"[HW] Error al inicializar GPIO: {e}")
         servo = _ServoStub()

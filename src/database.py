@@ -555,6 +555,28 @@ def registrar_acceso(usuario_id: int, tipo_evento: str,
     finally:
         conn.close()
 
+def registrar_salida_anonima(detalle: str = "Botón de salida") -> bool:
+    """
+    Registra una salida sin usuario_id conocido (apertura por botón físico).
+    Se usa para mantener el contador personas_dentro correcto.
+    """
+    try:
+        conn = conectar()
+        conn.execute("""
+            INSERT INTO registro_acceso
+                (usuario_id, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, rol, tipo_evento, detalle)
+            VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                    'estudiante', 'salida', ?)
+        """, (detalle,))
+        conn.commit()
+        conn.close()
+        print(f"[DB] Salida anónima registrada: {detalle}")
+        return True
+    except sqlite3.Error as e:
+        print(f"[DB] Error en registrar_salida_anonima: {e}")
+        return False
+
 # =============================================================================
 #  CONSULTAS AUXILIARES
 # =============================================================================

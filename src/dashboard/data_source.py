@@ -74,26 +74,31 @@ def fuente_activa() -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def kpi_dentro() -> int:
+    """
+    Personas actualmente dentro = entradas_hoy - salidas_hoy.
+    No depende de usuario_id, funciona con salidas anónimas del botón.
+    Nunca regresa negativo.
+    """
     c = _cliente()
     if c:
         return c.resumen(n=0).get("kpi_dentro", 0)
-    # ── local ──
     try:
         conn = _db()
         cur  = conn.cursor()
         cur.execute("""
-            SELECT COUNT(*) FROM (
-                SELECT usuario_id FROM registro_acceso
-                WHERE id IN (
-                    SELECT MAX(id) FROM registro_acceso
-                    WHERE DATE(fecha_acceso,'localtime') = DATE('now','localtime')
-                    GROUP BY usuario_id
-                ) AND tipo_evento = 'entrada'
-            )
+            SELECT
+                SUM(CASE WHEN tipo_evento = 'entrada' THEN 1 ELSE 0 END) -
+                SUM(CASE WHEN tipo_evento = 'salida'  THEN 1 ELSE 0 END)
+            FROM registro_acceso
+            WHERE tipo_evento IN ('entrada', 'salida')
+              AND DATE(fecha_acceso, 'localtime') = DATE('now', 'localtime')
         """)
-        n = cur.fetchone()[0]; conn.close(); return n
+        n = cur.fetchone()[0] or 0
+        conn.close()
+        return max(0, n)   # nunca negativo
     except Exception as e:
-        print(f"[DS] kpi_dentro: {e}"); return 0
+        print(f"[DS] kpi_dentro: {e}")
+        return 0
 
 
 def kpi_hoy() -> int:
