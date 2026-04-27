@@ -258,6 +258,16 @@ class App(tk.Tk):
                 print(f"[SENSOR] No se pudo iniciar el sensor: {e}")
                 self.sensor = None
 
+        self.sensores_ir = None
+        try:
+            from sensores_ir import SensoresIR
+            self.sensores_ir = SensoresIR()
+            self.sensores_ir.iniciar()
+            print("[IR] Sensores FC-51 activos")
+        except Exception as e:
+            print(f"[IR] No se pudieron iniciar los sensores IR: {e}")
+            self.sensores_ir = None
+
     @staticmethod
     def _lighten(hx):
         h = hx.lstrip("#")
@@ -2037,6 +2047,9 @@ class App(tk.Tk):
         servo.desconectar()
         if self.sensor:
             self.sensor.detener()
+        self.destroy()
+        if self.sensores_ir:
+            self.sensores_ir.detener()
         self.destroy()
     
     def _modo_captura_biometrica(self, cuenta):
