@@ -1,4 +1,5 @@
 {
   "hora_inicio": "00:00",
-  "hora_fin": "12:32"
+  "hora_fin": "12:32",
+  "capacidad_maxima": 20
 }

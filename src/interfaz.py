@@ -77,6 +77,15 @@ GOLD_LN = "#B5860D"   # dorado institucional UdeC
 
 COLOR_ROL = {"estudiante": NAVY_LN, "maestro": TEAL_LN, "admin": ACCENT}
 
+# Intento de correccion de la camara
+_CAM_NIGHT_THRESHOLD  = 60
+_CAM_HYSTERESIS       = 10
+_CAM_RED_GAIN         = 0.80
+_CAM_GREEN_GAIN       = 1.00
+_CAM_BLUE_GAIN        = 0.75
+_CAM_CCM = np.array([_CAM_BLUE_GAIN, _CAM_GREEN_GAIN, _CAM_RED_GAIN],
+                    dtype=np.float32)
+
 W, H    = 600, 1024
 PANEL_H = 400   # altura del panel de formulario/resultados (parte superior)
 CAM_H_V = H - PANEL_H  # altura de la zona de cámara (parte inferior)
@@ -242,6 +251,12 @@ class App(tk.Tk):
         self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
+        # Estado día/noche para corrección de color OV5647
+        self._cam_modo       = "day"
+        self._cam_pending    = "day"
+        self._cam_hyst_count = 0
+        print("[CAM] Corrección de color OV5647 NoIR activa")
+
         self._build_main()
 
         # ── Sensor ultrasónico ────────────────────────────────────────────────
@@ -376,11 +391,42 @@ class App(tk.Tk):
     def _leer_frame(self):
         try:
             if USAR_PICAM:
-                return self.picam2.capture_array()
+                raw = self.picam2.capture_array()
             else:
                 ret, raw = self._cap.read()
-                return raw if ret else None
-        except:
+                if not ret:
+                    return None
+
+            if raw is None:
+                return None
+
+            # ── Detección día/noche ───────────────────────────────────────────
+            gray      = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            lum       = float(np.mean(gray))
+            candidato = "night" if lum < _CAM_NIGHT_THRESHOLD else "day"
+
+            if candidato == self._cam_pending:
+                self._cam_hyst_count += 1
+            else:
+                self._cam_pending    = candidato
+                self._cam_hyst_count = 1
+
+            if self._cam_hyst_count >= _CAM_HYSTERESIS:
+                if self._cam_modo != self._cam_pending:
+                    self._cam_modo       = self._cam_pending
+                    self._cam_hyst_count = 0
+                    print(f"[CAM] Modo cambiado → {self._cam_modo.upper()} "
+                          f"(luminosidad: {lum:.1f})")
+
+            # ── Corrección de color (solo en modo día) ────────────────────────
+            if self._cam_modo == "day":
+                raw = np.clip(raw.astype(np.float32) * _CAM_CCM,
+                              0, 255).astype(np.uint8)
+
+            return raw
+
+        except Exception as e:
+            print(f"[CAM] Error en _leer_frame: {e}")
             return None
 
     def _loop_camara(self, max_w, max_h):
@@ -1920,7 +1966,34 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        servo.abrir(r["nombre"])
+        # ── Verificar límite de capacidad ────────────────────────────────
+        import json as _json, os as _os
+        _cfg_path = _os.path.join(_os.path.dirname(__file__), '..', 'lab_config.json')
+        try:
+            with open(_cfg_path) as _f:
+                _cfg = _json.load(_f)
+            _capacidad = int(_cfg.get("capacidad_maxima", 999))
+        except Exception:
+            _capacidad = 999
+
+        _dentro = 0
+        if hasattr(self, 'sensores_ir') and self.sensores_ir:
+            _dentro = self.sensores_ir.personas_dentro
+
+        if _dentro >= _capacidad:
+            self.resultado_var.set(f"LABORATORIO LLENO ({_dentro}/{_capacidad})")
+            self.resultado_label.config(fg=DANGER)
+            try:
+                self.hdr_status_var.set(f"LLENO {_dentro}/{_capacidad}")
+                self.hdr_status_lbl.config(fg="#FF8888")
+                self._draw_pill(DANGER)
+            except Exception:
+                pass
+            servo.denegar()
+            print(f"[ACCESO] Laboratorio lleno ({_dentro}/{_capacidad}) — denegado")
+        else:
+            servo.abrir(r["nombre"])
+        # ─────────────────────────────────────────────────────────────────        
         self.after(4000, self._lanzar_verificacion)
 
     def _resultado_negado(self, r):
