@@ -56,7 +56,7 @@ DEBOUNCE_S       = 0.05
 # ══════════════════════════════════════════════════════════════════════════════
 class _ControladorHW:
 
-    def __init__(self, on_salida_manual=None):
+    def __init__(self):
         self._lock           = threading.Lock()
         self._handle         = None   # handle lgpio
         self._puerta_timer   = None
@@ -150,12 +150,8 @@ class _ControladorHW:
                     if lectura == 0 and estado_anterior == 1:
                         time.sleep(DEBOUNCE_S)
                         if lgpio.gpio_read(self._handle, PIN_BOTON) == 0:
-                            print("[HW] Botón presionado — apertura manual / salida")
+                            print("[HW] Botón presionado — apertura manual")
                             self.abrir("Manual")
-                            try:
-                                self._on_salida_manual()   # ← registra la salida en BD
-                            except Exception as e:
-                                print(f"[HW] Error en callback salida: {e}")
                     estado_anterior = lectura
                 except Exception:
                     pass

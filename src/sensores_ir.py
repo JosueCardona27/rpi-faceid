@@ -171,12 +171,11 @@ class SensoresIR:
 
     # ── Monitor entrada ───────────────────────────────────────────────────────
     def _monitor_entrada(self):
-        estado_anterior = 1   # HIGH = sin persona
+        estado_anterior = 1 
         while self._running:
             try:
                 lectura = lgpio.gpio_read(self._handle, PIN_ENTRADA)
 
-                # Flanco bajada HIGH→LOW = persona detectada
                 if lectura == 0 and estado_anterior == 1:
                     ahora = time.time()
                     if ahora - self._t_ultimo_entrada >= DEBOUNCE_S:
@@ -184,16 +183,18 @@ class SensoresIR:
                         time.sleep(0.05)   # pequeña espera para confirmar
 
                         if lgpio.gpio_read(self._handle, PIN_ENTRADA) == 0:
-                            with self._lock_contador:
-                                self._personas_dentro += 1
-                                dentro = self._personas_dentro
-
-                            print(f"[IR] ENTRADA detectada — personas dentro: {dentro}")
-                            self._registrar_en_bd("entrada")
-                            try:
-                                self._on_entrada(self._usuario_id)
-                            except Exception as e:
-                                print(f"[IR] Error en callback entrada: {e}")
+                            if ahora - self._t_ultimo_salida < 3.0:
+                                print("[IR] S1 ignorado — salida en progreso")
+                            else:
+                                with self._lock_contador:
+                                    self._personas_dentro += 1
+                                    dentro = self._personas_dentro
+                                print(f"[IR] ENTRADA detectada — personas dentro: {dentro}")
+                                self._registrar_en_bd("entrada")
+                                try:
+                                    self._on_entrada(self._usuario_id)
+                                except Exception as e:
+                                    print(f"[IR] Error en callback entrada: {e}")
 
                 estado_anterior = lectura
             except Exception as e:
