@@ -216,17 +216,19 @@ class SensoresIR:
                         time.sleep(0.05)   # pequeña espera para confirmar
 
                         if lgpio.gpio_read(self._handle, PIN_SALIDA) == 0:
-                            with self._lock_contador:
-                                self._personas_dentro = max(0, self._personas_dentro - 1)
-                                dentro = self._personas_dentro
-
-                            print(f"[IR] SALIDA detectada — personas dentro: {dentro}")
-                            self._registrar_en_bd("salida")
-                            try:
-                                self._on_salida(self._usuario_id)
-                            except Exception as e:
-                                print(f"[IR] Error en callback salida: {e}")
-
+                            if ahora - self._t_ultimo_entrada < 3.0:
+                                print("[IR] S2 ignorado — entrada en progreso")
+                            else:
+                                with self._lock_contador:
+                                    self._personas_dentro = max(0, self._personas_dentro - 1)
+                                    dentro = self._personas_dentro
+                                print(f"[IR] SALIDA detectada — personas dentro: {dentro}")
+                                self._registrar_en_bd("salida")
+                                try:
+                                    self._on_salida(self._usuario_id)
+                                except Exception as e:
+                                    print(f"[IR] Error en callback salida: {e}")
+                
                 estado_anterior = lectura
             except Exception as e:
                 print(f"[IR] Error sensor salida: {e}")
