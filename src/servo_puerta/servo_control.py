@@ -57,7 +57,6 @@ DEBOUNCE_S       = 0.05
 class _ControladorHW:
 
     def __init__(self, on_salida_manual=None):
-        self._on_salida_manual = on_salida_manual or (lambda: None)
         self._lock           = threading.Lock()
         self._handle         = None   # handle lgpio
         self._puerta_timer   = None
@@ -142,19 +141,6 @@ class _ControladorHW:
         print("[HW] Puerta cerrada (auto)")
 
     # ── Botón manual ──────────────────────────────────────────────────────────
-class _ControladorHW:
-
-    def __init__(self, on_salida_manual=None):
-        self._on_salida_manual = on_salida_manual or (lambda: None)
-        self._lock           = threading.Lock()
-        self._handle         = None
-        self._puerta_timer   = None
-        self._running        = True
-        self._setup_gpio()
-        self._iniciar_monitor_boton()
-
-    # ... (resto de métodos sin cambios hasta _iniciar_monitor_boton) ...
-
     def _iniciar_monitor_boton(self):
         def _monitor():
             estado_anterior = 1
@@ -164,14 +150,12 @@ class _ControladorHW:
                     if lectura == 0 and estado_anterior == 1:
                         time.sleep(DEBOUNCE_S)
                         if lgpio.gpio_read(self._handle, PIN_BOTON) == 0:
-                            print("[HW] Botón presionado — salida manual")
+                            print("[HW] Botón presionado — apertura manual / salida")
                             self.abrir("Manual")
-                            # ── Registrar salida en BD ──────────────
                             try:
-                                self._on_salida_manual()
+                                self._on_salida_manual()   # ← registra la salida en BD
                             except Exception as e:
-                                print(f"[HW] Error callback salida: {e}")
-                            # ────────────────────────────────────────
+                                print(f"[HW] Error en callback salida: {e}")
                     estado_anterior = lectura
                 except Exception:
                     pass
@@ -237,29 +221,10 @@ class _ServoStub:
         print("[STUB] desconectar()")
 
 
-def _registrar_salida_bd():
-    """Inserta una salida anónima (botón físico) en registro_acceso."""
-    import os, sys
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    try:
-        from database import conectar
-        conn = conectar()
-        conn.execute("""
-            INSERT INTO registro_acceso
-                (usuario_id, nombre, apellido_paterno, apellido_materno,
-                 numero_cuenta, rol, tipo_evento, detalle)
-            VALUES (NULL, 'Salida', 'Manual', '', NULL,
-                    'estudiante', 'salida', 'Botón de salida GPIO17')
-        """)
-        conn.commit()
-        conn.close()
-        print("[HW] Salida registrada en BD ✓")
-    except Exception as e:
-        print(f"[HW] Error registrando salida: {e}")
-
+# ── Instancia global exportada
 if _GPIO_OK:
     try:
-        servo = _ControladorHW(on_salida_manual=_registrar_salida_bd)
+        servo = _ControladorHW()
     except Exception as e:
         print(f"[HW] Error al inicializar GPIO: {e}")
         servo = _ServoStub()

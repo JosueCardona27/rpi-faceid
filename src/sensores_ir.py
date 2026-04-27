@@ -134,11 +134,6 @@ class SensoresIR:
         self._t_ultimo_entrada = 0.0
         self._t_ultimo_salida  = 0.0
 
-        self._t_disparo_s1 = 0.0   # cuándo disparó el sensor exterior
-        self._t_disparo_s2 = 0.0   # cuándo disparó el sensor interior
-        self._seq_lock     = threading.Lock()
-        self._TIMEOUT_SEQ  = 2.0
-
         # Contador en memoria (útil para mostrar en pantalla)
         self._personas_dentro = 0
         self._lock_contador   = threading.Lock()
@@ -176,35 +171,29 @@ class SensoresIR:
 
     # ── Monitor entrada ───────────────────────────────────────────────────────
     def _monitor_entrada(self):
-        estado_anterior = 1
+        estado_anterior = 1   # HIGH = sin persona
         while self._running:
             try:
                 lectura = lgpio.gpio_read(self._handle, PIN_ENTRADA)
 
+                # Flanco bajada HIGH→LOW = persona detectada
                 if lectura == 0 and estado_anterior == 1:
                     ahora = time.time()
                     if ahora - self._t_ultimo_entrada >= DEBOUNCE_S:
                         self._t_ultimo_entrada = ahora
-                        time.sleep(0.05)
+                        time.sleep(0.05)   # pequeña espera para confirmar
 
                         if lgpio.gpio_read(self._handle, PIN_ENTRADA) == 0:
-                            with self._seq_lock:
-                                self._t_disparo_s1 = ahora
-                                # ¿S2 (interior) disparó ANTES que S1? → SALIDA
-                                if 0 < (ahora - self._t_disparo_s2) < self._TIMEOUT_SEQ:
-                                    self._t_disparo_s1 = self._t_disparo_s2 = 0.0
-                                    tipo = "salida"
-                                    with self._lock_contador:
-                                        self._personas_dentro = max(0, self._personas_dentro - 1)
-                                        dentro = self._personas_dentro
-                                    print(f"[IR] SALIDA (S2→S1) — dentro: {dentro}")
-                                    self._registrar_en_bd(tipo)
-                                    try:
-                                        self._on_salida(self._usuario_id)
-                                    except Exception as e:
-                                        print(f"[IR] Error callback salida: {e}")
-                                # Si S2 no disparó antes, solo guardamos timestamp
-                                # y esperamos a que S2 dispare para confirmar ENTRADA
+                            with self._lock_contador:
+                                self._personas_dentro += 1
+                                dentro = self._personas_dentro
+
+                            print(f"[IR] ENTRADA detectada — personas dentro: {dentro}")
+                            self._registrar_en_bd("entrada")
+                            try:
+                                self._on_entrada(self._usuario_id)
+                            except Exception as e:
+                                print(f"[IR] Error en callback entrada: {e}")
 
                 estado_anterior = lectura
             except Exception as e:
@@ -213,35 +202,29 @@ class SensoresIR:
 
     # ── Monitor salida ────────────────────────────────────────────────────────
     def _monitor_salida(self):
-        estado_anterior = 1
+        estado_anterior = 1   # HIGH = sin persona
         while self._running:
             try:
                 lectura = lgpio.gpio_read(self._handle, PIN_SALIDA)
 
+                # Flanco bajada HIGH→LOW = persona detectada
                 if lectura == 0 and estado_anterior == 1:
                     ahora = time.time()
                     if ahora - self._t_ultimo_salida >= DEBOUNCE_S:
                         self._t_ultimo_salida = ahora
-                        time.sleep(0.05)
+                        time.sleep(0.05)   # pequeña espera para confirmar
 
                         if lgpio.gpio_read(self._handle, PIN_SALIDA) == 0:
-                            with self._seq_lock:
-                                self._t_disparo_s2 = ahora
-                                # ¿S1 (exterior) disparó ANTES que S2? → ENTRADA
-                                if 0 < (ahora - self._t_disparo_s1) < self._TIMEOUT_SEQ:
-                                    self._t_disparo_s1 = self._t_disparo_s2 = 0.0
-                                    tipo = "entrada"
-                                    with self._lock_contador:
-                                        self._personas_dentro += 1
-                                        dentro = self._personas_dentro
-                                    print(f"[IR] ENTRADA (S1→S2) — dentro: {dentro}")
-                                    self._registrar_en_bd(tipo)
-                                    try:
-                                        self._on_entrada(self._usuario_id)
-                                    except Exception as e:
-                                        print(f"[IR] Error callback entrada: {e}")
-                                # Si S1 no disparó antes, solo guardamos timestamp
-                                # y esperamos a que S1 dispare para confirmar SALIDA
+                            with self._lock_contador:
+                                self._personas_dentro = max(0, self._personas_dentro - 1)
+                                dentro = self._personas_dentro
+
+                            print(f"[IR] SALIDA detectada — personas dentro: {dentro}")
+                            self._registrar_en_bd("salida")
+                            try:
+                                self._on_salida(self._usuario_id)
+                            except Exception as e:
+                                print(f"[IR] Error en callback salida: {e}")
 
                 estado_anterior = lectura
             except Exception as e:
