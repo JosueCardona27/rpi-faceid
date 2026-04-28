@@ -289,7 +289,7 @@ class App(tk.Tk):
             self._start_cam()
             self._resetear_pantalla_acceso()
             threading.Thread(target=self._loop_camara,
-                             args=(CAM_W, CAM_H_V), daemon=True).start()
+                             kwargs={"max_w": CAM_W, "max_h": CAM_H_V}, daemon=True).start()
             threading.Thread(target=self._loop_analisis,
                              daemon=True).start()
             threading.Thread(target=self._monitor_cara,
