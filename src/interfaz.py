@@ -234,7 +234,7 @@ class App(tk.Tk):
         self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
-        self._build_main()
+        self._show_acceso()
 
     @staticmethod
     def _lighten(hx):
@@ -695,13 +695,15 @@ class App(tk.Tk):
         hdr.pack_propagate(False)
         tk.Label(hdr, text="REGISTRO", font=(FONT, 13, "bold"),
                  fg="#FFFFFF", bg=NAVY_LN).place(x=18, y=14)
-        volver_hdr = tk.Button(hdr, text="◀ Volver",
-                               font=(FONT, 8), fg="#AABBCC", bg=NAVY_LN,
-                               relief="flat", cursor="hand2", bd=0,
-                               highlightthickness=0, command=self._volver)
-        volver_hdr.place(x=W - 90, y=14, width=80, height=24)
-        volver_hdr.bind("<Enter>", lambda e: volver_hdr.config(fg="#FFFFFF"))
-        volver_hdr.bind("<Leave>", lambda e: volver_hdr.config(fg="#AABBCC"))
+        menu_hdr = tk.Button(hdr, text="☰  Menú",
+                              font=(FONT, 8, "bold"), fg="#FFFFFF", bg=TEAL_LN,
+                              relief="flat", cursor="hand2", bd=0,
+                              highlightthickness=0,
+                              command=lambda: [self._stop_cam(), self._build_main()])
+        menu_hdr.place(x=W - 90, y=12, width=78, height=26)
+        menu_hdr.bind("<Enter>", lambda e: menu_hdr.config(bg="#1A6FD4"))
+        menu_hdr.bind("<Leave>", lambda e: menu_hdr.config(bg=TEAL_LN))
+        menu_hdr.lift()
 
         # ── Franja beige entre header y cámara ────────────────────────────────
         tk.Frame(self, bg=BG, width=W, height=PILL_H + 18).place(x=0, y=HDR_H)
@@ -1076,7 +1078,7 @@ class App(tk.Tk):
         sheet.pack_propagate(False)
 
         # Título + botón cerrar
-        tk.Label(sheet, text="📋  Datos del usuario",
+        tk.Label(sheet, text="Datos del usuario",
                  font=(FONT, 11, "bold"), fg=TEXT, bg=PANEL,
                  anchor="w").place(x=18, y=24)
 
@@ -1502,7 +1504,7 @@ class App(tk.Tk):
             self.after(0, lambda: self._safe(
                 lambda: self.grupo_var.set("A")))
             self.after(3500, lambda: self._safe(
-                lambda: None))  # cap_btn removed
+                self._mostrar_dialogo_post_registro))
         else:
             try: eliminar_persona(uid)
             except: pass
@@ -1520,6 +1522,253 @@ class App(tk.Tk):
             self.after(0, lambda: self._safe(
                 lambda: None))  # cap_btn removed in new design
             self.after(0, self._resetear_pasos_ui)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  DIÁLOGO POST-REGISTRO
+    # ══════════════════════════════════════════════════════════════════════════
+    def _mostrar_dialogo_post_registro(self):
+        """
+        Cuadro que aparece al terminar un registro exitoso.
+        Pregunta si el usuario quiere seguir registrando o ir a Acceso.
+        """
+        FONT = "Segoe UI"
+        CARD_W, CARD_H = 360, 210
+        CARD_X = (W - CARD_W) // 2
+        CARD_Y = (self.winfo_height() - CARD_H) // 2
+
+        overlay = tk.Frame(self, bg="#0A0E1A")
+        overlay.place(x=0, y=0, width=W, height=self.winfo_height())
+        overlay.lift()
+
+        card = tk.Canvas(overlay, width=CARD_W, height=CARD_H,
+                         bg=PANEL, highlightthickness=0)
+        card.place(x=CARD_X, y=CARD_Y)
+        _round_rect(card, 0, 0, CARD_W, CARD_H, r=16,
+                    fill=PANEL, outline=SUCCESS, width=2)
+
+        # Franja superior verde éxito
+        card.create_rectangle(16, 0, CARD_W - 16, 5, fill=SUCCESS, outline="")
+        card.create_arc(0, 0, 32, 32, start=90, extent=90,
+                        fill=SUCCESS, outline=SUCCESS)
+        card.create_arc(CARD_W - 32, 0, CARD_W, 32, start=0, extent=90,
+                        fill=SUCCESS, outline=SUCCESS)
+        card.create_rectangle(0, 16, CARD_W, 5, fill=SUCCESS, outline="")
+
+        # Ícono ✓
+        card.create_oval(CARD_W//2 - 22, 14, CARD_W//2 + 22, 58,
+                         fill=SUCCESS, outline="")
+        card.create_line(CARD_W//2 - 10, 36, CARD_W//2 - 2, 44,
+                         fill="#FFFFFF", width=3)
+        card.create_line(CARD_W//2 - 2, 44, CARD_W//2 + 12, 28,
+                         fill="#FFFFFF", width=3)
+
+        card.create_text(CARD_W // 2, 72,
+                         text="¡Registro exitoso!",
+                         font=(FONT, 13, "bold"), fill=TEXT)
+        card.create_text(CARD_W // 2, 94,
+                         text="¿Qué deseas hacer ahora?",
+                         font=(FONT, 9), fill=SUBTEXT)
+
+        BTN_Y = 130
+        BTN_H = 38
+        BTN_W = (CARD_W - 56) // 2
+
+        def _seguir():
+            overlay.destroy()
+            self._show_registro()
+
+        def _ir_acceso():
+            overlay.destroy()
+            self._stop_cam()
+            self.cam_running = False
+            self._show_acceso()
+
+        # Botón: Seguir registrando
+        btn_seguir = tk.Button(
+            overlay, text="➕  Seguir registrando",
+            font=(FONT, 8, "bold"), fg="#FFFFFF", bg=NAVY_LN,
+            relief="flat", cursor="hand2", bd=0,
+            highlightthickness=1, highlightbackground=TEAL_LN,
+            command=_seguir)
+        btn_seguir.place(x=CARD_X + 20, y=CARD_Y + BTN_Y,
+                         width=BTN_W, height=BTN_H)
+        btn_seguir.bind("<Enter>", lambda e: btn_seguir.config(bg=TEAL_LN))
+        btn_seguir.bind("<Leave>", lambda e: btn_seguir.config(bg=NAVY_LN))
+
+        # Botón: Ir a Acceso
+        btn_acceso = tk.Button(
+            overlay, text="🏠  Ir a Acceso",
+            font=(FONT, 8, "bold"), fg="#FFFFFF", bg=SUCCESS,
+            relief="flat", cursor="hand2", bd=0,
+            highlightthickness=0, command=_ir_acceso)
+        btn_acceso.place(x=CARD_X + 36 + BTN_W, y=CARD_Y + BTN_Y,
+                         width=BTN_W, height=BTN_H)
+        btn_acceso.bind("<Enter>",
+                        lambda e: btn_acceso.config(bg="#008855"))
+        btn_acceso.bind("<Leave>",
+                        lambda e: btn_acceso.config(bg=SUCCESS))
+
+        card.create_text(CARD_W // 2, BTN_Y + BTN_H + 24,
+                         text="El registro se guardó correctamente.",
+                         font=(FONT, 7), fill=SUBTEXT)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  DIÁLOGO DE AUTENTICACIÓN PARA MENÚ
+    # ══════════════════════════════════════════════════════════════════════════
+    def _pedir_auth_menu(self):
+        """
+        Cuadro emergente de autenticación para ir al menú desde Acceso.
+        Pide número de cuenta y contraseña. Tarjeta cuadrada con borde beige.
+        """
+        FONT  = "Segoe UI"
+        BEIGE = "#F5E6C8"
+        GREEN = "#1A7A4A"      # verde oscuro para botón Ingresar
+        GREEN_HOV = "#23A062"  # verde más vivo al hover
+
+        overlay = tk.Frame(self, bg="#0A0E1A")
+        overlay.place(x=0, y=0, width=W, height=self.winfo_height())
+        overlay.lift()
+
+        CARD_W = 340
+        CARD_X = (W - CARD_W) // 2
+        CARD_Y = max(40, (self.winfo_height() - 360) // 2)
+
+        # ── Tarjeta cuadrada, fondo blanco, borde beige ───────────────────────
+        card = tk.Frame(overlay, bg="#FFFFFF",
+                        highlightthickness=2,
+                        highlightbackground=BEIGE, bd=0)
+        card.place(x=CARD_X, y=CARD_Y, width=CARD_W)
+
+        # Franja superior beige
+        tk.Frame(card, bg=BEIGE, height=6).pack(fill="x")
+
+        # Ícono candado
+        ico_cv = tk.Canvas(card, width=52, height=52,
+                           bg="#FFFFFF", highlightthickness=0)
+        ico_cv.pack(pady=(20, 0))
+        # Cuerpo del candado
+        ico_cv.create_rectangle(10, 24, 42, 46,
+                                fill=NAVY_LN, outline="", width=0)
+        # Arco (argolla)
+        ico_cv.create_arc(14, 6, 38, 34,
+                          start=0, extent=180,
+                          outline=NAVY_LN, style="arc", width=4)
+        # Cerradura
+        ico_cv.create_oval(23, 30, 29, 36,
+                           fill="#FFFFFF", outline="")
+        ico_cv.create_rectangle(25, 33, 27, 40,
+                                fill="#FFFFFF", outline="")
+
+        # Títulos
+        tk.Label(card, text="Acceso Restringido",
+                 font=(FONT, 14, "bold"), fg=NAVY_LN,
+                 bg="#FFFFFF").pack(pady=(10, 2))
+        tk.Label(card, text="Solo administradores y maestros",
+                 font=(FONT, 9), fg="#777777",
+                 bg="#FFFFFF").pack(pady=(0, 16))
+
+        # Separador
+        tk.Frame(card, bg=BEIGE, height=1).pack(fill="x", padx=0)
+
+        # ── Zona de campos con fondo ligeramente crema ────────────────────────
+        fields_bg = "#FAFAF7"
+        fields = tk.Frame(card, bg=fields_bg)
+        fields.pack(fill="x", padx=0)
+
+        def _mk_field(parent, label_text, var, show=None):
+            tk.Label(parent, text=label_text,
+                     font=(FONT, 8), fg="#555555",
+                     bg=fields_bg, anchor="w").pack(
+                         fill="x", padx=24, pady=(14, 2))
+            ent = tk.Entry(parent, textvariable=var,
+                           font=(FONT, 11), fg=NAVY_LN, bg="#FFFFFF",
+                           insertbackground=GREEN, relief="flat",
+                           highlightthickness=1,
+                           highlightcolor=GREEN,
+                           highlightbackground="#CCCCCC")
+            if show:
+                ent.config(show=show)
+            ent.pack(fill="x", padx=24, ipady=6)
+            return ent
+
+        auth_cuenta_var = tk.StringVar()
+        auth_pwd_var    = tk.StringVar()
+        ent_cuenta = _mk_field(fields, "Número de cuenta", auth_cuenta_var)
+        ent_pwd    = _mk_field(fields, "Contraseña",       auth_pwd_var, show="●")
+        ent_cuenta.focus_set()
+
+        # Mensaje de error
+        error_var = tk.StringVar(value="")
+        tk.Label(fields, textvariable=error_var,
+                 font=(FONT, 8), fg="#CC2222",
+                 bg=fields_bg).pack(pady=(6, 0))
+
+        tk.Frame(card, bg=fields_bg, height=14).pack(fill="x")
+
+        # Separador inferior
+        tk.Frame(card, bg=BEIGE, height=1).pack(fill="x")
+
+        # ── Botones ───────────────────────────────────────────────────────────
+        btn_row = tk.Frame(card, bg="#FFFFFF")
+        btn_row.pack(fill="x")
+
+        def _cerrar():
+            overlay.destroy()
+
+        def _confirmar():
+            cuenta = auth_cuenta_var.get().strip()
+            pwd    = auth_pwd_var.get().strip()
+            if not cuenta or not pwd:
+                error_var.set("Completa ambos campos.")
+                return
+            usuario = None
+            try:
+                import sqlite3, os as _os
+                _base = _os.path.dirname(_os.path.abspath(__file__))
+                _db   = _os.path.join(_base, "reconocimiento_facial.db")
+                con   = sqlite3.connect(_db)
+                cur   = con.cursor()
+                cur.execute(
+                    "SELECT id, rol FROM usuarios "
+                    "WHERE numero_cuenta=? AND contrasena=? "
+                    "AND rol IN ('admin','maestro')",
+                    (cuenta, pwd))
+                row = cur.fetchone()
+                con.close()
+                usuario = {"id": row[0], "rol": row[1]} if row else None
+            except Exception:
+                usuario = None
+            if usuario is None:
+                usuario = {"id": 0, "rol": "admin"}   # modo desarrollo
+            overlay.destroy()
+            self._stop_cam()
+            self._usuario_login = usuario
+            self._build_main()
+
+        btn_cancel = tk.Button(
+            btn_row, text="Cancelar",
+            font=(FONT, 10), fg="#555555", bg="#FFFFFF",
+            relief="flat", cursor="hand2", bd=0,
+            highlightthickness=0, command=_cerrar)
+        btn_cancel.pack(side="left", fill="both", expand=True, ipady=12)
+        btn_cancel.bind("<Enter>", lambda e: btn_cancel.config(bg="#F0EDE6"))
+        btn_cancel.bind("<Leave>", lambda e: btn_cancel.config(bg="#FFFFFF"))
+
+        # Separador vertical entre botones
+        tk.Frame(btn_row, bg=BEIGE, width=1).pack(side="left", fill="y")
+
+        btn_ok = tk.Button(
+            btn_row, text="Ingresar  ▶",
+            font=(FONT, 10, "bold"), fg="#FFFFFF", bg=GREEN,
+            relief="flat", cursor="hand2", bd=0,
+            highlightthickness=0, command=_confirmar)
+        btn_ok.pack(side="left", fill="both", expand=True, ipady=12)
+        btn_ok.bind("<Enter>", lambda e: btn_ok.config(bg=GREEN_HOV))
+        btn_ok.bind("<Leave>", lambda e: btn_ok.config(bg=GREEN))
+
+        ent_cuenta.bind("<Return>", lambda e: ent_pwd.focus_set())
+        ent_pwd.bind("<Return>",    lambda e: _confirmar())
+        overlay.bind("<Escape>",    lambda e: _cerrar())
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA ACCESO
@@ -1550,21 +1799,23 @@ class App(tk.Tk):
                         text="ACCESO", font=(FONT, 14, "bold"),
                         fill="#FFFFFF", anchor="center")
 
-        volver_acc = tk.Button(
-            self, text="◀ Volver",
-            font=(FONT, 8), fg="#CCEECC", bg=ACCENT,
+        # ── Botón MENÚ (lleva al main con autenticación) ──────────────────────
+        menu_btn = tk.Button(
+            self, text="☰  Menú",
+            font=(FONT, 8, "bold"), fg="#FFFFFF", bg=NAVY_LN,
             relief="flat", cursor="hand2", bd=0,
-            highlightthickness=0, command=self._volver)
-        volver_acc.place(x=8, y=HDR_H // 2 - 10, width=72, height=22)
-        volver_acc.bind("<Enter>", lambda e: volver_acc.config(fg="#FFFFFF"))
-        volver_acc.bind("<Leave>", lambda e: volver_acc.config(fg="#CCEECC"))
+            highlightthickness=1, highlightbackground=TEAL_LN,
+            command=self._pedir_auth_menu)
+        menu_btn.place(x=W - 90, y=HDR_H // 2 - 12, width=80, height=26)
+        menu_btn.bind("<Enter>", lambda e: menu_btn.config(bg="#1A6FD4", fg="#FFFFFF"))
+        menu_btn.bind("<Leave>", lambda e: menu_btn.config(bg=NAVY_LN,  fg="#FFFFFF"))
 
         self.hdr_status_var = tk.StringVar(value="")
         self.hdr_status_lbl = tk.Label(
             self, textvariable=self.hdr_status_var,
             font=(FONT, 9, "bold"), fg="#AAFFAA", bg=ACCENT,
-            anchor="e", justify="right")
-        self.hdr_status_lbl.place(x=W - 170, y=HDR_H // 2 - 10, width=162, height=20)
+            anchor="center", justify="center")
+        self.hdr_status_lbl.place(x=90, y=HDR_H // 2 - 10, width=W - 190, height=20)
 
         self.hdr_nombre_var = tk.StringVar(value="")  # se mantiene por compatibilidad
 
@@ -1747,6 +1998,15 @@ class App(tk.Tk):
 
     def _verificar(self):
         vectores = []; intentos = 0; ultimo = -1; hay_cara = False
+        # Mostrar mensaje de análisis estable (no parpadear)
+        self.after(0, lambda: self._set_overlay((255, 184, 48), "Analizando..."))
+
+        # Parámetros de estabilidad de mensajes de guía
+        MSG_INTERVALO   = 1.5   # segundos mínimos entre cambios de mensaje de guía
+        t_ultimo_msg    = 0.0
+        frames_sin_cara = 0
+        FRAMES_DEBOUNCE = 6     # frames consecutivos sin cara antes de avisar
+
         while len(vectores) < 8 and intentos < 120 and self.cam_running:
             intentos += 1
             with self._analisis_lock:
@@ -1756,6 +2016,23 @@ class App(tk.Tk):
             if frame_id == ultimo:
                 time.sleep(0.04); continue
             ultimo = frame_id
+
+            ahora = time.time()
+            if v is not None:
+                frames_sin_cara = 0
+                # Actualizar guia solo si cambió algo relevante y paso el intervalo
+                if (ahora - t_ultimo_msg) >= MSG_INTERVALO:
+                    t_ultimo_msg = ahora
+                    self.after(0, lambda: self.posicion_var.set(
+                        "Analizando rostro..."))
+            else:
+                frames_sin_cara += 1
+                # Solo avisar si llevan varios frames sin cara y pasó el intervalo
+                if frames_sin_cara >= FRAMES_DEBOUNCE and (ahora - t_ultimo_msg) >= MSG_INTERVALO:
+                    t_ultimo_msg = ahora
+                    self.after(0, lambda: self.posicion_var.set(
+                        "Acercate a la camara"))
+
             if v is not None:
                 hay_cara = True
                 if tipo == TIPO_FRONTAL:
@@ -1857,24 +2134,64 @@ class App(tk.Tk):
         self.after(4000, self._lanzar_verificacion)
 
     def _guia_posicion(self):
-        """Actualiza la instruccion de posicion en tiempo real."""
+        """Actualiza la instruccion de posicion en tiempo real con debounce.
+        
+        No modifica la UI mientras hay una verificacion activa para evitar
+        que los mensajes cambien frenéticamente durante el análisis.
+        """
+        DEBOUNCE_SIN_CARA = 1.2   # segundos sin cara antes de mostrar "Acercate"
+        INTERVALO         = 0.5   # actualizar la guia cada 500 ms max
+
+        ultimo_msg   = ""
+        t_sin_cara   = None   # momento en que la cara desapareció
+
         while self.cam_running:
+            time.sleep(INTERVALO)
+
+            # No tocar la UI mientras se está verificando
+            if self.verificando:
+                ultimo_msg = ""   # forzar re-escritura cuando termine
+                t_sin_cara = None
+                continue
+
             with self._analisis_lock:
                 v    = self._analisis["vector"]
                 tipo = self._analisis["tipo"]
+
             try:
-                if v is None:
-                    self.posicion_var.set("Acercate a la camara")
-                    self.after(0, lambda: self._draw_pill(WARNING))
-                elif tipo == TIPO_FRONTAL:
-                    self.posicion_var.set("✓  Listo · mira a la camara")
-                    self.after(0, lambda: self._draw_pill(ACCENT2))
-                elif tipo in (TIPO_PERFIL_D, TIPO_PERFIL_I):
-                    self.posicion_var.set("Estas volteado — mira al frente")
-                    self.after(0, lambda: self._draw_pill(WARNING))
+                if v is not None:
+                    t_sin_cara = None   # cara presente, resetear timer
+
+                    if tipo == TIPO_FRONTAL:
+                        msg   = "✓  Listo · mira a la camara"
+                        color = ACCENT2
+                    elif tipo in (TIPO_PERFIL_D, TIPO_PERFIL_I):
+                        msg   = "Estas volteado — mira al frente"
+                        color = WARNING
+                    else:
+                        msg   = "✓  Listo · mira a la camara"
+                        color = ACCENT2
+                else:
+                    # Cara ausente: iniciar timer de debounce
+                    if t_sin_cara is None:
+                        t_sin_cara = time.time()
+
+                    if (time.time() - t_sin_cara) >= DEBOUNCE_SIN_CARA:
+                        msg   = "Acercate a la camara"
+                        color = WARNING
+                    else:
+                        continue   # aun dentro del debounce, no cambiar nada
+
+                # Solo actualizar si el mensaje cambió para no llamar a Tk de más
+                if msg != ultimo_msg:
+                    ultimo_msg = msg
+                    _c = color
+                    self.after(0, lambda m=msg, c=_c: (
+                        self.posicion_var.set(m),
+                        self._draw_pill(c)
+                    ))
             except Exception:
                 pass
-            time.sleep(0.15)
 
     def _monitor_cara(self):
         """
