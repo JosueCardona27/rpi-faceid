@@ -276,12 +276,15 @@ class App(tk.Tk):
         self.sensores_ir = None
         try:
             from sensores_ir import SensoresIR
-            self.sensores_ir = SensoresIR()
+            self.sensores_ir = SensoresIR(on_entrada=self._on_entrada_sensor)
             self.sensores_ir.iniciar()
             print("[IR] Sensores FC-51 activos")
         except Exception as e:
             print(f"[IR] No se pudieron iniciar los sensores IR: {e}")
             self.sensores_ir = None
+
+        # ── Conectar botón de salida con el contador ──────────────────────────────
+        servo._on_salida_manual = self._on_salida_boton
 
     @staticmethod
     def _lighten(hx):
@@ -331,7 +334,7 @@ class App(tk.Tk):
         if not self.cam_running:
             return
         self._stop_cam()
-        self.after(1000, lambda: self.cam_label.configure(image=""))
+        self.after(300, lambda: self.cam_label.configure(image=""))
         servo.espera()
         try:
             self.resultado_var.set("Esperando persona...")
@@ -1945,10 +1948,53 @@ class App(tk.Tk):
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
+    def _on_entrada_sensor(self, uid):
+        """
+        Llamado por sensores_ir cuando detecta S1→S2.
+        Solo cuenta si la persona fue reconocida recientemente (< 15s).
+        """
+        if time.time() - self._t_acceso_ok > 15:
+            print("[IR] Entrada ignorada — no hubo reconocimiento reciente")
+            return
+        # Incrementar contador
+        if self.sensores_ir:
+            self.sensores_ir.incrementar()
+        # Registrar en BD con el usuario_id del último reconocido
+        uid_real = getattr(self, '_ultimo_uid_ok', None)
+        try:
+            registrar_acceso(uid_real, "entrada", detalle="Sensor IR S1→S2")
+            print(f"[IR] Entrada registrada en BD (uid={uid_real})")
+        except Exception as e:
+            print(f"[IR] Error registrando entrada: {e}")
+
+    def _on_salida_boton(self):
+        """
+        Llamado por servo_control cuando se presiona el botón físico.
+        Registra salida anónima y decrementa el contador.
+        """
+        if self.sensores_ir:
+            self.sensores_ir.decrementar()
+        try:
+            from database import conectar
+            conn = conectar()
+            conn.execute("""
+                INSERT INTO registro_acceso
+                    (usuario_id, nombre, apellido_paterno, apellido_materno,
+                    numero_cuenta, rol, tipo_evento, detalle)
+                VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                        'estudiante', 'salida', 'Botón físico GPIO17')
+            """)
+            conn.commit()
+            conn.close()
+            print("[IR] Salida registrada en BD")
+        except Exception as e:
+            print(f"[IR] Error registrando salida: {e}")
+
     def _resultado_ok(self, r):
         if time.time() - self._t_acceso_ok < 8:
             return
         self._t_acceso_ok = time.time()
+        self._ultimo_uid_ok = r.get("usuario_id")
 
         self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
