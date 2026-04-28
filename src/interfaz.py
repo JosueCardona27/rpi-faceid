@@ -331,7 +331,7 @@ class App(tk.Tk):
         if not self.cam_running:
             return
         self._stop_cam()
-        self.after(300, lambda: self.cam_label.configure(image=""))
+        self.after(1000, lambda: self.cam_label.configure(image=""))
         servo.espera()
         try:
             self.resultado_var.set("Esperando persona...")
