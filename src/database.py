@@ -3,19 +3,19 @@ database.py
 ===========
 Base de datos SQLite para el sistema de reconocimiento facial.
 
-Cambios v3:
-  - numero_cuenta obligatorio para todos (exactamente 8 digitos)
-  - estudiantes_detalle: grado (1-20) y grupo (A-Z) para estudiantes
-  - validacion de formato en Python antes de intentar INSERT
+Cambios v4:
+  - contrasena obligatoria para admin y maestro (hash SHA-256)
+  - correo obligatorio para admin y maestro
+  - estudiantes NO tienen correo ni contrasena
+  - grado y grupo SOLO para estudiantes
 
 Umbrales calibrados:
-  UMBRAL           = 0.55
-  RECHAZO          = 0.58
-  GAP_MIN          = 0.05
-  UMBRAL_DUPLICADO = 0.20
+  UMBRAL  = 0.55   acceso permitido
+  RECHAZO = 0.58   desconocido
 """
 
 import sqlite3
+import hashlib
 import json
 import os
 import sys
@@ -30,11 +30,12 @@ DB_PATH           = os.path.join(_DIR_DB, "reconocimiento_facial.db")
 # =============================================================================
 #  CONSTANTES
 # =============================================================================
-UMBRAL           = 0.40   # dist <= UMBRAL  → acceso PERMITIDO  (coseno)
-RECHAZO          = 0.65   # dist >  RECHAZO → DESCONOCIDO       (coseno)
-GAP_MIN          = 0.05   # diferencia minima entre 1° y 2° candidato
-MAX_DIST         = 2.0    # referencia para % similitud (rango coseno 0-2)
-UMBRAL_DUPLICADO = 0.20   # dist <= esto en registro → misma persona, bloquear
+
+UMBRAL           = 0.40   # dist coseno <= 0.40 -> acceso (~80% similitud)
+RECHAZO          = 0.65   # dist coseno >  0.65 -> desconocido
+GAP_MIN          = 0.05
+MAX_DIST         = 2.0    # rango coseno es 0-2, no 0-1
+UMBRAL_DUPLICADO = 0.20
 
 ANGULOS_VALIDOS = ("frontal", "perfil_der", "perfil_izq")
 ROLES_VALIDOS   = ("admin", "maestro", "estudiante")
@@ -57,49 +58,33 @@ def _verificar_bd():
     if not os.path.exists(DB_PATH):
         print()
         print("=" * 60)
-        print("  [ERROR] Base de datos no encontrada.")
+        print("  [AVISO] Base de datos no encontrada.")
         print(f"  Ruta esperada: {DB_PATH}")
-        print()
-        print("  Para crear la base de datos:")
-        print("  1. Abre DB Browser for SQLite")
-        print("  2. File > New Database > guarda como")
-        print("     reconocimiento_facial.db en la carpeta /database")
-        print("  3. Pestaña 'Execute SQL'")
-        print("  4. Pega el contenido de esquema.sql y ejecuta")
+        print("  Las funciones de BD estarán deshabilitadas.")
         print("=" * 60)
-        print()
-        sys.exit(1)
+        return   # <-- antes era sys.exit(1)
 
     tablas_requeridas = {
-        "usuarios",
-        "estudiantes_detalle",
-        "vectores_por_angulo",
-        "registro_acceso",
-        "auditoria_cambios",
+        "usuarios", "estudiantes_detalle",
+        "vectores_por_angulo", "registro_acceso", "auditoria_cambios",
     }
-
     try:
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")
-        tablas_existentes = {row[0] for row in cursor.fetchall()}
+        tablas = {row[0] for row in cursor.fetchall()}
         conn.close()
     except sqlite3.Error as e:
-        print(f"\n[ERROR] No se pudo abrir la base de datos: {e}\n")
-        sys.exit(1)
+        print(f"\n[AVISO] No se pudo abrir la BD: {e}\n")
+        return   # <-- antes era sys.exit(1)
 
-    faltantes = tablas_requeridas - tablas_existentes
+    faltantes = tablas_requeridas - tablas
     if faltantes:
-        print()
-        print("=" * 60)
-        print("  [ERROR] La base de datos esta incompleta.")
-        print(f"  Tablas faltantes: {', '.join(sorted(faltantes))}")
-        print("  Ejecuta esquema.sql en DB Browser para crearlas.")
-        print("=" * 60)
-        print()
-        sys.exit(1)
+        print(f"\n[AVISO] BD incompleta. Tablas faltantes: "
+              f"{', '.join(sorted(faltantes))}\n")
+        return   # <-- antes era sys.exit(1)
 
-    print(f"[DB] Base de datos verificada: {DB_PATH}")
+    print(f"[DB] BD verificada: {DB_PATH}")
 
 _verificar_bd()
 
@@ -116,224 +101,63 @@ def conectar() -> sqlite3.Connection:
     return conn
 
 
+def _tablas_existentes(conn) -> set:
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")
+    return {row[0] for row in cur.fetchall()}
+
+
 # =============================================================================
-#  AUXILIAR INTERNO
+#  HASH DE CONTRASENA
 # =============================================================================
 
-def _crear_tablas():
-    """Crea todas las tablas, indices, triggers y vistas si no existen."""
-    conn = conectar()
-    conn.executescript("""
+def hash_contrasena(contrasena: str) -> str:
+    """Devuelve el hash SHA-256 de la contrasena en hexadecimal."""
+    return hashlib.sha256(contrasena.encode("utf-8")).hexdigest()
 
-        -- ── Tabla principal de usuarios ──────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_usuario       TEXT    NOT NULL UNIQUE,
-            nombre           TEXT    NOT NULL,
-            apellido_paterno TEXT    NOT NULL,
-            apellido_materno TEXT    NOT NULL DEFAULT '.',
-            numero_cuenta    TEXT    UNIQUE,
-            rol              TEXT    NOT NULL
-                             CHECK(rol IN ('admin','maestro','estudiante')),
-            registrado_por   INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
-            fecha_registro   TEXT    NOT NULL
-                             DEFAULT (datetime('now','localtime'))
-        );
 
-        -- ── Vectores por angulo (principal) ──────────────────────────────────
-        CREATE TABLE IF NOT EXISTS vectores_por_angulo (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id    INTEGER NOT NULL
-                          REFERENCES usuarios(id) ON DELETE CASCADE,
-            angulo        TEXT    NOT NULL
-                          CHECK(angulo IN ('frontal','perfil_der','perfil_izq')),
-            vector        TEXT    NOT NULL,
-            dimensiones   INTEGER NOT NULL DEFAULT 512,
-            n_muestras    INTEGER NOT NULL DEFAULT 1,
-            fecha_captura TEXT    NOT NULL
-                          DEFAULT (datetime('now','localtime')),
-            UNIQUE(usuario_id, angulo)
-        );
+# =============================================================================
+#  VALIDACIONES
+# =============================================================================
 
-        -- ── Historial de accesos (inmutable) ─────────────────────────────────
-        CREATE TABLE IF NOT EXISTS registro_acceso (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id       INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
-            nombre           TEXT    NOT NULL,
-            apellido_paterno TEXT    NOT NULL,
-            apellido_materno TEXT    NOT NULL,
-            numero_cuenta    TEXT,
-            rol              TEXT    NOT NULL
-                             CHECK(rol IN ('admin','maestro','estudiante')),
-            tipo_evento      TEXT    NOT NULL
-                             CHECK(tipo_evento IN ('entrada','salida','intento_fallido')),
-            fecha_acceso     TEXT    NOT NULL
-                             DEFAULT (datetime('now','localtime')),
-            detalle          TEXT
-        );
+def validar_numero_cuenta(numero_cuenta: str) -> tuple[bool, str]:
+    if not numero_cuenta:
+        return False, "El numero de cuenta es obligatorio."
+    if not re.fullmatch(r"\d{8}", numero_cuenta.strip()):
+        return False, "El numero de cuenta debe tener exactamente 8 digitos."
+    return True, ""
 
-        -- ── Auditoria de cambios (inmutable) ─────────────────────────────────
-        CREATE TABLE IF NOT EXISTS auditoria_cambios (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            tabla            TEXT    NOT NULL,
-            operacion        TEXT    NOT NULL
-                             CHECK(operacion IN ('INSERT','UPDATE','DELETE')),
-            registro_id      INTEGER,
-            campo_modificado TEXT,
-            valor_anterior   TEXT,
-            valor_nuevo      TEXT,
-            modificado_por   INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
-            fecha            TEXT    NOT NULL
-                             DEFAULT (datetime('now','localtime'))
-        );
 
-        -- ── Indices ───────────────────────────────────────────────────────────
-        CREATE INDEX  IF NOT EXISTS idx_usuarios_rol      ON usuarios(rol);
-        CREATE INDEX  IF NOT EXISTS idx_vpa_usuario       ON vectores_por_angulo(usuario_id);
-        CREATE INDEX  IF NOT EXISTS idx_vpa_angulo        ON vectores_por_angulo(angulo);
-        CREATE INDEX  IF NOT EXISTS idx_acceso_usuario    ON registro_acceso(usuario_id);
-        CREATE INDEX  IF NOT EXISTS idx_acceso_fecha      ON registro_acceso(fecha_acceso);
-        CREATE INDEX  IF NOT EXISTS idx_acceso_tipo       ON registro_acceso(tipo_evento);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_uq_cuenta   ON usuarios(numero_cuenta)
-            WHERE numero_cuenta IS NOT NULL;
+def validar_correo(correo: str) -> tuple[bool, str]:
+    if not correo or not correo.strip():
+        return False, "El correo es obligatorio para admin y maestro."
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", correo.strip()):
+        return False, "El correo no tiene un formato valido."
+    return True, ""
 
-        -- ── Triggers de proteccion ────────────────────────────────────────────
 
-        -- Bloquear numero de cuenta duplicado en INSERT
-        CREATE TRIGGER IF NOT EXISTS trg_cuenta_dup_insert
-        BEFORE INSERT ON usuarios
-        WHEN NEW.numero_cuenta IS NOT NULL
-        BEGIN
-            SELECT RAISE(ABORT,'DUPLICADO: El numero de cuenta ya esta registrado.')
-            WHERE EXISTS (
-                SELECT 1 FROM usuarios WHERE numero_cuenta = NEW.numero_cuenta
-            );
-        END;
+def validar_contrasena(contrasena: str) -> tuple[bool, str]:
+    if not contrasena or len(contrasena.strip()) < 6:
+        return False, "La contrasena debe tener al menos 6 caracteres."
+    return True, ""
 
-        -- Bloquear numero de cuenta duplicado en UPDATE
-        CREATE TRIGGER IF NOT EXISTS trg_cuenta_dup_update
-        BEFORE UPDATE OF numero_cuenta ON usuarios
-        WHEN NEW.numero_cuenta IS NOT NULL
-        BEGIN
-            SELECT RAISE(ABORT,'DUPLICADO: El numero de cuenta pertenece a otro usuario.')
-            WHERE EXISTS (
-                SELECT 1 FROM usuarios
-                WHERE numero_cuenta = NEW.numero_cuenta AND id != NEW.id
-            );
-        END;
 
-        -- Proteger el rol — no se puede cambiar una vez asignado
-        CREATE TRIGGER IF NOT EXISTS trg_proteger_rol
-        BEFORE UPDATE OF rol ON usuarios
-        BEGIN
-            SELECT RAISE(ABORT,'PROHIBIDO: El rol de un usuario no puede modificarse.')
-            WHERE OLD.rol != NEW.rol;
-        END;
+def validar_grado(grado) -> tuple[bool, str]:
+    try:
+        g = int(grado)
+        if not (GRADO_MIN <= g <= GRADO_MAX):
+            return False, f"El grado debe estar entre {GRADO_MIN} y {GRADO_MAX}."
+        return True, ""
+    except (ValueError, TypeError):
+        return False, "El grado debe ser un numero entero."
 
-        -- Auditoria automatica en UPDATE de usuarios
-        CREATE TRIGGER IF NOT EXISTS trg_auditoria_update
-        AFTER UPDATE ON usuarios
-        BEGIN
-            INSERT INTO auditoria_cambios
-                (tabla, operacion, registro_id, campo_modificado,
-                 valor_anterior, valor_nuevo)
-            SELECT 'usuarios','UPDATE',NEW.id,'nombre',OLD.nombre,NEW.nombre
-            WHERE OLD.nombre != NEW.nombre;
 
-            INSERT INTO auditoria_cambios
-                (tabla, operacion, registro_id, campo_modificado,
-                 valor_anterior, valor_nuevo)
-            SELECT 'usuarios','UPDATE',NEW.id,'apellido_paterno',
-                   OLD.apellido_paterno,NEW.apellido_paterno
-            WHERE OLD.apellido_paterno != NEW.apellido_paterno;
-
-            INSERT INTO auditoria_cambios
-                (tabla, operacion, registro_id, campo_modificado,
-                 valor_anterior, valor_nuevo)
-            SELECT 'usuarios','UPDATE',NEW.id,'numero_cuenta',
-                   OLD.numero_cuenta,NEW.numero_cuenta
-            WHERE OLD.numero_cuenta IS NOT NEW.numero_cuenta;
-
-        END;
-
-        -- Auditoria automatica en DELETE de usuarios
-        CREATE TRIGGER IF NOT EXISTS trg_auditoria_delete
-        AFTER DELETE ON usuarios
-        BEGIN
-            INSERT INTO auditoria_cambios
-                (tabla, operacion, registro_id, campo_modificado,
-                 valor_anterior, valor_nuevo)
-            VALUES (
-                'usuarios','DELETE',OLD.id,'ELIMINADO',
-                OLD.nombre||' '||OLD.apellido_paterno||' ('||OLD.rol||')',
-                NULL
-            );
-        END;
-
-        -- Proteger registro_acceso — inmutable
-        CREATE TRIGGER IF NOT EXISTS trg_proteger_acceso_delete
-        BEFORE DELETE ON registro_acceso
-        BEGIN
-            SELECT RAISE(ABORT,'PROHIBIDO: Los registros de acceso son inmutables.');
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS trg_proteger_acceso_update
-        BEFORE UPDATE ON registro_acceso
-        BEGIN
-            SELECT RAISE(ABORT,'PROHIBIDO: Los registros de acceso no pueden modificarse.');
-        END;
-
-        -- Proteger auditoria_cambios — inmutable
-        CREATE TRIGGER IF NOT EXISTS trg_proteger_auditoria_delete
-        BEFORE DELETE ON auditoria_cambios
-        BEGIN
-            SELECT RAISE(ABORT,'PROHIBIDO: Los registros de auditoria son inmutables.');
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS trg_proteger_auditoria_update
-        BEFORE UPDATE ON auditoria_cambios
-        BEGIN
-            SELECT RAISE(ABORT,'PROHIBIDO: Los registros de auditoria no pueden modificarse.');
-        END;
-
-        -- ── Vistas ────────────────────────────────────────────────────────────
-
-        CREATE VIEW IF NOT EXISTS vista_usuarios AS
-        SELECT
-            u.id,
-            u.nombre,
-            u.apellido_paterno,
-            u.apellido_materno,
-            u.numero_cuenta,
-            u.rol,
-            u.registrado_por,
-            u.fecha_registro,
-            COUNT(va.id) AS angulos_registrados
-        FROM usuarios u
-        LEFT JOIN vectores_por_angulo va ON u.id = va.usuario_id
-        GROUP BY u.id;
-
-        CREATE VIEW IF NOT EXISTS vista_accesos_recientes AS
-        SELECT * FROM registro_acceso
-        WHERE fecha_acceso >= datetime('now','-30 days','localtime')
-        ORDER BY fecha_acceso DESC;
-
-        CREATE VIEW IF NOT EXISTS vista_intentos_fallidos AS
-        SELECT * FROM registro_acceso
-        WHERE tipo_evento = 'intento_fallido'
-        ORDER BY fecha_acceso DESC;
-
-        CREATE VIEW IF NOT EXISTS vista_sin_vectores AS
-        SELECT u.id, u.nombre, u.apellido_paterno, u.rol, u.fecha_registro
-        FROM usuarios u
-        LEFT JOIN vectores_por_angulo va ON u.id = va.usuario_id
-        WHERE va.id IS NULL;
-
-    """)
-    conn.commit()
-    conn.close()
-
-_crear_tablas()
+def validar_grupo(grupo: str) -> tuple[bool, str]:
+    if not grupo:
+        return False, "El grupo es obligatorio para estudiantes."
+    if not re.fullmatch(r"[A-Za-z]", grupo.strip()):
+        return False, "El grupo debe ser una sola letra (A-Z)."
+    return True, ""
 
 
 # =============================================================================
@@ -354,6 +178,10 @@ def registrar_usuario(
         apellido_materno: str = "",
         rol:              str = "estudiante",
         numero_cuenta:    str = None,
+        correo:           str = None,
+        contrasena:       str = None,   # texto plano — se hashea aqui
+        grado:            int = None,
+        grupo:            str = None,
         registrado_por:   int = None,
         rol_registrador:  str = None,
         **kwargs,
@@ -361,73 +189,68 @@ def registrar_usuario(
     """
     Registra un nuevo usuario.
 
-    numero_cuenta : obligatorio para todos — exactamente 8 digitos
-    grado         : obligatorio si rol == 'estudiante' (1-20)
-    grupo         : obligatorio si rol == 'estudiante' (A-Z)
-    rol_registrador: si se pasa, valida permisos antes de registrar
+    Admin/Maestro: requieren correo y contrasena.
+    Estudiante:    requieren grado y grupo. NO pueden tener correo/contrasena.
 
-    Retorna el id del nuevo usuario, o -1 si hubo error.
+    La contrasena se recibe en texto plano y se almacena como SHA-256.
     """
-    # Validar rol
     if rol not in ROLES_VALIDOS:
         print(f"[ERROR] Rol '{rol}' no valido.")
         return -1
 
-    # Validar permisos
     if rol_registrador is not None:
         if not puede_registrar(rol_registrador, rol):
             print(f"[ERROR] '{rol_registrador}' no puede registrar '{rol}'.")
             return -1
 
-    # Validar numero de cuenta
     ok, msg = validar_numero_cuenta(numero_cuenta)
     if not ok:
-        print(f"[ERROR] {msg}")
-        return -1
+        print(f"[ERROR] {msg}"); return -1
 
-    # Validar grado y grupo para estudiantes
+    if rol in ("admin", "maestro"):
+        ok, msg = validar_correo(correo)
+        if not ok:
+            print(f"[ERROR] {msg}"); return -1
+        ok, msg = validar_contrasena(contrasena)
+        if not ok:
+            print(f"[ERROR] {msg}"); return -1
+
     if rol == "estudiante":
         ok, msg = validar_grado(grado)
         if not ok:
-            print(f"[ERROR] {msg}")
-            return -1
+            print(f"[ERROR] {msg}"); return -1
         ok, msg = validar_grupo(grupo)
         if not ok:
-            print(f"[ERROR] {msg}")
-            return -1
+            print(f"[ERROR] {msg}"); return -1
 
-    ap_mat = apellido_materno.strip() if apellido_materno.strip() else "."
+    ap_mat      = apellido_materno.strip() if apellido_materno.strip() else "."
+    hash_pwd    = hash_contrasena(contrasena) if contrasena else None
+    correo_limpio = correo.strip().lower() if correo else None
 
     try:
         conn   = conectar()
         cursor = conn.cursor()
-        import time as _time
-        sufijo     = numero_cuenta if numero_cuenta else str(int(_time.time() * 1000))[-8:]
-        id_usuario = f"{rol[:3].upper()}-{sufijo}"
 
         cursor.execute("""
             INSERT INTO usuarios
-                (id_usuario, nombre, apellido_paterno, apellido_materno,
-                 numero_cuenta, rol, registrado_por)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (id_usuario, nombre, apellido_paterno, ap_mat,
-              numero_cuenta or None,
-              rol, registrado_por))
+                (nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, correo, contrasena, rol, registrado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (nombre, apellido_paterno, ap_mat,
+              numero_cuenta.strip(), correo_limpio,
+              hash_pwd, rol, registrado_por))
 
         uid = cursor.lastrowid
 
-        # Insertar detalle de estudiante si aplica
         if rol == "estudiante":
             cursor.execute("""
-                INSERT INTO estudiantes_detalle
-                    (usuario_id, grado, grupo)
+                INSERT INTO estudiantes_detalle (usuario_id, grado, grupo)
                 VALUES (?, ?, ?)
             """, (uid, int(grado), grupo.strip().upper()))
 
         conn.commit()
         print(f"[DB] Usuario registrado ID={uid}: "
-              f"{nombre} {apellido_paterno} ({rol}) "
-              f"cuenta={numero_cuenta}")
+              f"{nombre} {apellido_paterno} ({rol})")
         return uid
 
     except sqlite3.IntegrityError as e:
@@ -438,11 +261,6 @@ def registrar_usuario(
 
 
 def eliminar_usuario(usuario_id: int) -> bool:
-    """
-    Elimina un usuario y sus vectores (cascada).
-    También elimina su fila en estudiantes_detalle (cascada).
-    La auditoria queda intacta.
-    """
     try:
         conn = conectar()
         conn.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
@@ -458,21 +276,19 @@ eliminar_persona = eliminar_usuario
 
 
 def listar_usuarios(rol: str = None) -> list:
-    """Lista usuarios desde vista_usuarios con grado/grupo si aplica."""
     conn   = conectar()
     cursor = conn.cursor()
     if rol:
         cursor.execute("""
             SELECT id, nombre, apellido_paterno, apellido_materno,
-                   numero_cuenta, rol, angulos_registrados
-            FROM vista_usuarios
-            WHERE rol = ?
+                   numero_cuenta, correo, rol, grado, grupo, angulos_registrados
+            FROM vista_usuarios WHERE rol = ?
             ORDER BY apellido_paterno, nombre
         """, (rol,))
     else:
         cursor.execute("""
             SELECT id, nombre, apellido_paterno, apellido_materno,
-                   numero_cuenta, rol, angulos_registrados
+                   numero_cuenta, correo, rol, grado, grupo, angulos_registrados
             FROM vista_usuarios
             ORDER BY apellido_paterno, nombre
         """)
@@ -482,31 +298,29 @@ def listar_usuarios(rol: str = None) -> list:
 
 
 def obtener_usuario(usuario_id: int) -> dict | None:
-    """Retorna dict con datos completos del usuario, o None si no existe."""
     conn   = conectar()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, nombre, apellido_paterno, apellido_materno,
-               numero_cuenta, rol, registrado_por, fecha_registro
-        FROM usuarios WHERE id = ?
+               numero_cuenta, correo, rol, grado, grupo,
+               registrado_por, fecha_registro
+        FROM vista_usuarios WHERE id = ?
     """, (usuario_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
     keys = ("id","nombre","apellido_paterno","apellido_materno",
-            "numero_cuenta","rol","registrado_por","fecha_registro")
+            "numero_cuenta","correo","rol","grado","grupo",
+            "registrado_por","fecha_registro")
     return dict(zip(keys, row))
 
 
 def registrar_persona(nombre_completo: str,
                        numero_cuenta: str = None) -> int:
-    """Registra estudiante a partir de nombre completo como string."""
     partes = nombre_completo.strip().split()
     if len(partes) >= 3:
-        nombre = " ".join(partes[:-2])
-        ap_pat = partes[-2]
-        ap_mat = partes[-1]
+        nombre = " ".join(partes[:-2]); ap_pat = partes[-2]; ap_mat = partes[-1]
     elif len(partes) == 2:
         nombre = partes[0]; ap_pat = partes[1]; ap_mat = ""
     else:
@@ -516,7 +330,7 @@ def registrar_persona(nombre_completo: str,
 
 
 # =============================================================================
-#  GUARDAR VECTORES
+#  GUARDAR / CARGAR VECTORES
 # =============================================================================
 
 def guardar_vectores_por_angulo(usuario_id: int,
@@ -524,31 +338,23 @@ def guardar_vectores_por_angulo(usuario_id: int,
     conn   = conectar()
     cursor = conn.cursor()
     total  = 0
-
     for angulo, datos in vectores_por_paso.items():
         if angulo not in ANGULOS_VALIDOS:
             continue
-
         vecs = datos.get("vectores", [])
         if not vecs:
             continue
-
         v_prom = np.mean(vecs, axis=0).astype(np.float32)
         if len(v_prom) != VECTOR_DIM:
             continue
-
         cursor.execute("""
             INSERT OR REPLACE INTO vectores_por_angulo
-                (usuario_id, angulo, vector, n_muestras)
-            VALUES (?, ?, ?, ?)
+                (usuario_id, angulo, vector, dimensiones, n_muestras)
+            VALUES (?, ?, ?, ?, ?)
         """, (usuario_id, angulo,
-              json.dumps(v_prom.tolist()),
-              len(vecs)))
-
-        print(f"[DB] ID={usuario_id} angulo='{angulo}' "
-              f"muestras={len(vecs)}")
+              json.dumps(v_prom.tolist()), VECTOR_DIM, len(vecs)))
+        print(f"[DB] ID={usuario_id} angulo='{angulo}' muestras={len(vecs)}")
         total += 1
-
     conn.commit()
     conn.close()
     print(f"[DB] {total} angulos guardados para ID={usuario_id}.")
@@ -564,45 +370,34 @@ def guardar_vector_unico(usuario_id: int, vectores: list,
         usuario_id, {"frontal": {"vectores": [v_prom]}})
 
 
-# =============================================================================
-#  CARGAR VECTORES
-# =============================================================================
-
 def cargar_vectores_por_angulo(excluir_id: int = None) -> list:
     conn      = conectar()
     cursor    = conn.cursor()
     resultado = []
-
-    if "vectores_por_angulo" in tablas:
-        cursor.execute("""
-            SELECT
-                u.id,
-                u.nombre || ' ' || u.apellido_paterno || ' ' || u.apellido_materno,
-                u.numero_cuenta,
-                u.rol,
-                va.angulo,
-                va.vector,
-                va.n_muestras
-            FROM vectores_por_angulo va
-            JOIN usuarios u ON u.id = va.usuario_id
-            ORDER BY u.id, va.angulo
-        """)
-        for uid, nombre, cuenta, rol, angulo, vjson, n in cursor.fetchall():
-            if excluir_id is not None and uid == excluir_id:
-                continue
-            v = np.array(json.loads(vjson), dtype=np.float32)
-            if len(v) != VECTOR_DIM:
-                continue
-            resultado.append({
-                "usuario_id":    uid,
-                "nombre":        nombre.strip(),
-                "numero_cuenta": cuenta or "",
-                "rol":           rol,
-                "angulo":        angulo,
-                "vector":        v,
-                "n_muestras":    n,
-            })
-
+    cursor.execute("""
+        SELECT u.id,
+               u.nombre||' '||u.apellido_paterno||' '||u.apellido_materno,
+               u.numero_cuenta, u.rol,
+               va.angulo, va.vector, va.n_muestras, va.dimensiones
+        FROM vectores_por_angulo va
+        JOIN usuarios u ON u.id = va.usuario_id
+        ORDER BY u.id, va.angulo
+    """)
+    for uid, nombre, cuenta, rol, angulo, vjson, n, dims in cursor.fetchall():
+        if excluir_id is not None and uid == excluir_id:
+            continue
+        if dims != VECTOR_DIM:
+            continue
+        v = np.array(json.loads(vjson), dtype=np.float32)
+        resultado.append({
+            "usuario_id":    uid,
+            "nombre":        nombre.strip(),
+            "numero_cuenta": cuenta or "",
+            "rol":           rol,
+            "angulo":        angulo,
+            "vector":        v,
+            "n_muestras":    n,
+        })
     conn.close()
     return resultado
 
@@ -620,10 +415,14 @@ def reconocer_persona(
     if not registros:
         return None
 
-    # Calcular la distancia minima por USUARIO (usando todos sus angulos)
-    # Asi un usuario con 3 angulos sigue siendo UN candidato, no tres
+    por_angulo = [r for r in registros if r["angulo"] == angulo_nuevo]
+    if not por_angulo:
+        por_angulo = [r for r in registros if r["angulo"] == "frontal"]
+    if not por_angulo:
+        return None
+
     distancias: dict[int, dict] = {}
-    for reg in registros:
+    for reg in por_angulo:
         uid  = reg["usuario_id"]
         dist = round(float(distancia_chi2(vector_nuevo, reg["vector"])), 4)
         if uid not in distancias or dist < distancias[uid]["distancia"]:
@@ -642,30 +441,25 @@ def reconocer_persona(
     ordenados = sorted(distancias.values(), key=lambda x: x["distancia"])
     mejor     = ordenados[0]
 
-    print("[RECONO] Candidatos: " +
+    print("[RECONO] " +
           ", ".join(f"{r['nombre'].split()[0]}={r['distancia']:.4f}"
                     for r in ordenados))
 
     if mejor["distancia"] > RECHAZO:
-        print(f"[RECONO] Desconocido — "
-              f"dist={mejor['distancia']:.4f} > RECHAZO={RECHAZO}")
+        print(f"[RECONO] Desconocido dist={mejor['distancia']:.4f}")
         return None
 
-    # GAP solo aplica cuando hay mas de un USUARIO diferente
-    # (no entre angulos del mismo usuario)
     if len(ordenados) >= 2:
         gap = round(ordenados[1]["distancia"] - mejor["distancia"], 4)
         if gap < GAP_MIN:
-            print(f"[RECONO] Ambiguo — gap={gap:.4f} < GAP_MIN={GAP_MIN}")
+            print(f"[RECONO] Ambiguo gap={gap:.4f}")
             return None
 
     sim_raw                = max(0.0, 1.0 - (mejor["distancia"] / MAX_DIST))
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral
 
-    print(f"[RECONO] → {mejor['nombre']} | "
-          f"dist={mejor['distancia']:.4f} | "
-          f"acceso={'SI' if mejor['acceso'] else 'NO'}")
+    print(f"[RECONO] → {mejor['nombre']} acceso={'SI' if mejor['acceso'] else 'NO'}")
     return mejor
 
 
@@ -680,7 +474,6 @@ def verificar_duplicado_facial(
 ) -> dict | None:
     if not vectores_nuevos:
         return None
-
     registros = cargar_vectores_por_angulo(excluir_id=excluir_id)
     if not registros:
         return None
@@ -705,15 +498,11 @@ def verificar_duplicado_facial(
 
     if not mejores:
         return None
-
     mejor = min(mejores.values(), key=lambda x: x["distancia"])
-    print(f"[DUP] Mejor match: {mejor['nombre']} "
-          f"dist={mejor['distancia']:.4f} umbral={umbral}")
-
+    print(f"[DUP] {mejor['nombre']} dist={mejor['distancia']:.4f}")
     if mejor["distancia"] <= umbral:
-        print(f"[DUP] BLOQUEADO — misma cara detectada.")
+        print(f"[DUP] BLOQUEADO")
         return mejor
-
     return None
 
 
@@ -721,15 +510,10 @@ def verificar_duplicado_facial(
 #  REGISTRO DE ACCESO
 # =============================================================================
 
-def registrar_acceso(
-        usuario_id:  int,
-        tipo_evento: str,
-        detalle:     str = None,
-) -> bool:
+def registrar_acceso(usuario_id: int, tipo_evento: str,
+                      detalle: str = None) -> bool:
     if tipo_evento not in ("entrada", "salida", "intento_fallido"):
-        print(f"[DB] tipo_evento '{tipo_evento}' no valido.")
         return False
-
     try:
         conn   = conectar()
         cursor = conn.cursor()
@@ -740,9 +524,7 @@ def registrar_acceso(
         """, (usuario_id,))
         row = cursor.fetchone()
         if not row:
-            print(f"[DB] Usuario ID={usuario_id} no encontrado.")
             return False
-
         nombre, ap_pat, ap_mat, cuenta, rol = row
         cursor.execute("""
             INSERT INTO registro_acceso
@@ -752,10 +534,8 @@ def registrar_acceso(
         """, (usuario_id, nombre, ap_pat, ap_mat,
               cuenta, rol, tipo_evento, detalle))
         conn.commit()
-        print(f"[DB] Acceso: ID={usuario_id} evento={tipo_evento}")
         return True
-    except sqlite3.Error as e:
-        print(f"[DB] Error al registrar acceso: {e}")
+    except sqlite3.Error:
         return False
     finally:
         conn.close()
@@ -768,9 +548,8 @@ def registrar_acceso(
 def tiene_vector(usuario_id: int) -> bool:
     conn = conectar()
     c    = conn.cursor()
-    c.execute(
-        "SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?",
-        (usuario_id,))
+    c.execute("SELECT COUNT(*) FROM vectores_por_angulo WHERE usuario_id=?",
+              (usuario_id,))
     n = c.fetchone()[0]
     conn.close()
     return n > 0
@@ -784,22 +563,5 @@ def angulos_registrados(usuario_id: int) -> list:
         WHERE usuario_id = ? ORDER BY angulo
     """, (usuario_id,))
     rows = c.fetchall()
-    conn.close()
-    return rows
-
-
-def accesos_recientes(usuario_id: int = None, limite: int = 50) -> list:
-    conn   = conectar()
-    cursor = conn.cursor()
-    if usuario_id:
-        cursor.execute("""
-            SELECT * FROM vista_accesos_recientes
-            WHERE usuario_id = ? LIMIT ?
-        """, (usuario_id, limite))
-    else:
-        cursor.execute("""
-            SELECT * FROM vista_accesos_recientes LIMIT ?
-        """, (limite,))
-    rows = cursor.fetchall()
     conn.close()
     return rows

@@ -16,8 +16,7 @@
   <link rel="stylesheet" href="css/components.css" />
 </head>
 <body>
-  <!--Hola xd-->
-  <!--Hola xd2-->
+
   <!-- Overlay oscuro detrás del sidebar en móvil -->
   <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
 
@@ -38,23 +37,17 @@
       </div>
     </div>
 
-    <!-- Perfil del profesor -->
+    <!-- Perfil — se rellena dinámicamente desde app.js (sessionStorage) -->
     <div class="sidebar-profile">
       <div class="profile-avatar">
-        <span>MA</span>
+        <span class="profile-avatar-span">??</span>
         <div class="profile-status"></div>
       </div>
       <div class="profile-info">
-        <div class="profile-name">Dr. Marco Alvarado</div>
-        <div class="profile-role">Jefe de Laboratorio</div>
-        <div class="profile-dept">Ing. en Sistemas · CUCEI</div>
+        <div class="profile-name" id="profile-name-sidebar">Cargando…</div>
+        <div class="profile-role" id="profile-role-sidebar">—</div>
+        <div class="profile-dept" id="profile-dept-sidebar"></div>
       </div>
-      <button class="profile-edit-btn" title="Editar perfil">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
-      </button>
     </div>
 
     <!-- Navegación -->
@@ -93,6 +86,32 @@
         <span>Estadísticas</span>
       </a>
 
+      <!-- ── Gestión ── -->
+      <div class="nav-group-label" style="margin-top:8px">Gestión</div>
+
+      <a class="nav-item" onclick="navigate('students', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+        </svg>
+        <span>Alumnos</span>
+      </a>
+
+      <!-- Solo visible para admin (app.js oculta .admin-only si el rol es maestro) -->
+      <a class="nav-item admin-only" onclick="navigate('teachers', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="8" r="4"/><path d="M4 20v-1a8 8 0 0 1 16 0v1"/>
+        </svg>
+        <span>Maestros</span>
+      </a>
+
+      <a class="nav-item admin-only" onclick="navigate('admins', this)">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span>Administradores</span>
+      </a>
+
+      <!-- ── Cuenta ── -->
       <div class="nav-group-label" style="margin-top:8px">Cuenta</div>
 
       <a class="nav-item" onclick="navigate('profile', this)">
@@ -105,7 +124,7 @@
       <a class="nav-item" onclick="navigate('settings', this)">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
         <span>Configuración</span>
       </a>
@@ -167,7 +186,9 @@
 
     <div class="content">
 
-      <!-- VISTA: RESUMEN -->
+      <!-- ══════════════════════════════════════
+           VISTA: RESUMEN
+      ══════════════════════════════════════ -->
       <div class="view active" id="view-dashboard">
         <div class="kpi-row">
           <div class="kpi-card accent">
@@ -265,7 +286,9 @@
       </div><!-- /view-dashboard -->
 
 
-      <!-- VISTA: EN EL LABORATORIO -->
+      <!-- ══════════════════════════════════════
+           VISTA: EN EL LABORATORIO
+      ══════════════════════════════════════ -->
       <div class="view" id="view-inside">
         <div class="card">
           <div class="card-head">
@@ -282,7 +305,9 @@
       </div><!-- /view-inside -->
 
 
-      <!-- VISTA: REGISTRO DE ACCESOS -->
+      <!-- ══════════════════════════════════════
+           VISTA: REGISTRO DE ACCESOS
+      ══════════════════════════════════════ -->
       <div class="view" id="view-access">
         <div class="card">
           <div class="card-head">
@@ -310,7 +335,9 @@
       </div><!-- /view-access -->
 
 
-      <!-- VISTA: ESTADÍSTICAS -->
+      <!-- ══════════════════════════════════════
+           VISTA: ESTADÍSTICAS
+      ══════════════════════════════════════ -->
       <div class="view" id="view-stats">
         <div class="stats-grid">
           <div class="card">
@@ -329,37 +356,139 @@
       </div><!-- /view-stats -->
 
 
-      <!-- VISTA: MI PERFIL -->
+      <!-- ══════════════════════════════════════
+           VISTA: GESTIÓN DE ALUMNOS
+           (visible para admin y maestro)
+      ══════════════════════════════════════ -->
+      <div class="view" id="view-students">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Gestión de Alumnos</div>
+              <div class="card-sub">Registra, edita y elimina alumnos</div>
+            </div>
+            <button class="btn-sm" onclick="crudOpenAdd('estudiante')">+ Agregar alumno</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nombre completo</th>
+                  <th>Matrícula</th>
+                  <th>Grado / Grupo</th>
+                  <th>Fecha registro</th>
+                  <th>Actualizado por</th>
+                  <th>Fecha actualización</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="students-tbody">
+                <tr><td colspan="7" class="table-empty">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-students -->
+
+
+      <!-- ══════════════════════════════════════
+           VISTA: GESTIÓN DE MAESTROS (admin)
+      ══════════════════════════════════════ -->
+      <div class="view admin-only" id="view-teachers">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Gestión de Maestros</div>
+              <div class="card-sub">Administra los maestros del sistema</div>
+            </div>
+            <button class="btn-sm" onclick="crudOpenAdd('maestro')">+ Agregar maestro</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nombre completo</th>
+                  <th>Número de cuenta</th>
+                  <th>Correo</th>
+                  <th>Fecha registro</th>
+                  <th>Actualizado por</th>
+                  <th>Fecha actualización</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="teachers-tbody">
+                <tr><td colspan="7" class="table-empty">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-teachers -->
+
+
+      <!-- ══════════════════════════════════════
+           VISTA: GESTIÓN DE ADMINISTRADORES (admin)
+      ══════════════════════════════════════ -->
+      <div class="view admin-only" id="view-admins">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Gestión de Administradores</div>
+              <div class="card-sub">Administra los administradores del sistema</div>
+            </div>
+            <button class="btn-sm" onclick="crudOpenAdd('admin')">+ Agregar administrador</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nombre completo</th>
+                  <th>Número de cuenta</th>
+                  <th>Correo</th>
+                  <th>Fecha registro</th>
+                  <th>Actualizado por</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="admins-tbody">
+                <tr><td colspan="6" class="table-empty">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /view-admins -->
+
+
+      <!-- ══════════════════════════════════════
+           VISTA: MI PERFIL
+      ══════════════════════════════════════ -->
       <div class="view" id="view-profile">
         <div class="profile-page-grid">
           <div class="card profile-card-main">
-            <div class="profile-big-avatar">MA</div>
-            <div class="profile-big-name">Dr. Marco Alvarado</div>
-            <div class="profile-big-role">Jefe de Laboratorio</div>
+            <div class="profile-big-avatar" id="page-profile-initials">??</div>
+            <div class="profile-big-name"   id="page-profile-name">—</div>
+            <div class="profile-big-role"   id="page-profile-role">—</div>
             <div class="profile-tags">
-              <span class="tag">CUCEI</span><span class="tag">Ing. en Sistemas</span><span class="tag">Activo</span>
+              <span class="tag">LabControl</span><span class="tag">Activo</span>
             </div>
             <div class="profile-meta-grid">
-              <div class="pmeta"><span>Correo</span><strong>m.alvarado@cucei.edu.mx</strong></div>
-              <div class="pmeta"><span>Extensión</span><strong>3847</strong></div>
-              <div class="pmeta"><span>Laboratorio</span><strong>Lab. Cómputo B-204</strong></div>
-              <div class="pmeta"><span>Turno</span><strong>07:00 — 15:00</strong></div>
+              <div class="pmeta"><span>Correo</span><strong id="page-profile-correo">—</strong></div>
+              <div class="pmeta"><span>Número de cuenta</span><strong id="page-profile-cuenta">—</strong></div>
             </div>
           </div>
           <div class="card profile-stats-card">
             <div class="card-head"><div class="card-title">Actividad del mes</div></div>
             <div class="profile-stat-list">
-              <div class="pstat"><div class="pstat-val">127</div><div class="pstat-label">Accesos supervisados</div></div>
-              <div class="pstat"><div class="pstat-val">14</div><div class="pstat-label">Alertas emitidas</div></div>
-              <div class="pstat"><div class="pstat-val">18</div><div class="pstat-label">Días activos</div></div>
-              <div class="pstat"><div class="pstat-val">3</div><div class="pstat-label">Grupos registrados</div></div>
+              <div class="pstat"><div class="pstat-val">—</div><div class="pstat-label">Accesos supervisados</div></div>
+              <div class="pstat"><div class="pstat-val">—</div><div class="pstat-label">Alertas emitidas</div></div>
             </div>
           </div>
         </div>
       </div><!-- /view-profile -->
 
 
-      <!-- VISTA: CONFIGURACIÓN -->
+      <!-- ══════════════════════════════════════
+           VISTA: CONFIGURACIÓN
+      ══════════════════════════════════════ -->
       <div class="view" id="view-settings">
         <div class="card">
           <div class="card-head"><div class="card-title">Configuración del sistema</div></div>
@@ -392,7 +521,7 @@
 
 
   <!-- ============================================================
-       MODALES
+       MODALES ORIGINALES (sin cambios)
   ============================================================ -->
 
   <!-- Cerrar sesión -->
@@ -400,7 +529,8 @@
     <div class="modal">
       <div class="modal-icon danger">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
         </svg>
       </div>
       <div class="modal-title">¿Cerrar sesión?</div>
@@ -454,10 +584,132 @@
     </div>
   </div>
 
-  <!-- Scripts: orden importante — data primero, luego alerts, luego app -->
+
+  <!-- ============================================================
+       MODALES NUEVOS — GESTIÓN DE PERSONAS
+  ============================================================ -->
+
+  <!-- PASO 1: Reconocimiento facial (antes de registrar) -->
+  <div class="modal-overlay" id="faceModal" onclick="if(event.target.id==='faceModal'){crudCloseModal('faceModal')}">
+    <div class="modal face-modal">
+
+      <div class="modal-title" id="faceModalTitle">Verificar presencia</div>
+      <div class="modal-desc">Apunta la cámara hacia el rostro de la persona para confirmar su presencia antes de registrarla.</div>
+
+      <div class="face-scanner-wrap">
+        <video class="face-video" id="face-video" autoplay muted playsinline></video>
+        <canvas class="face-canvas" id="face-canvas" style="display:none"></canvas>
+        <!-- Marcas de esquina decorativas -->
+        <div class="face-corner tl"></div>
+        <div class="face-corner tr"></div>
+        <div class="face-corner bl"></div>
+        <div class="face-corner br"></div>
+      </div>
+
+      <div class="face-status waiting" id="face-status">Iniciando cámara…</div>
+
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="crudCloseModal('faceModal')">Cancelar</button>
+        <button class="btn-confirm accent" id="btn-face-confirm" onclick="crudFaceConfirmed()" disabled>
+          Continuar al registro →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PASO 2: Formulario de datos de la persona -->
+  <div class="modal-overlay" id="personModal" onclick="if(event.target.id==='personModal'){crudCloseModal('personModal')}">
+    <div class="modal person-modal">
+
+      <div class="modal-title" id="personModalTitle">Agregar persona</div>
+
+      <!-- Nombre -->
+      <div class="fm-field">
+        <label class="fm-label">Nombre(s)</label>
+        <input class="fm-input" type="text" id="fm-nombre" placeholder="Ej. María Isabel">
+      </div>
+
+      <!-- Apellidos -->
+      <div class="fm-grid">
+        <div class="fm-field">
+          <label class="fm-label">Apellido paterno</label>
+          <input class="fm-input" type="text" id="fm-ap" placeholder="Torres">
+        </div>
+        <div class="fm-field">
+          <label class="fm-label">Apellido materno</label>
+          <input class="fm-input" type="text" id="fm-am" placeholder="Ríos (opcional)">
+        </div>
+      </div>
+
+      <!-- Número de cuenta -->
+      <div class="fm-field">
+        <label class="fm-label">Número de cuenta / Matrícula</label>
+        <input class="fm-input" type="text" id="fm-cuenta" placeholder="Ej. 20220001">
+      </div>
+
+      <!-- Correo (maestro / admin) -->
+      <div class="fm-field" id="fm-correo-group">
+        <label class="fm-label">Correo institucional</label>
+        <input class="fm-input" type="email" id="fm-correo" placeholder="usuario@ucol.mx">
+      </div>
+
+      <!-- Grado y Grupo (estudiante) -->
+      <div class="fm-grid" id="fm-grado-grupo-group">
+        <div class="fm-field">
+          <label class="fm-label">Grado</label>
+          <input class="fm-input" type="number" id="fm-grado" min="1" max="12" placeholder="3">
+        </div>
+        <div class="fm-field">
+          <label class="fm-label">Grupo</label>
+          <input class="fm-input" type="text" id="fm-grupo" maxlength="3" placeholder="A">
+        </div>
+      </div>
+
+      <!-- Contraseña (maestro / admin) -->
+      <div class="fm-field" id="fm-pwd-group">
+        <label class="fm-label">Contraseña</label>
+        <input class="fm-input" type="password" id="fm-pwd" placeholder="Contraseña obligatoria">
+      </div>
+
+      <div class="modal-actions" style="margin-top:4px">
+        <button class="btn-cancel" onclick="crudCloseModal('personModal')">Cancelar</button>
+        <button class="btn-confirm info" onclick="crudSave()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmar eliminación -->
+  <div class="modal-overlay" id="deleteModal" onclick="if(event.target.id==='deleteModal'){crudCloseModal('deleteModal')}">
+    <div class="modal">
+      <div class="modal-icon danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6"/><path d="M14 11v6"/>
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+        </svg>
+      </div>
+      <div class="modal-title">¿Eliminar registro?</div>
+      <div class="modal-desc" id="deleteModalDesc">Esta acción no se puede deshacer.</div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="crudCloseModal('deleteModal')">Cancelar</button>
+        <button class="btn-confirm danger" onclick="crudConfirmDelete()">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCRIPTS
+       Orden: data.js → alerts.js → app.js → crud.js
+       (face-api carga en paralelo desde CDN)
+  ============================================================ -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
   <script src="js/data.js"></script>
   <script src="js/alerts.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/crud.js"></script>
 
 </body>
 </html>

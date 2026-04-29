@@ -2,6 +2,27 @@
    app.js — Lógica principal del dashboard.
 ═══════════════════════════════════════════════════════ */
 
+/* ── Guard de sesión ─────────────────────────────────────────────────────────
+   Si no hay sesión activa redirige al login.
+   Solo pueden acceder maestros y administradores.
+────────────────────────────────────────────────────────────────────────────── */
+(function checkSession() {
+  const raw = sessionStorage.getItem('usuario_login');
+  if (!raw) {
+    window.location.href = '../login/login.html';
+    return;
+  }
+  const u = JSON.parse(raw);
+  if (u.rol !== 'admin' && u.rol !== 'maestro') {
+    sessionStorage.removeItem('usuario_login');
+    window.location.href = '../login/login.html';
+  }
+})();
+
+const _SESION   = JSON.parse(sessionStorage.getItem('usuario_login') || '{}');
+const _ES_ADMIN = _SESION.rol === 'admin';
+
+
 /* ================================================================
    4. RENDERIZADO DEL DASHBOARD
 ================================================================ */
@@ -135,7 +156,7 @@ function renderAccessTable() {
 
   let rows = [...ACCESS_LOG].reverse();  // más reciente primero
 
-  if (typeF)   rows = rows.filter(r => r.type === typeF);
+  if (typeF)   rows = rows.filter(r => r.type   === typeF);
   if (careerF) rows = rows.filter(r => r.career === careerF);
 
   if (rows.length === 0) {
@@ -237,66 +258,51 @@ function updateSidebarBadge() {
 
 /* ================================================================
    5. NAVEGACIÓN ENTRE VISTAS
-   Cada sección es un div.view; solo uno tiene class="active" a la vez.
 ================================================================ */
 
-/* Metadatos de cada vista para actualizar el header */
 const viewMeta = {
   dashboard: { title: 'Resumen del laboratorio',    sub: 'Vista general en tiempo real' },
   inside:    { title: 'Personas en el laboratorio', sub: 'Presencia actual en tiempo real' },
   access:    { title: 'Registro de accesos',        sub: 'Historial de entradas y salidas' },
   stats:     { title: 'Estadísticas de uso',        sub: 'Análisis de visitas y tendencias' },
   profile:   { title: 'Mi perfil',                  sub: 'Información del responsable del laboratorio' },
-  settings:  { title: 'Configuración',              sub: 'Preferencias del sistema' }
+  settings:  { title: 'Configuración',              sub: 'Preferencias del sistema' },
+  // vistas de gestión
+  students:  { title: 'Gestión de Alumnos',         sub: 'Registra, edita y elimina alumnos' },
+  teachers:  { title: 'Gestión de Maestros',        sub: 'Administra los maestros del sistema' },
+  admins:    { title: 'Gestión de Administradores', sub: 'Administra los administradores del sistema' }
 };
 
-/**
- * Navega a una vista.
- * @param {string} viewId  - ID de la vista (ej. 'dashboard', 'access')
- * @param {Element} navEl  - El elemento <a> del nav que fue clickeado
- */
 function navigate(viewId, navEl) {
-  // Ocultar todas las vistas
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
 
-  // Mostrar la vista seleccionada
   const target = document.getElementById(`view-${viewId}`);
   if (target) target.classList.add('active');
 
-  // Resaltar el item del nav activo
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   if (navEl) navEl.classList.add('active');
 
-  // Actualizar título y subtítulo del header
   const meta = viewMeta[viewId] || {};
   setEl('header-title', meta.title || viewId);
   setEl('header-sub',   meta.sub   || '');
 
-  // Cerrar sidebar en móvil al navegar
   closeSidebar();
 }
 
 
 /* ================================================================
    6. SIDEBAR
-   Móvil (<900px): se desliza con class .open en el sidebar.
-   Escritorio: se colapsa con class .sidebar-collapsed en body,
-   el CSS ajusta automáticamente el margen del .main.
 ================================================================ */
 
-/** Abre o cierra el sidebar según el tamaño de pantalla */
 function toggleSidebar() {
   if (window.innerWidth <= 900) {
-    // Móvil: deslizar sidebar y mostrar overlay
     document.getElementById('sidebar').classList.toggle('open');
     document.getElementById('overlay').classList.toggle('active');
   } else {
-    // Escritorio: colapsar/expandir con clase en body
     document.body.classList.toggle('sidebar-collapsed');
   }
 }
 
-/** Cierra el sidebar en móvil (lo llama el overlay y navigate) */
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
@@ -307,19 +313,16 @@ function closeSidebar() {
    7. MODALES
 ================================================================ */
 
-/** Abre un modal por su ID */
 function showModal(id) {
   const el = document.getElementById(id);
   if (el) el.classList.add('open');
 }
 
-/** Cierra un modal por su ID */
 function closeModal(id) {
   const el = document.getElementById(id);
   if (el) el.classList.remove('open');
 }
 
-/** Cierra el modal si se hace clic en el overlay (fuera del modal) */
 function closeModalOutside(event, id) {
   if (event.target.id === id) closeModal(id);
 }
@@ -329,7 +332,6 @@ function closeModalOutside(event, id) {
    8. PANEL DE NOTIFICACIONES (campana del header)
 ================================================================ */
 
-/** Muestra u oculta el panel lateral de alertas */
 function toggleNotifPanel() {
   document.getElementById('notifPanel').classList.toggle('open');
 }
@@ -339,7 +341,6 @@ function toggleNotifPanel() {
    9. RELOJ Y FECHA EN TIEMPO REAL
 ================================================================ */
 
-/** Actualiza el reloj HH:MM:SS cada segundo */
 function updateClock() {
   const now = new Date();
   const hh  = String(now.getHours()).padStart(2, '0');
@@ -348,7 +349,6 @@ function updateClock() {
   setEl('lab-clock', `${hh}:${mm}:${ss}`);
 }
 
-/** Escribe la fecha actual en el header (ej. "mié. 18 mar. 2026") */
 function updateHeaderDate() {
   const d    = new Date();
   const opts = { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' };
@@ -358,29 +358,17 @@ function updateHeaderDate() {
 
 /* ================================================================
    10. MODO OSCURO / CLARO
-   El toggle en Configuración llama a esta función.
 ================================================================ */
 
-/** Alterna entre tema oscuro (default) y claro */
 function toggleDark(isDark) {
-  // isDark=true → quitar class light (mantener oscuro)
-  // isDark=false → agregar class light
   document.body.classList.toggle('light', !isDark);
 }
 
 
 /* ================================================================
    11. ACTUALIZACIÓN AUTOMÁTICA DE DATOS
-   En producción: reemplaza el cuerpo de refreshLiveData()
-   con una llamada fetch() a tu API backend.
 ================================================================ */
 
-/**
- * Refresca los datos en vivo.
- * Actualmente simula el refresh. En producción:
- *   const data = await fetch('/api/lab/inside').then(r => r.json());
- *   // actualizar INSIDE_NOW con data, luego llamar render...
- */
 function refreshLiveData() {
   updateKPIs();
   renderInsideListDash();
@@ -392,66 +380,54 @@ function refreshLiveData() {
 
 /* ================================================================
    12. INICIALIZACIÓN
-   Se ejecuta cuando el DOM está listo.
 ================================================================ */
 document.addEventListener('DOMContentLoaded', () => {
-  // Arrancar reloj y fecha
+
+  // ── Perfil dinámico desde la sesión ──
+  const initials = ((_SESION.nombre||'')[0] + (_SESION.apellido_paterno||'')[0]).toUpperCase();
+  document.querySelectorAll('.profile-avatar-span').forEach(el => el.textContent = initials);
+  setEl('profile-name-sidebar',  `${_SESION.nombre||''} ${_SESION.apellido_paterno||''}`);
+  setEl('profile-role-sidebar',  _SESION.rol === 'admin' ? 'Administrador' : 'Maestro');
+  setEl('profile-dept-sidebar',  _SESION.correo || _SESION.numero_cuenta || '');
+
+  // Perfil de la vista "Mi perfil"
+  setEl('page-profile-initials', initials);
+  setEl('page-profile-name',     `${_SESION.nombre||''} ${_SESION.apellido_paterno||''} ${_SESION.apellido_materno||''}`);
+  setEl('page-profile-role',     _SESION.rol === 'admin' ? 'Administrador' : 'Maestro');
+  setEl('page-profile-correo',   _SESION.correo        || '—');
+  setEl('page-profile-cuenta',   _SESION.numero_cuenta || '—');
+
+  // ── Mostrar/ocultar secciones de admin ──
+  if (!_ES_ADMIN) {
+    document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
+  }
+
+  // ── Cargar tablas de gestión desde la BD ──
+  crudLoadAll().catch(e => console.warn('CRUD init:', e.message));
+
+  // ── Reloj y fecha ──
   updateClock();
   updateHeaderDate();
   setInterval(updateClock, 1000);
 
-  // Pintar todo el dashboard
+  // ── Renderizado del dashboard ──
   renderAll();
 
-  // Primera revisión de alertas: actualiza contadores y listas
-  // pero NO dispara modal/toast (marcar alertas actuales como ya vistas)
+  // ── Alertas ──
   const alertsAtLoad = getActiveAlerts();
-  alertsAtLoad.forEach(p => notifiedIds.add(p.id));  // silenciar alertas previas al abrir
+  alertsAtLoad.forEach(p => notifiedIds.add(p.id));
   checkAlerts();
 
-  // Revisión periódica: a partir de aquí SÍ se disparan modales para nuevas alertas
   setInterval(checkAlerts, 60_000);
-
-  // Actualizar barras de tiempo y tabla de dentro cada 30s
-  setInterval(() => {
-    renderInsideListDash();
-    renderInsideTable();
-  }, 30_000);
-
-  // Refresco general de datos cada 30s
+  setInterval(() => { renderInsideListDash(); renderInsideTable(); }, 30_000);
   setInterval(refreshLiveData, 30_000);
 
-  // Conectar botón de confirmar cierre de sesión
-  const btnConfirmLogout = document.getElementById('btn-confirm-logout');
-  if (btnConfirmLogout) {
-    btnConfirmLogout.addEventListener('click', () => {
-      // Aquí puedes agregar lógica de logout real (limpiar sesión, redirigir, etc.)
-      // Por ejemplo: window.location.href = '/login';
-      document.body.innerHTML = `
-        <div style="
-          display:flex; flex-direction:column; align-items:center; justify-content:center;
-          min-height:100vh; background:var(--bg); font-family:var(--font-ui); gap:16px;
-        ">
-          <div style="
-            width:64px; height:64px; border-radius:50%;
-            background:var(--accent-dim); border:2px solid var(--accent);
-            display:flex; align-items:center; justify-content:center;
-          ">
-            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="28" height="28">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-          </div>
-          <p style="font-size:18px; font-weight:600; color:var(--text-1)">Sesión cerrada</p>
-          <p style="font-size:13px; color:var(--text-3)">Has salido de LabControl correctamente.</p>
-          <button onclick="location.reload()" style="
-            margin-top:8px; padding:10px 24px;
-            background:var(--accent); color:#0F1117;
-            border:none; border-radius:8px; font-size:13px; font-weight:700;
-            cursor:pointer; font-family:var(--font-ui);
-          ">Volver al inicio</button>
-        </div>`;
+  // ── Cerrar sesión ──
+  const btnLogout = document.getElementById('btn-confirm-logout');
+  if (btnLogout) {
+    btnLogout.addEventListener('click', () => {
+      sessionStorage.removeItem('usuario_login');
+      window.location.href = '../login/login.html';
     });
   }
 });
