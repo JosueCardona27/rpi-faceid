@@ -1951,6 +1951,17 @@ class App(tk.Tk):
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
+    def _notificar_dashboard(self):
+        """Escribe un archivo de señal para que el dashboard refresque."""
+        try:
+            import os as _os
+            _ruta = _os.path.join(_os.path.dirname(__file__),
+                                  '..', 'database', '.refresh_signal')
+            with open(_ruta, 'w') as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+
     def _on_entrada_sensor(self, uid):
         """S1→S2 detectado. Solo cuenta si hubo escaneo reciente (< 15s)."""
         if time.time() - self._t_acceso_ok > 15:
@@ -1959,11 +1970,15 @@ class App(tk.Tk):
         if self.sensores_ir:
             self.sensores_ir.incrementar()
         uid_real = getattr(self, '_ultimo_uid_ok', None)
+        if not uid_real:
+            print("[IR] Entrada ignorada — uid no disponible")
+            return
         try:
             registrar_acceso(uid_real, "entrada", detalle="Sensor IR S1→S2")
             print(f"[IR] Entrada registrada en BD (uid={uid_real})")
         except Exception as e:
             print(f"[IR] Error registrando entrada: {e}")
+        self._notificar_dashboard()
 
     def _on_salida_boton(self):
         """Botón presionado — arma el flag, espera que pase por S2→S1."""
@@ -1994,6 +2009,7 @@ class App(tk.Tk):
             print("[IR] Salida registrada en BD")
         except Exception as e:
             print(f"[IR] Error registrando salida: {e}")
+        self._notificar_dashboard()
 
     def _resultado_ok(self, r):
         if time.time() - self._t_acceso_ok < 8:

@@ -34,9 +34,9 @@ class Dashboard:
         aplicar_estilo_treeview()
         self._build_ui()
         self._start_clock()
+        self.root.after(1_000, self._monitor_señal_refresh)
         self.root.after(600, lambda: self.navigate("resumen"))
-        self.root.after(30_000, self._ciclo_refresh)
-
+        self.root.after(5_000, self._ciclo_refresh)
     # ─────────────────────────────────────────────────────────────
     # UI PRINCIPAL
     # ─────────────────────────────────────────────────────────────
@@ -260,7 +260,27 @@ class Dashboard:
                 self.views[self._current].refresh()
         except Exception as e:
             print(f"[REFRESH] {e}")
-        self.root.after(30_000, self._ciclo_refresh)
+        self.root.after(5_000, self._ciclo_refresh)  # ← era 30_000
+
+    def _monitor_señal_refresh(self):
+        """Detecta cambios en el archivo de señal y refresca al instante."""
+        import os
+        _ruta = os.path.join(os.path.dirname(__file__),
+                             '..', 'database', '.refresh_signal')
+        self._ultima_señal = 0.0
+        def _check():
+            if not self.root.winfo_exists():
+                return
+            try:
+                mtime = os.path.getmtime(_ruta)
+                if mtime != self._ultima_señal:
+                    self._ultima_señal = mtime
+                    if self._current in self.views:
+                        self.views[self._current].refresh()
+            except Exception:
+                pass
+            self.root.after(1_000, _check)
+        _check()
 
     # ─────────────────────────────────────────────────────────────
     # LOGOUT

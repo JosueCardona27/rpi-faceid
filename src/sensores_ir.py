@@ -265,10 +265,24 @@ class SensoresIR:
         with self._lock_contador:
             self._personas_dentro = 0
         print("[IR] Contador reseteado a 0")
+    
+    def incrementar(self):
+        """Llamado desde interfaz.py cuando la entrada es válida."""
+        with self._lock_contador:
+            self._personas_dentro += 1
+            n = self._personas_dentro
+        print(f"[IR] +1 → dentro: {n}")
+        return n
+
+    def decrementar(self):
+        """Llamado desde interfaz.py cuando la salida es válida."""
+        with self._lock_contador:
+            self._personas_dentro = max(0, self._personas_dentro - 1)
+            n = self._personas_dentro
+        print(f"[IR] -1 → dentro: {n}")
+        return n
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PRUEBA INDEPENDIENTE — python3 sensores_ir.py
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=== Prueba Sensores FC-51 (secuencia) ===")
@@ -286,6 +300,15 @@ if __name__ == "__main__":
         on_entrada=entrada_detectada,
         on_salida=salida_detectada
     )
+    sensores.iniciar()
+
+    try:
+        while True:
+            time.sleep(1)
+            print(f"Personas dentro: {sensores.personas_dentro}", end="\r")
+    except KeyboardInterrupt:
+        sensores.detener()
+        print("\nPrueba finalizada.")
 
     def incrementar(self):
         """Llamado desde interfaz.py cuando la entrada es válida."""
