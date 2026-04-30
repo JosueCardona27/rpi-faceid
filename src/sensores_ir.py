@@ -178,11 +178,7 @@ class SensoresIR:
                                     procesar = None
 
                             if procesar == "salida":
-                                with self._lock_contador:
-                                    self._personas_dentro = max(0, self._personas_dentro - 1)
-                                    dentro = self._personas_dentro
-                                print(f"[IR] SALIDA (S2→S1) — personas dentro: {dentro}")
-                                self._registrar_en_bd("salida")
+                                print("[IR] SALIDA (S2→S1) — notificando a interfaz")
                                 try:
                                     self._on_salida(self._usuario_id)
                                 except Exception as e:
@@ -221,11 +217,7 @@ class SensoresIR:
                                     procesar = None
 
                             if procesar == "entrada":
-                                with self._lock_contador:
-                                    self._personas_dentro += 1
-                                    dentro = self._personas_dentro
-                                print(f"[IR] ENTRADA (S1→S2) — personas dentro: {dentro}")
-                                self._registrar_en_bd("entrada")
+                                print("[IR] ENTRADA (S1→S2) — notificando a interfaz")
                                 try:
                                     self._on_entrada(self._usuario_id)
                                 except Exception as e:
@@ -294,6 +286,23 @@ if __name__ == "__main__":
         on_entrada=entrada_detectada,
         on_salida=salida_detectada
     )
+
+    def incrementar(self):
+        """Llamado desde interfaz.py cuando la entrada es válida."""
+        with self._lock_contador:
+            self._personas_dentro += 1
+            n = self._personas_dentro
+        print(f"[IR] +1 → dentro: {n}")
+        return n
+
+    def decrementar(self):
+        """Llamado desde interfaz.py cuando la salida es válida."""
+        with self._lock_contador:
+            self._personas_dentro = max(0, self._personas_dentro - 1)
+            n = self._personas_dentro
+        print(f"[IR] -1 → dentro: {n}")
+        return n
+
     sensores.iniciar()
 
     try:
