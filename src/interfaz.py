@@ -766,7 +766,7 @@ class App(tk.Tk):
                                         start=270, extent=180, fill=color, outline=color)
             self.scan_btn_cv.create_rectangle(r, 0, BTN_W - r, BTN_H_b,
                                               fill=color, outline="")
-            icono = "⬤  INICIAR ESCANEO" if listo else "🔒  Completa el formulario para continuar"
+            icono = "⬤  INICIAR ESCANEO" if listo else "Completa el formulario para continuar"
             self.scan_btn_cv.create_text(BTN_W // 2, BTN_H_b // 2,
                                          text=icono, font=(FONT, 10, "bold"), fill=tc)
 
@@ -1913,8 +1913,6 @@ class App(tk.Tk):
                 "Persona no reconocida." if hay
                 else "No hay usuarios registrados."))
             if hay:
-                self.after(0, lambda: self.hdr_status_var.set("DENEGADO ✕"))
-                self.after(0, lambda: self.hdr_status_lbl.config(fg="#FF8888"))
                 self.after(0, lambda: self.hdr_nombre_var.set(""))
                 self.after(0, lambda: self._draw_pill(DANGER))
                 self.after(0, lambda: self.posicion_var.set("Acceso denegado"))
