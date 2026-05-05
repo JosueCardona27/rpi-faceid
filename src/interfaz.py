@@ -49,7 +49,14 @@ except Exception as e:
         def desconectar(self):      pass
     servo = _ServoStub()
     print("[SERVO] Modulo no disponible — continuando sin servo.")
-
+    
+try:
+    from ultrasonico import SensorUltrasonico
+    _SENSOR_OK = True
+except Exception as e:
+    print(f"[SENSOR] Error al importar ultrasonico: {e}")
+    _SENSOR_OK = False
+    
 BG      = "#F5F0E8"   # beige institucional (fondo general)
 PANEL   = "#FFFFFF"   # blanco puro (paneles/cards)
 CARD    = "#EAE5D8"   # beige claro (fondos de campos)
@@ -69,7 +76,28 @@ GOLD_LN = "#B5860D"   # dorado institucional UdeC
 
 COLOR_ROL = {"estudiante": NAVY_LN, "maestro": TEAL_LN, "admin": ACCENT}
 
-W, H    = 600, 1024
+import platform as _platform
+
+def _es_raspberry():
+    nodo = _platform.node().lower()
+    return "raspberry" in nodo or "raspberrypi" in nodo
+
+# ── Resolución adaptativa ─────────────────────────────────────────────────────
+# En Raspberry Pi ajustamos al tamaño real de pantalla en modo vertical.
+# En escritorio usamos el tamaño fijo de diseño (600×1024).
+if _es_raspberry():
+    import tkinter as _tk_tmp
+    _r = _tk_tmp.Tk(); _r.withdraw()
+    _SW = _r.winfo_screenwidth()
+    _SH = _r.winfo_screenheight()
+    _r.destroy(); del _tk_tmp, _r
+    # Forzar orientación vertical: el lado corto es el ancho
+    W = min(_SW, _SH)
+    H = max(_SW, _SH)
+else:
+    W = 600
+    H = 1024
+
 PANEL_H = 400   # altura del panel de formulario/resultados (parte superior)
 CAM_H_V = H - PANEL_H  # altura de la zona de cámara (parte inferior)
 # Compatibilidad con referencias antiguas
@@ -186,18 +214,22 @@ class App(tk.Tk):
         self.geometry(f"{W}x{H}+0+0")
         self.resizable(False, False)
         # Sin bordes solo en Raspberry Pi (pantalla embebida)
-        import platform
-        if "raspberry" in platform.node().lower() or "raspberrypi" in platform.node().lower():
+        if _es_raspberry():
             self.overrideredirect(True)
+            self.attributes("-fullscreen", True)
         self.configure(bg=BG)
 
         FONT = "Segoe UI"
-        self.f_title  = tkfont.Font(family=FONT, size=16, weight="bold")
-        self.f_sub    = tkfont.Font(family=FONT, size=9)
-        self.f_btn    = tkfont.Font(family=FONT, size=10, weight="bold")
-        self.f_label  = tkfont.Font(family=FONT, size=9)
-        self.f_status = tkfont.Font(family=FONT, size=9,  weight="bold")
-        self.f_zona   = tkfont.Font(family=FONT, size=8)
+        # Escalar fuentes proporcionalmente al ancho de pantalla
+        _fs = max(0.7, W / 600)   # factor de escala (1.0 en diseño base 600px)
+        def _fs_i(n): return max(6, int(round(n * _fs)))
+
+        self.f_title  = tkfont.Font(family=FONT, size=_fs_i(16), weight="bold")
+        self.f_sub    = tkfont.Font(family=FONT, size=_fs_i(9))
+        self.f_btn    = tkfont.Font(family=FONT, size=_fs_i(10), weight="bold")
+        self.f_label  = tkfont.Font(family=FONT, size=_fs_i(9))
+        self.f_status = tkfont.Font(family=FONT, size=_fs_i(9),  weight="bold")
+        self.f_zona   = tkfont.Font(family=FONT, size=_fs_i(8))
 
         self.picam2      = None
         self._cap        = None
@@ -235,6 +267,20 @@ class App(tk.Tk):
         self._ov_lock  = threading.Lock()
 
         self._build_main()
+        
+        # Sensor ultrasonico
+        self.sensor = None
+        if _SENSOR_OK:
+            try:
+                self.sensor = SensorUltrasonico(
+                    on_persona = self._sensor_persona_detectada,
+                    on_sin_persona= self._sensor_sin_persona,
+                    )
+                self.sensor.iniciar()
+                print("[SENSOR] Sensor ultrasonico activo")
+            except Exception as e:
+                print(f"[SENSOR] No se pudo iniciar el sensor: {e}")
+                self.sensor = None
 
     @staticmethod
     def _lighten(hx):
@@ -245,6 +291,68 @@ class App(tk.Tk):
     def _clear(self):
         for w in self.winfo_children():
             w.destroy()
+    
+    # ── Callbacks del sensor ultrasónico ─────────────────────────────────────
+    def _sensor_persona_detectada(self):
+        """El sensor detectó una persona — encender cámara si está en modo acceso."""
+        if self._modo_acceso and not self.cam_running:
+            print("[SENSOR] Persona detectada — encendiendo cámara")
+            self.after(0, self._activar_camara_acceso)
+
+    def _sensor_sin_persona(self):
+        """La persona se alejó — apagar cámara y modo espera."""
+        if self._modo_acceso and self.cam_running:
+            print("[SENSOR] Sin persona — apagando cámara")
+            self.after(0, self._desactivar_camara_acceso)
+
+    def _activar_camara_acceso(self):
+        """Enciende la cámara en la pantalla de acceso."""
+        if self.cam_running:
+            return
+        try:
+            self.cam_running = True
+            self._start_cam()
+            self._resetear_pantalla_acceso()
+            threading.Thread(target=self._loop_camara,
+                             args=(CAM_W, CAM_H_V), daemon=True).start()
+            threading.Thread(target=self._loop_analisis,
+                             daemon=True).start()
+            threading.Thread(target=self._monitor_cara,
+                             daemon=True).start()
+            threading.Thread(target=self._guia_posicion,
+                             daemon=True).start()
+        except Exception as e:
+            print(f"[SENSOR] Error al encender cámara: {e}")
+            self.cam_running = False
+
+    def _desactivar_camara_acceso(self):
+        """Apaga la cámara y muestra pantalla negra de espera."""
+        if not self.cam_running:
+            return
+        self._stop_cam()
+        servo.espera()
+        try:
+            # pantalla negra de espera
+            negro = np.zeros((CAM_H_V, CAM_W, 3), dtype=np.uint8)
+            imgtk_negro = _imgtk(negro, CAM_W, CAM_H_V)
+            self.cam_label.imgtk = imgtk_negro
+            self.cam_label.configure(image=imgtk_negro)
+        except Exception:
+            pass
+        try:
+            self.resultado_var.set("Esperando persona...")
+            self.resultado_label.config(fg=ACCENT)
+            self.candidato_var.set("")
+            self.detalle_var.set("")
+            self._set_sim_bar(0, BORDER)
+            self._set_overlay(None, "")
+            self.hdr_status_var.set("")
+            self.hdr_nombre_var.set("")
+            self._draw_pill(ACCENT2)
+            self.posicion_var.set("Acércate para identificarte")
+        except Exception:
+            pass
+
 
     def _stop_cam(self):
         self.cam_running = False
@@ -384,6 +492,7 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_main(self):
         self._clear()
+        self._modo_acceso = False          # ← limpiar al regresar al menú principal
         self.geometry(f"{W}x{H}+0+0")
         self.configure(bg=BG)
 
@@ -391,7 +500,7 @@ class App(tk.Tk):
         cv.place(x=0, y=0)
 
         # ── Barra superior blanca (logo UdeC + título + cerrar) ───────────────
-        TOP_H = 64
+        TOP_H = max(52, int(64 * H / 1024))
         cv.create_rectangle(0, 0, W, TOP_H, fill="#FFFFFF", outline="")
         # Separador inferior
         cv.create_rectangle(0, TOP_H - 1, W, TOP_H, fill=BORDER, outline="")
@@ -444,7 +553,7 @@ class App(tk.Tk):
                             tags="drag_zone")
 
         # ── Segunda barra: fondo azul marino + acento verde biselado ───────────
-        SUB_H = 46
+        SUB_H = max(38, int(46 * H / 1024))
         SUB_Y = TOP_H
         cv.create_rectangle(0, SUB_Y, W, SUB_Y + SUB_H, fill=NAVY_LN, outline="")
 
@@ -478,7 +587,7 @@ class App(tk.Tk):
                        fill=BORDER, width=1)
 
         # ── Tarjetas horizontales ─────────────────────────────────────────────
-        BW, BH = W - 40, 148
+        BW, BH = W - 40, max(130, int(148 * H / 1024))
         BX = 20
         BY1 = CONTENT_Y + 58
         BY2 = BY1 + BH + 22
@@ -680,6 +789,7 @@ class App(tk.Tk):
         # Asegurar que cualquier cámara previa esté liberada antes de reiniciar
         self._stop_cam()
         self._clear()
+        self._modo_acceso = False          # ← resetear para no heredar estado de Acceso
         SCREEN_H = self.winfo_screenheight()
         WIN_H    = min(H, SCREEN_H)
         self.geometry(f"{W}x{WIN_H}+0+0")
@@ -687,11 +797,11 @@ class App(tk.Tk):
         self._registro_cancelado = False
 
         FONT   = "Segoe UI"
-        HDR_H  = 50
-        PILL_H = 34
+        HDR_H  = max(42, int(50 * WIN_H / 1024))
+        PILL_H = max(28, int(34 * WIN_H / 1024))
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 8
-        BOT_H  = 120
+        BOT_H  = max(100, int(120 * WIN_H / 1024))
         CAM_H  = WIN_H - CAM_Y - BOT_H
 
         # ── Header oscuro ─────────────────────────────────────────────────────
@@ -766,7 +876,7 @@ class App(tk.Tk):
                                         start=270, extent=180, fill=color, outline=color)
             self.scan_btn_cv.create_rectangle(r, 0, BTN_W - r, BTN_H_b,
                                               fill=color, outline="")
-            icono = "⬤  INICIAR ESCANEO" if listo else "🔒  Completa el formulario para continuar"
+            icono = "⬤  INICIAR ESCANEO" if listo else "Completa el formulario para continuar"
             self.scan_btn_cv.create_text(BTN_W // 2, BTN_H_b // 2,
                                          text=icono, font=(FONT, 10, "bold"), fill=tc)
 
@@ -1658,11 +1768,11 @@ class App(tk.Tk):
         self._set_overlay(None, "")
 
         FONT   = "Segoe UI"
-        HDR_H  = 56
-        PILL_H = 36
+        HDR_H  = max(46, int(56 * WIN_H / 1024))
+        PILL_H = max(28, int(36 * WIN_H / 1024))
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 10
-        BOT_H  = 130
+        BOT_H  = max(110, int(130 * WIN_H / 1024))
         CAM_H  = WIN_H - CAM_Y - BOT_H   # cámara ocupa exactamente el espacio central
 
         # ── Header verde ──────────────────────────────────────────────────────
@@ -1913,8 +2023,6 @@ class App(tk.Tk):
                 "Persona no reconocida." if hay
                 else "No hay usuarios registrados."))
             if hay:
-                self.after(0, lambda: self.hdr_status_var.set("DENEGADO ✕"))
-                self.after(0, lambda: self.hdr_status_lbl.config(fg="#FF8888"))
                 self.after(0, lambda: self.hdr_nombre_var.set(""))
                 self.after(0, lambda: self._draw_pill(DANGER))
                 self.after(0, lambda: self.posicion_var.set("Acceso denegado"))
@@ -2081,7 +2189,9 @@ class App(tk.Tk):
     def on_close(self):
         self._stop_cam()
         servo.desconectar()
-        self.destroy()
+        if self.sensor:
+            self.sensor.detener()
+        self.destroy() 
 
 
 if __name__ == "__main__":
