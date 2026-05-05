@@ -492,6 +492,7 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_main(self):
         self._clear()
+        self._modo_acceso = False          # ← limpiar al regresar al menú principal
         self.geometry(f"{W}x{H}+0+0")
         self.configure(bg=BG)
 
@@ -788,6 +789,7 @@ class App(tk.Tk):
         # Asegurar que cualquier cámara previa esté liberada antes de reiniciar
         self._stop_cam()
         self._clear()
+        self._modo_acceso = False          # ← resetear para no heredar estado de Acceso
         SCREEN_H = self.winfo_screenheight()
         WIN_H    = min(H, SCREEN_H)
         self.geometry(f"{W}x{WIN_H}+0+0")
