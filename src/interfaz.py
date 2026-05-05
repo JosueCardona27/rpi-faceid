@@ -49,7 +49,14 @@ except Exception as e:
         def desconectar(self):      pass
     servo = _ServoStub()
     print("[SERVO] Modulo no disponible — continuando sin servo.")
-
+    
+try:
+    from ultrasonico import SensorUltrasonico
+    _SENSOR_OK = True
+except Exception as e:
+    print(f"[SENSOR] Error al importar ultrasonico: {e}")
+    _SENSOR_OK = False
+    
 BG      = "#F5F0E8"   # beige institucional (fondo general)
 PANEL   = "#FFFFFF"   # blanco puro (paneles/cards)
 CARD    = "#EAE5D8"   # beige claro (fondos de campos)
@@ -235,6 +242,20 @@ class App(tk.Tk):
         self._ov_lock  = threading.Lock()
 
         self._build_main()
+        
+        # Sensor ultrasonico
+        self.sensor = None
+        if _SENSOR_OK:
+            try:
+                self.sensor = SensorUltrasonico(
+                    on_persona = self._sensor_persona_detectada,
+                    on_sin_persona= self._sensor_sin_persona,
+                    )
+                self.sensor.iniciar()
+                print("[SENSOR] Sensor ultrasonico activo")
+            except Exception as e:
+                print(f"[SENSOR] No se pudo iniciar el sensor: {e}")
+                self.sensor = None
 
     @staticmethod
     def _lighten(hx):
@@ -245,6 +266,68 @@ class App(tk.Tk):
     def _clear(self):
         for w in self.winfo_children():
             w.destroy()
+    
+    # ── Callbacks del sensor ultrasónico ─────────────────────────────────────
+    def _sensor_persona_detectada(self):
+        """El sensor detectó una persona — encender cámara si está en modo acceso."""
+        if self._modo_acceso and not self.cam_running:
+            print("[SENSOR] Persona detectada — encendiendo cámara")
+            self.after(0, self._activar_camara_acceso)
+
+    def _sensor_sin_persona(self):
+        """La persona se alejó — apagar cámara y modo espera."""
+        if self._modo_acceso and self.cam_running:
+            print("[SENSOR] Sin persona — apagando cámara")
+            self.after(0, self._desactivar_camara_acceso)
+
+    def _activar_camara_acceso(self):
+        """Enciende la cámara en la pantalla de acceso."""
+        if self.cam_running:
+            return
+        try:
+            self.cam_running = True
+            self._start_cam()
+            self._resetear_pantalla_acceso()
+            threading.Thread(target=self._loop_camara,
+                             args=(CAM_W, CAM_H_V), daemon=True).start()
+            threading.Thread(target=self._loop_analisis,
+                             daemon=True).start()
+            threading.Thread(target=self._monitor_cara,
+                             daemon=True).start()
+            threading.Thread(target=self._guia_posicion,
+                             daemon=True).start()
+        except Exception as e:
+            print(f"[SENSOR] Error al encender cámara: {e}")
+            self.cam_running = False
+
+    def _desactivar_camara_acceso(self):
+        """Apaga la cámara y muestra pantalla negra de espera."""
+        if not self.cam_running:
+            return
+        self._stop_cam()
+        servo.espera()
+        try:
+            # pantalla negra de espera
+            negro = np.zeros((CAM_H_V, CAM_W, 3), dtype=np.uint8)
+            imgtk_negro = _imgtk(negro, CAM_W, CAM_H_V)
+            self.cam_label.imgtk = imgtk_negro
+            self.cam_label.configure(image=imgtk_negro)
+        except Exception:
+            pass
+        try:
+            self.resultado_var.set("Esperando persona...")
+            self.resultado_label.config(fg=ACCENT)
+            self.candidato_var.set("")
+            self.detalle_var.set("")
+            self._set_sim_bar(0, BORDER)
+            self._set_overlay(None, "")
+            self.hdr_status_var.set("")
+            self.hdr_nombre_var.set("")
+            self._draw_pill(ACCENT2)
+            self.posicion_var.set("Acércate para identificarte")
+        except Exception:
+            pass
+
 
     def _stop_cam(self):
         self.cam_running = False
@@ -2079,6 +2162,8 @@ class App(tk.Tk):
     def on_close(self):
         self._stop_cam()
         servo.desconectar()
+        if self.sensor:
+            self.sensor.detener()
         self.destroy()
 
 
