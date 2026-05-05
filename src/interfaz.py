@@ -76,7 +76,28 @@ GOLD_LN = "#B5860D"   # dorado institucional UdeC
 
 COLOR_ROL = {"estudiante": NAVY_LN, "maestro": TEAL_LN, "admin": ACCENT}
 
-W, H    = 600, 1024
+import platform as _platform
+
+def _es_raspberry():
+    nodo = _platform.node().lower()
+    return "raspberry" in nodo or "raspberrypi" in nodo
+
+# ── Resolución adaptativa ─────────────────────────────────────────────────────
+# En Raspberry Pi ajustamos al tamaño real de pantalla en modo vertical.
+# En escritorio usamos el tamaño fijo de diseño (600×1024).
+if _es_raspberry():
+    import tkinter as _tk_tmp
+    _r = _tk_tmp.Tk(); _r.withdraw()
+    _SW = _r.winfo_screenwidth()
+    _SH = _r.winfo_screenheight()
+    _r.destroy(); del _tk_tmp, _r
+    # Forzar orientación vertical: el lado corto es el ancho
+    W = min(_SW, _SH)
+    H = max(_SW, _SH)
+else:
+    W = 600
+    H = 1024
+
 PANEL_H = 400   # altura del panel de formulario/resultados (parte superior)
 CAM_H_V = H - PANEL_H  # altura de la zona de cámara (parte inferior)
 # Compatibilidad con referencias antiguas
@@ -193,18 +214,22 @@ class App(tk.Tk):
         self.geometry(f"{W}x{H}+0+0")
         self.resizable(False, False)
         # Sin bordes solo en Raspberry Pi (pantalla embebida)
-        import platform
-        if "raspberry" in platform.node().lower() or "raspberrypi" in platform.node().lower():
+        if _es_raspberry():
             self.overrideredirect(True)
+            self.attributes("-fullscreen", True)
         self.configure(bg=BG)
 
         FONT = "Segoe UI"
-        self.f_title  = tkfont.Font(family=FONT, size=16, weight="bold")
-        self.f_sub    = tkfont.Font(family=FONT, size=9)
-        self.f_btn    = tkfont.Font(family=FONT, size=10, weight="bold")
-        self.f_label  = tkfont.Font(family=FONT, size=9)
-        self.f_status = tkfont.Font(family=FONT, size=9,  weight="bold")
-        self.f_zona   = tkfont.Font(family=FONT, size=8)
+        # Escalar fuentes proporcionalmente al ancho de pantalla
+        _fs = max(0.7, W / 600)   # factor de escala (1.0 en diseño base 600px)
+        def _fs_i(n): return max(6, int(round(n * _fs)))
+
+        self.f_title  = tkfont.Font(family=FONT, size=_fs_i(16), weight="bold")
+        self.f_sub    = tkfont.Font(family=FONT, size=_fs_i(9))
+        self.f_btn    = tkfont.Font(family=FONT, size=_fs_i(10), weight="bold")
+        self.f_label  = tkfont.Font(family=FONT, size=_fs_i(9))
+        self.f_status = tkfont.Font(family=FONT, size=_fs_i(9),  weight="bold")
+        self.f_zona   = tkfont.Font(family=FONT, size=_fs_i(8))
 
         self.picam2      = None
         self._cap        = None
@@ -474,7 +499,7 @@ class App(tk.Tk):
         cv.place(x=0, y=0)
 
         # ── Barra superior blanca (logo UdeC + título + cerrar) ───────────────
-        TOP_H = 64
+        TOP_H = max(52, int(64 * H / 1024))
         cv.create_rectangle(0, 0, W, TOP_H, fill="#FFFFFF", outline="")
         # Separador inferior
         cv.create_rectangle(0, TOP_H - 1, W, TOP_H, fill=BORDER, outline="")
@@ -527,7 +552,7 @@ class App(tk.Tk):
                             tags="drag_zone")
 
         # ── Segunda barra: fondo azul marino + acento verde biselado ───────────
-        SUB_H = 46
+        SUB_H = max(38, int(46 * H / 1024))
         SUB_Y = TOP_H
         cv.create_rectangle(0, SUB_Y, W, SUB_Y + SUB_H, fill=NAVY_LN, outline="")
 
@@ -561,7 +586,7 @@ class App(tk.Tk):
                        fill=BORDER, width=1)
 
         # ── Tarjetas horizontales ─────────────────────────────────────────────
-        BW, BH = W - 40, 148
+        BW, BH = W - 40, max(130, int(148 * H / 1024))
         BX = 20
         BY1 = CONTENT_Y + 58
         BY2 = BY1 + BH + 22
@@ -770,11 +795,11 @@ class App(tk.Tk):
         self._registro_cancelado = False
 
         FONT   = "Segoe UI"
-        HDR_H  = 50
-        PILL_H = 34
+        HDR_H  = max(42, int(50 * WIN_H / 1024))
+        PILL_H = max(28, int(34 * WIN_H / 1024))
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 8
-        BOT_H  = 120
+        BOT_H  = max(100, int(120 * WIN_H / 1024))
         CAM_H  = WIN_H - CAM_Y - BOT_H
 
         # ── Header oscuro ─────────────────────────────────────────────────────
@@ -1741,11 +1766,11 @@ class App(tk.Tk):
         self._set_overlay(None, "")
 
         FONT   = "Segoe UI"
-        HDR_H  = 56
-        PILL_H = 36
+        HDR_H  = max(46, int(56 * WIN_H / 1024))
+        PILL_H = max(28, int(36 * WIN_H / 1024))
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 10
-        BOT_H  = 130
+        BOT_H  = max(110, int(130 * WIN_H / 1024))
         CAM_H  = WIN_H - CAM_Y - BOT_H   # cámara ocupa exactamente el espacio central
 
         # ── Header verde ──────────────────────────────────────────────────────
@@ -2164,7 +2189,7 @@ class App(tk.Tk):
         servo.desconectar()
         if self.sensor:
             self.sensor.detener()
-        self.destroy()
+        self.destroy() 
 
 
 if __name__ == "__main__":
