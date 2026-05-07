@@ -199,72 +199,88 @@ _META = {
 class GestionView(tk.Frame):
     def __init__(self, parent, dashboard, rol_tipo: str):
         super().__init__(parent, bg=BG)
-        self.dash     = dashboard
-        self.rol_tipo = rol_tipo
+        self.dash         = dashboard
+        self.rol_tipo     = rol_tipo
+        self.compact_mode = getattr(dashboard, "compact_mode", False)
         self._datos:  list[dict] = []
         self._build()
 
     def _build(self):
+        cp = self.compact_mode
         title_key, sub_key = _META.get(
             self.rol_tipo, ("title_alumnos", "sub_alumnos"))
-        c = tk.Frame(self, bg=CARD, padx=14, pady=12)
-        c.pack(fill="both", expand=True, padx=18, pady=14)
+
+        padx_card = 10 if cp else 14
+        pady_card = 8  if cp else 12
+        c = tk.Frame(self, bg=CARD, padx=padx_card, pady=pady_card)
+        c.pack(fill="both", expand=True,
+               padx=10 if cp else 18, pady=10 if cp else 14)
 
         # Cabecera
         hdr = tk.Frame(c, bg=CARD)
-        hdr.pack(fill="x", pady=(0, 10))
-        card_head(hdr, t(title_key), t(sub_key))
+        hdr.pack(fill="x", pady=(0, 8))
+        card_head(hdr, t(title_key), t(sub_key), compact=cp)
 
         bframe = tk.Frame(hdr, bg=CARD)
         bframe.pack(side="right")
+        btn_px = 7 if cp else 10
+        btn_py = 3 if cp else 5
+        btn_fz = 8 if cp else 9
         tk.Button(bframe, text=t("editar"), command=self._editar_sel,
-                  bg=BLUE, fg="white", relief="flat", font=("Arial", 9),
-                  padx=10, pady=5, cursor="hand2").pack(side="left", padx=4)
+                  bg=BLUE, fg="white", relief="flat", font=("Arial", btn_fz),
+                  padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
         tk.Button(bframe, text=t("eliminar"), command=self._eliminar_sel,
-                  bg=RED, fg="white", relief="flat", font=("Arial", 9),
-                  padx=10, pady=5, cursor="hand2").pack(side="left", padx=4)
-        tk.Button(bframe, text=t("agregar"), command=self._agregar,
-                  bg=ACCENT, fg=BG, relief="flat",
-                  font=("Arial", 9, "bold"),
-                  padx=10, pady=5, cursor="hand2").pack(side="left", padx=4)
+                  bg=RED, fg="white", relief="flat", font=("Arial", btn_fz),
+                  padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
+        # BOTÓN AGREGAR — comentado temporalmente (sin función activa)
+        # Para reactivar, descomenta las siguientes líneas:
+        # tk.Button(bframe, text=t("agregar"), command=self._agregar,
+        #           bg=ACCENT, fg=BG, relief="flat",
+        #           font=("Arial", btn_fz, "bold"),
+        #           padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
 
         # Búsqueda
         srow = tk.Frame(c, bg=CARD)
-        srow.pack(fill="x", pady=(0, 8))
+        srow.pack(fill="x", pady=(0, 6))
         tk.Label(srow, text=t("buscar_lbl"), bg=CARD, fg=T2,
-                 font=("Arial", 9)).pack(side="left")
+                 font=("Arial", 8 if cp else 9)).pack(side="left")
         self._sq = tk.StringVar()
         self._sq.trace_add("write", lambda *_: self._filtrar())
-        tk.Entry(srow, textvariable=self._sq, width=30,
+        tk.Entry(srow, textvariable=self._sq,
+                 width=20 if cp else 30,
                  bg=CARD2, fg=T1, insertbackground=T1,
-                 relief="flat", font=("Arial", 9)
-                 ).pack(side="left", padx=6, ipady=4)
+                 relief="flat", font=("Arial", 8 if cp else 9)
+                 ).pack(side="left", padx=5, ipady=3)
         self._lbl_n = tk.Label(srow, text="", bg=CARD, fg=T3,
-                                font=("Arial", 8))
+                                font=("Arial", 7 if cp else 8))
         self._lbl_n.pack(side="right")
 
-        # Tabla
+        # ── Tabla con scroll horizontal en compact ───────────────────────
+        # estudiante: 190+95+80+90+140+90 = 685px → xscroll en compact
+        # otros:      190+95+180+90+140+90 = 785px → xscroll en compact
         if self.rol_tipo == "estudiante":
             cols = [
-                ("nombre", t("col_nombre"),      230, "w"),
-                ("cuenta", t("col_cuenta"),      110, "center"),
-                ("grado",  t("col_grado_grupo"),  90, "center"),
-                ("freg",   t("col_registrado"),  100, "center"),
-                ("actpor", t("col_act_por"),      160, "w"),
-                ("fact",   t("col_ult_act"),      100, "center"),
+                ("nombre", t("col_nombre"),      190, "w"),
+                ("cuenta", t("col_cuenta"),       95, "center"),
+                ("grado",  t("col_grado_grupo"),  80, "center"),
+                ("freg",   t("col_registrado"),   90, "center"),
+                ("actpor", t("col_act_por"),      140, "w"),
+                ("fact",   t("col_ult_act"),       90, "center"),
             ]
         else:
             cols = [
-                ("nombre", t("col_nombre"),      220, "w"),
-                ("cuenta", t("col_cuenta"),      110, "center"),
-                ("correo", t("correo"),           200, "w"),
-                ("freg",   t("col_registrado"),  100, "center"),
-                ("actpor", t("col_act_por"),      160, "w"),
-                ("fact",   t("col_ult_act"),      100, "center"),
+                ("nombre", t("col_nombre"),      190, "w"),
+                ("cuenta", t("col_cuenta"),       95, "center"),
+                ("correo", t("correo"),           180, "w"),
+                ("freg",   t("col_registrado"),   90, "center"),
+                ("actpor", t("col_act_por"),      140, "w"),
+                ("fact",   t("col_ult_act"),       90, "center"),
             ]
+
         wrap = tk.Frame(c, bg=CARD)
         wrap.pack(fill="both", expand=True)
-        self.tree = make_treeview(wrap, cols, height=22)
+        # En compact: xscroll=True para poder deslizar y ver todas las columnas
+        self.tree = make_treeview(wrap, cols, height=20 if cp else 22, xscroll=cp)
 
     def on_show(self):
         self.refresh()
