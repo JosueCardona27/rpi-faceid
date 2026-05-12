@@ -30,7 +30,8 @@ except Exception:
     print("[CAM] Modo webcam OpenCV")
 
 from face_engine import (extraer_caracteristicas, dibujar_overlay,
-                          TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
+                          TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I,
+                          detectar_oclusion)
 from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          guardar_vector_unico, reconocer_persona,
                          eliminar_persona, verificar_duplicado_facial,
@@ -208,7 +209,8 @@ class App(tk.Tk):
         self._frame_lock   = threading.Lock()
 
         self._analisis = {"vector": None, "coords": None,
-                          "frame_id": -1, "tipo": None}
+                          "frame_id": -1, "tipo": None,
+                          "ocluido": False, "razon_oclusion": ""}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
         self._tipo_esperado  = None
@@ -368,11 +370,19 @@ class App(tk.Tk):
                 modo=self._modo_deteccion,
                 tipo_esperado=self._tipo_esperado)
 
+            ocluido, razon_oclusion = False, ""
+            if coords is not None and not self._modo_acceso:
+                ocluido, razon_oclusion = detectar_oclusion(frame, coords)
+                if ocluido:
+                    vector = None
+
             with self._analisis_lock:
-                self._analisis["vector"]   = vector
-                self._analisis["coords"]   = coords
-                self._analisis["frame_id"] = frame_id
-                self._analisis["tipo"]     = tipo
+                self._analisis["vector"]         = vector
+                self._analisis["coords"]         = coords
+                self._analisis["frame_id"]       = frame_id
+                self._analisis["tipo"]           = tipo
+                self._analisis["ocluido"]        = ocluido
+                self._analisis["razon_oclusion"] = razon_oclusion
 
     def _safe(self, fn):
         if self.cam_running:
@@ -1368,12 +1378,15 @@ class App(tk.Tk):
                     t_paso_activo = duracion; break
 
                 with self._analisis_lock:
-                    frame_id = self._analisis["frame_id"]
-                    v        = self._analisis["vector"]
-                    tipo_det = self._analisis["tipo"]
+                    frame_id       = self._analisis["frame_id"]
+                    v              = self._analisis["vector"]
+                    tipo_det       = self._analisis["tipo"]
+                    coords_det     = self._analisis["coords"]
+                    ocluido        = self._analisis.get("ocluido", False)
+                    razon_oclusion = self._analisis.get("razon_oclusion", "")
 
                 angulo_ok     = (tipo_det == tipo_esperado) and (v is not None)
-                cara_presente = (v is not None)
+                cara_presente = coords_det is not None
                 ahora = time.time()
 
                 if angulo_ok:
@@ -1417,6 +1430,20 @@ class App(tk.Tk):
                             lambda pi=paso_idx,
                                    nm=n_muestras_paso[paso_idx]:
                             self._update_barra_paso(pi, nm))
+                    elif ocluido:
+                        _oc_msgs = {
+                            "mascara":     "Retira la mascarilla",
+                            "gorra":       "Retira la gorra o visera",
+                            "mano":        "No cubras tu rostro",
+                            "obstruccion": "Descubre el rostro",
+                        }
+                        msg_oc = _oc_msgs.get(razon_oclusion, "Descubre el rostro")
+                        self._set_overlay((255, 130, 0),
+                                          f"OBSTRUIDO — {msg_oc}")
+                        self.after(0, lambda m=msg_oc: self._safe(
+                            lambda: self.status_var.set(m)))
+                        self.after(0, lambda: self._safe(
+                            lambda: self.prog_label.config(fg=WARNING)))
                     elif cara_presente and not angulo_ok:
                         self._set_overlay((255, 59, 92),
                                           f"ESPERANDO — {msg_correccion}")

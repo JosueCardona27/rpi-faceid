@@ -519,6 +519,84 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
     return embedding, bbox, tipo
 
 
+# =============================================================================
+#  DETECCION DE OCLUSION FACIAL
+# =============================================================================
+
+def _ratio_piel(region):
+    """Fraccion de pixeles de tono piel (HSV amplio) en una region BGR."""
+    if region is None or region.size == 0:
+        return 0.0
+    hsv  = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    m1   = cv2.inRange(hsv, np.array([0,   20, 70]),  np.array([25,  200, 255]))
+    m2   = cv2.inRange(hsv, np.array([155, 20, 70]),  np.array([179, 200, 255]))
+    mask = cv2.bitwise_or(m1, m2)
+    return float(np.count_nonzero(mask)) / mask.size
+
+
+def detectar_oclusion(frame, bbox):
+    """
+    Detecta si el rostro tiene alguna obstruccion (mascara, gorra, mano, etc.).
+    Debe llamarse despues de extraer_caracteristicas() con el mismo frame
+    para que _ultimo_face_yunet este actualizado.
+
+    Returns:
+        (ocluido: bool, razon: str)
+        razon: "mascara" | "gorra" | "mano" | "obstruccion" | ""
+    """
+    if bbox is None:
+        return False, ""
+
+    x, y, w, h = bbox
+    h_img, w_img = frame.shape[:2]
+    x  = max(0, x);  y  = max(0, y)
+    x2 = min(w_img, x + w);  y2 = min(h_img, y + h)
+    w  = x2 - x;  h = y2 - y
+    if w < 20 or h < 20:
+        return False, ""
+
+    # --- Check 1: geometria de landmarks YuNet ---
+    if _ultimo_face_yunet is not None:
+        fr = _ultimo_face_yunet
+        fy = float(fr[1])
+        fh = float(fr[3])
+
+        eye_y = min(float(fr[5]), float(fr[7]))    # ojo mas arriba
+        mth_y = max(float(fr[11]), float(fr[13]))  # boca mas abajo
+
+        eye_y_rel = (eye_y - fy) / (fh + 1e-6)
+        mth_y_rel = (mth_y - fy) / (fh + 1e-6)
+        spread    = mth_y_rel - eye_y_rel
+
+        # Spread ojo-boca muy pequeno: algo cubre parte del rostro
+        if spread < 0.22:
+            return True, "obstruccion"
+
+        # Ojos muy abajo respecto a la caja: gorra o mano sobre frente
+        if eye_y_rel > 0.60:
+            return True, "gorra"
+
+        # Boca demasiado alta: mascara o mano en zona inferior
+        if mth_y_rel < 0.48:
+            return True, "obstruccion"
+
+    # --- Check 2: ratio de piel por zonas (mascara / mano) ---
+    mid_y      = y + h // 2
+    skin_sup   = _ratio_piel(frame[y:mid_y, x:x2])
+    skin_inf   = _ratio_piel(frame[mid_y:y2, x:x2])
+    skin_total = _ratio_piel(frame[y:y2, x:x2])
+
+    # Zona superior con piel pero inferior sin → mascara
+    if skin_sup > 0.20 and skin_inf < 0.12:
+        return True, "mascara"
+
+    # Poca piel en todo el rostro → mano u objeto tapando cara
+    if skin_total < 0.08:
+        return True, "mano"
+
+    return False, ""
+
+
 def distancia_coseno(v1, v2):
     """
     Distancia coseno entre vectores L2-normalizados. Rango [0, 2].
