@@ -4,12 +4,12 @@ interfaz.py
 Interfaz grafica del sistema de acceso facial.
 Pantalla tactil 7" 1024x600.
 
-Formulario de registro:
-  - Todos:          nombre, apellidos, numero de cuenta (8 digitos)
-  - Admin/Maestro:  correo + contrasena (minimo 6 caracteres)
-  - Estudiante:     grado (1-20) + grupo (A-Z)
-
-v5.5  |  4 pasos  |  MobileFaceNet 512 dims
+CAMBIOS:
+  - Eliminado campo "Numero de cuenta" del formulario de registro
+  - Eliminado campo "Telefono"
+  - Validacion mas estricta en pasos: requiere angulo correcto para avanzar
+  - MUESTRAS_MIN_PASO aumentado a 5 para forzar que el usuario mantenga el angulo
+  - Mensaje de instruccion mas claro en cada paso
 """
 
 import tkinter as tk
@@ -37,7 +37,8 @@ from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          eliminar_persona, verificar_duplicado_facial,
                          validar_numero_cuenta, validar_correo,
                          validar_contrasena, validar_grado,
-                         validar_grupo, ROLES_VALIDOS)
+                         validar_grupo, ROLES_VALIDOS,
+                         registrar_acceso)
 
 try:
     from servo_puerta.servo_control import servo
@@ -50,6 +51,13 @@ except Exception as e:
         def desconectar(self):      pass
     servo = _ServoStub()
     print("[SERVO] Modulo no disponible — continuando sin servo.")
+
+try:
+    from ultrasonico import SensorUltrasonico
+    _SENSOR_OK = True
+except Exception as e:
+    print(f"[SENSOR] Error al importar ultrasonico: {e}")
+    _SENSOR_OK = False
 
 BG      = "#F5F0E8"   # beige institucional (fondo general)
 PANEL   = "#FFFFFF"   # blanco puro (paneles/cards)
@@ -69,6 +77,15 @@ TEAL_LN = "#007A55"   # verde azulado UdeC
 GOLD_LN = "#B5860D"   # dorado institucional UdeC
 
 COLOR_ROL = {"estudiante": NAVY_LN, "maestro": TEAL_LN, "admin": ACCENT}
+
+# Intento de correccion de la camara
+_CAM_NIGHT_THRESHOLD  = 60
+_CAM_HYSTERESIS       = 10
+_CAM_RED_GAIN         = 0.80
+_CAM_GREEN_GAIN       = 1.00
+_CAM_BLUE_GAIN        = 0.75
+_CAM_CCM = np.array([_CAM_BLUE_GAIN, _CAM_GREEN_GAIN, _CAM_RED_GAIN],
+                    dtype=np.float32)
 
 W, H    = 600, 1024
 PANEL_H = 400   # altura del panel de formulario/resultados (parte superior)
@@ -236,7 +253,43 @@ class App(tk.Tk):
         self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
+        # Estado día/noche para corrección de color OV5647
+        self._cam_modo       = "day"
+        self._cam_pending    = "day"
+        self._cam_hyst_count = 0
+        print("[CAM] Corrección de color OV5647 NoIR activa")
+
         self._build_main()
+
+        # ── Sensor ultrasónico ────────────────────────────────────────────────
+        self.sensor = None
+        if _SENSOR_OK:
+            try:
+                self.sensor = SensorUltrasonico(
+                    on_persona     = self._sensor_persona_detectada,
+                    on_sin_persona = self._sensor_sin_persona,
+                )
+                self.sensor.iniciar()
+                print("[SENSOR] Sensor ultrasónico activo")
+            except Exception as e:
+                print(f"[SENSOR] No se pudo iniciar el sensor: {e}")
+                self.sensor = None
+
+        self.sensores_ir = None
+        try:
+            from sensores_ir import SensoresIR
+            self.sensores_ir = SensoresIR(
+                on_entrada = self._on_entrada_sensor,
+                on_salida  = self._on_salida_sensor,
+            )
+            self.sensores_ir.iniciar()
+            print("[IR] Sensores FC-51 activos")
+        except Exception as e:
+            print(f"[IR] No se pudieron iniciar los sensores IR: {e}")
+            self.sensores_ir = None
+
+        # ── Conectar botón de salida con el contador ──────────────────────────────
+        servo._on_salida_manual = self._on_salida_boton
 
     @staticmethod
     def _lighten(hx):
@@ -247,6 +300,60 @@ class App(tk.Tk):
     def _clear(self):
         for w in self.winfo_children():
             w.destroy()
+
+    # ── Callbacks del sensor ultrasónico ─────────────────────────────────────
+    def _sensor_persona_detectada(self):
+        """El sensor detectó una persona — encender cámara si está en modo acceso."""
+        if self._modo_acceso and not self.cam_running:
+            print("[SENSOR] Persona detectada — encendiendo cámara")
+            self.after(0, self._activar_camara_acceso)
+
+    def _sensor_sin_persona(self):
+        """La persona se alejó — apagar cámara y modo espera."""
+        if self._modo_acceso and self.cam_running:
+            print("[SENSOR] Sin persona — apagando cámara")
+            self.after(0, self._desactivar_camara_acceso)
+
+    def _activar_camara_acceso(self):
+        """Enciende la cámara en la pantalla de acceso."""
+        if self.cam_running:
+            return
+        try:
+            self.cam_running = True
+            self._start_cam()
+            self._resetear_pantalla_acceso()
+            threading.Thread(target=self._loop_camara,
+                             args=(CAM_W, CAM_H_V), daemon=True).start()
+            threading.Thread(target=self._loop_analisis,
+                             daemon=True).start()
+            threading.Thread(target=self._monitor_cara,
+                             daemon=True).start()
+            threading.Thread(target=self._guia_posicion,
+                             daemon=True).start()
+        except Exception as e:
+            print(f"[SENSOR] Error al encender cámara: {e}")
+            self.cam_running = False
+
+    def _desactivar_camara_acceso(self):
+        """Apaga la cámara y muestra pantalla de espera."""
+        if not self.cam_running:
+            return
+        self._stop_cam()
+        self.after(300, lambda: self.cam_label.configure(image=""))
+        servo.espera()
+        try:
+            self.resultado_var.set("Esperando persona...")
+            self.resultado_label.config(fg=ACCENT)
+            self.candidato_var.set("")
+            self.detalle_var.set("")
+            self._set_sim_bar(0, BORDER)
+            self._set_overlay(None, "")
+            self.hdr_status_var.set("")
+            self.hdr_nombre_var.set("")
+            self._draw_pill(ACCENT2)
+            self.posicion_var.set("Acércate para identificarte")
+        except Exception:
+            pass
 
     def _stop_cam(self):
         self.cam_running = False
@@ -293,11 +400,42 @@ class App(tk.Tk):
     def _leer_frame(self):
         try:
             if USAR_PICAM:
-                return self.picam2.capture_array()
+                raw = self.picam2.capture_array()
             else:
                 ret, raw = self._cap.read()
-                return raw if ret else None
-        except:
+                if not ret:
+                    return None
+
+            if raw is None:
+                return None
+
+            # ── Detección día/noche ───────────────────────────────────────────
+            gray      = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            lum       = float(np.mean(gray))
+            candidato = "night" if lum < _CAM_NIGHT_THRESHOLD else "day"
+
+            if candidato == self._cam_pending:
+                self._cam_hyst_count += 1
+            else:
+                self._cam_pending    = candidato
+                self._cam_hyst_count = 1
+
+            if self._cam_hyst_count >= _CAM_HYSTERESIS:
+                if self._cam_modo != self._cam_pending:
+                    self._cam_modo       = self._cam_pending
+                    self._cam_hyst_count = 0
+                    print(f"[CAM] Modo cambiado → {self._cam_modo.upper()} "
+                          f"(luminosidad: {lum:.1f})")
+
+            # ── Corrección de color (solo en modo día) ────────────────────────
+            if self._cam_modo == "day":
+                raw = np.clip(raw.astype(np.float32) * _CAM_CCM,
+                              0, 255).astype(np.uint8)
+
+            return raw
+
+        except Exception as e:
+            print(f"[CAM] Error en _leer_frame: {e}")
             return None
 
     def _loop_camara(self, max_w, max_h):
@@ -1963,8 +2101,72 @@ class App(tk.Tk):
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
+    def _notificar_dashboard(self):
+        """Escribe un archivo de señal para que el dashboard refresque."""
+        try:
+            import os as _os
+            _ruta = _os.path.join(_os.path.dirname(__file__),
+                                  '..', 'database', '.refresh_signal')
+            with open(_ruta, 'w') as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+
+    def _on_entrada_sensor(self, uid):
+        """S1→S2 detectado. Solo cuenta si hubo escaneo reciente (< 15s)."""
+        if time.time() - self._t_acceso_ok > 15:
+            print("[IR] Entrada ignorada — sin escaneo reciente")
+            return
+        if self.sensores_ir:
+            self.sensores_ir.incrementar()
+        uid_real = getattr(self, '_ultimo_uid_ok', None)
+        if not uid_real:
+            print("[IR] Entrada ignorada — uid no disponible")
+            return
+        try:
+            registrar_acceso(uid_real, "entrada", detalle="Sensor IR S1→S2")
+            print(f"[IR] Entrada registrada en BD (uid={uid_real})")
+        except Exception as e:
+            print(f"[IR] Error registrando entrada: {e}")
+        self._notificar_dashboard()
+
+    def _on_salida_boton(self):
+        """Botón presionado — arma el flag, espera que pase por S2→S1."""
+        self._t_boton_salida = time.time()
+        print("[IR] Botón presionado — esperando paso por sensores")
+
+    def _on_salida_sensor(self, uid):
+        """S2→S1 detectado. Solo cuenta si el botón fue presionado recientemente (< 15s)."""
+        t_boton = getattr(self, '_t_boton_salida', 0)
+        if time.time() - t_boton > 15:
+            print("[IR] Salida ignorada — botón no presionado recientemente")
+            return
+        self._t_boton_salida = 0
+        if self.sensores_ir:
+            self.sensores_ir.decrementar()
+        try:
+            from database import conectar
+            conn = conectar()
+            conn.execute("""
+                INSERT INTO registro_acceso
+                    (usuario_id, nombre, apellido_paterno, apellido_materno,
+                    numero_cuenta, rol, tipo_evento, detalle)
+                VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                        'estudiante', 'salida', 'Botón + Sensor S2→S1')
+            """)
+            conn.commit()
+            conn.close()
+            print("[IR] Salida registrada en BD")
+        except Exception as e:
+            print(f"[IR] Error registrando salida: {e}")
+        self._notificar_dashboard()
+
     def _resultado_ok(self, r):
+        if time.time() - self._t_acceso_ok < 8:
+            return
         self._t_acceso_ok = time.time()
+        self._ultimo_uid_ok = r.get("usuario_id")
+
         self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
         self.resultado_label.config(fg=SUCCESS)
@@ -1981,12 +2183,39 @@ class App(tk.Tk):
             self.detalle_lbl.config(fg="#AAFFAA")
         except Exception:
             pass
-        servo.abrir(r["nombre"])
+
+        # ── Verificar límite de capacidad ────────────────────────────────
+        import json as _json, os as _os
+        _cfg_path = _os.path.join(_os.path.dirname(__file__), '..', 'lab_config.json')
+        try:
+            with open(_cfg_path) as _f:
+                _cfg = _json.load(_f)
+            _capacidad = int(_cfg.get("capacidad_maxima", 999))
+        except Exception:
+            _capacidad = 999
+
+        _dentro = 0
+        if hasattr(self, 'sensores_ir') and self.sensores_ir:
+            _dentro = self.sensores_ir.personas_dentro
+
+        if _dentro >= _capacidad:
+            self.resultado_var.set(f"LABORATORIO LLENO ({_dentro}/{_capacidad})")
+            self.resultado_label.config(fg=DANGER)
+            try:
+                self.hdr_status_var.set(f"LLENO {_dentro}/{_capacidad}")
+                self.hdr_status_lbl.config(fg="#FF8888")
+                self._draw_pill(DANGER)
+            except Exception:
+                pass
+            servo.denegar()
+            print(f"[ACCESO] Laboratorio lleno ({_dentro}/{_capacidad}) — denegado")
+        else:
+            servo.abrir(r["nombre"])
+        # ─────────────────────────────────────────────────────────────────        
         self.after(4000, self._lanzar_verificacion)
 
     def _resultado_negado(self, r):
-    # Ignorar si el acceso fue concedido hace menos de 5 segundos
-        if time.time() - self._t_acceso_ok < 5:
+        if time.time() - self._t_acceso_ok < 8:
             self.after(4000, self._lanzar_verificacion)
             return
         self._set_overlay((255, 59, 92), "Denegado")
@@ -2008,13 +2237,30 @@ class App(tk.Tk):
         servo.denegar()
         self.after(4000, self._lanzar_verificacion)
 
+    def registrar_acceso_desconocido():
+        """Registra un intento fallido de persona no registrada."""
+        try:
+            from database import conectar
+            conn = conectar()
+            conn.execute("""
+                INSERT INTO registro_acceso
+                    (usuario_id, nombre, apellido_paterno, apellido_materno,
+                    numero_cuenta, rol, tipo_evento, detalle)
+                VALUES (NULL, 'Desconocido', '', '', NULL, 'estudiante',
+                        'intento_fallido', 'Rostro no reconocido')
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[ACCESO] Error registrando desconocido: {e}")
+
     def _guia_posicion(self):
         """Actualiza la instruccion de posicion en tiempo real con debounce."""
         DEBOUNCE_SIN_CARA = 1.2
         INTERVALO         = 0.5
         ultimo_msg   = ""
         t_sin_cara   = None
-
+        
         while self.cam_running:
             time.sleep(INTERVALO)
             if self.verificando:
@@ -2108,7 +2354,39 @@ class App(tk.Tk):
     def on_close(self):
         self._stop_cam()
         servo.desconectar()
+        if self.sensor:
+            self.sensor.detener()
         self.destroy()
+        if self.sensores_ir:
+            self.sensores_ir.detener()
+        self.destroy()
+    
+    def _modo_captura_biometrica(self, cuenta):
+        """
+        Modo especial para capturar rostro de un estudiante ya registrado.
+        Solo muestra la cámara y el proceso de captura biométrica.
+        """
+        print(f"[INTERFAZ] Modo captura biométrica para cuenta: {cuenta}")
+        self._clear()
+    
+        # Cargar datos del estudiante
+        from database import conectar
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("""
+            SELECT u.id, u.nombre, u.apellido_paterno, u.apellido_materno,
+               ed.grado, ed.grupo
+            FROM usuarios u
+            LEFT JOIN estudiantes_detalle ed ON ed.usuario_id = u.id
+            WHERE u.numero_cuenta = ? AND u.rol = 'estudiante'
+        """, (cuenta,))
+        row = c.fetchone()
+        conn.close()
+    
+        if not row:
+            messagebox.showerror("Error", f"No se encontró estudiante con cuenta {cuenta}")
+            self.destroy()
+            return
 
 
 if __name__ == "__main__":
