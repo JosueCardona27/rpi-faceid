@@ -17,6 +17,7 @@ from tkinter import font as tkfont
 import cv2
 import numpy as np
 import threading
+import hashlib
 import time
 from PIL import Image, ImageTk
 
@@ -38,7 +39,7 @@ from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          validar_numero_cuenta, validar_correo,
                          validar_contrasena, validar_grado,
                          validar_grupo, ROLES_VALIDOS,
-                         registrar_acceso)
+                         registrar_acceso, conectar)
 
 try:
     from servo_puerta.servo_control import servo
@@ -630,6 +631,7 @@ class App(tk.Tk):
         BX = 20
         BY1 = CONTENT_Y + 58
         BY2 = BY1 + BH + 22
+        BY3 = BY2 + BH + 22
 
         self._horiz_card_btn(cv, BX, BY1, BW, BH,
                              "Registrar",
@@ -641,12 +643,27 @@ class App(tk.Tk):
                              "Verificar identidad",
                              "Reconocimiento facial en tiempo real",
                              TEAL_LN, self._show_acceso)
+        self._horiz_card_btn(cv, BX, BY3, BW, BH,
+                             "Dashboard",
+                             "Panel de administración",
+                             "Gestión de usuarios, registros y estadísticas",
+                             GOLD_LN, self._ir_a_dashboard) # Cambiarlo en caso de no funcionar el acceso, es generico por lo que no existe
+                            #GOLD_LN, lambda: self._abrir_dashboard({'rol': 'admin'}))
 
         # ── Barra inferior ────────────────────────────────────────────────────
         cv.create_rectangle(0, H - 32, W, H, fill=NAVY_LN, outline="")
         cv.create_text(W // 2, H - 16,
                        text=f"Universidad de Colima · v5.5 · {int(TIEMPO_ESCANEO)}s por ciclo · máx {MAX_MUESTRAS_PASO} muestras/paso",
                        font=("Segoe UI", 7), fill="#AABBCC")
+
+    def _ir_a_dashboard(self):
+        """Abre el dashboard si hay un usuario autenticado con rol permitido."""
+        usuario = getattr(self, '_usuario_login', None)
+        if usuario and usuario.get('rol') in ('admin', 'maestro'):
+            self._abrir_dashboard(usuario)
+        else:
+            # Opcional: puedes mostrar un mensaje o simplemente no hacer nada.
+            pass
 
     def _card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd):
         r = 18
@@ -768,6 +785,24 @@ class App(tk.Tk):
                            fill="#FFFFFF", width=3)
             cc.create_line(ic_cx+13, ic_cy+29, ic_cx+25, ic_cy+29,
                            fill="#FFFFFF", width=3)
+        elif "DASHBOARD" in titulo.upper() or "Panel" in subtitulo:
+            ic_cx, ic_cy = bw // 2, h // 2
+            # Barras del gráfico (blancas)
+            bars = [(15, 28), (15, 20), (15, 24), (15, 16)]
+            bar_x = ic_cx - 24
+            for i, (w_bar, h_bar) in enumerate(bars):
+                x0 = bar_x + i * 14
+                y0 = ic_cy + 12 - h_bar
+                cc.create_rectangle(x0, y0, x0 + 10, ic_cy + 12,
+                                    fill="#FFFFFF", outline="")
+            # Línea base blanca
+            cc.create_line(ic_cx - 24, ic_cy + 12, ic_cx + 26, ic_cy + 12,
+                           fill="#FFFFFF", width=2)
+            # Flecha de tendencia (dorada con borde blanco)
+            cc.create_polygon(ic_cx + 20, ic_cy - 2,
+                              ic_cx + 26, ic_cy - 12,
+                              ic_cx + 32, ic_cy - 2,
+                              fill=color, outline="#FFFFFF", width=1)
         else:
             # Ícono: cara con escáner / check de acceso
             # Cara oval
@@ -1691,7 +1726,7 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     #  DIÁLOGO DE AUTENTICACIÓN PARA MENÚ
     # ══════════════════════════════════════════════════════════════════════════
-    def _pedir_auth_menu(self):
+    def _pedir_auth_menu(self, on_success=None):
         FONT  = "Segoe UI"
         BEIGE = "#F5E6C8"
         GREEN = "#1A7A4A"
@@ -1776,12 +1811,57 @@ class App(tk.Tk):
             if not cuenta or not pwd:
                 error_var.set("Completa ambos campos.")
                 return
-            # TODO: conectar validación real con base de datos
-            usuario = {"id": 0, "rol": "admin"}
-            overlay.destroy()
-            self._stop_cam()
-            self._usuario_login = usuario
-            self._build_main()
+
+            # ── Validación real contra la base de datos ────────────────
+            try:
+                conn = conectar()
+                c = conn.cursor()
+                if '@' in cuenta:
+                    c.execute("""
+                        SELECT id, nombre, apellido_paterno, apellido_materno,
+                               numero_cuenta, correo, rol, contrasena
+                        FROM usuarios
+                        WHERE LOWER(correo)=LOWER(?) AND rol IN ('admin','maestro')
+                    """, (cuenta,))
+                else:
+                    c.execute("""
+                        SELECT id, nombre, apellido_paterno, apellido_materno,
+                               numero_cuenta, correo, rol, contrasena
+                        FROM usuarios
+                        WHERE numero_cuenta=? AND rol IN ('admin','maestro')
+                    """, (cuenta,))
+                user = c.fetchone()
+                conn.close()
+
+                if not user:
+                    error_var.set("Usuario no encontrado o sin permisos.")
+                    return
+
+                hash_input = hashlib.sha256(pwd.encode()).hexdigest()
+                if hash_input != user[7]:
+                    error_var.set("Contraseña incorrecta.")
+                    return
+
+                usuario_data = {
+                    'id':              user[0],
+                    'nombre':          user[1],
+                    'apellido_paterno':user[2],
+                    'apellido_materno':user[3],
+                    'numero_cuenta':   user[4],
+                    'correo':          user[5],
+                    'rol':             user[6]
+                }
+
+                overlay.destroy()
+                self._stop_cam()
+                self._usuario_login = usuario_data
+
+                if on_success:
+                    on_success(usuario_data)   # ← ejecuta la acción personalizada
+                else:
+                    self._build_main()          # ← comportamiento original
+            except Exception as e:
+                error_var.set(f"Error de conexión: {e}")
 
         btn_cancel = tk.Button(
             btn_row, text="Cancelar",
@@ -2388,6 +2468,33 @@ class App(tk.Tk):
             self.destroy()
             return
 
+    def _show_dashboard(self):
+        """Abre el diálogo de autenticación y, si es válido, lanza el dashboard."""
+        self._pedir_auth_menu(on_success=lambda u: self._abrir_dashboard(u))
+
+    def _abrir_dashboard(self, usuario_data):
+        """Cierra la ventana actual y abre el Dashboard con los datos del usuario."""
+        import sys, os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        dashboard_dir = os.path.join(current_dir, 'dashboard')
+        if dashboard_dir not in sys.path:
+            sys.path.insert(0, dashboard_dir)
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+
+        try:
+            from dashboard import Dashboard
+            self.destroy()
+            dash = Dashboard(usuario_data)
+            dash.run()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            error_root = tk.Tk()
+            error_root.title("Error")
+            tk.Label(error_root, text=f"No se pudo abrir el dashboard:\n{e}").pack()
+            tk.Button(error_root, text="Cerrar", command=error_root.destroy).pack()
+            error_root.mainloop()
 
 if __name__ == "__main__":
     try:
