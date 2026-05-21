@@ -17,6 +17,7 @@ from tkinter import font as tkfont
 import cv2
 import numpy as np
 import threading
+import hashlib
 import time
 from PIL import Image, ImageTk
 
@@ -30,13 +31,16 @@ except Exception:
     print("[CAM] Modo webcam OpenCV")
 
 from face_engine import (extraer_caracteristicas, dibujar_overlay,
-                          TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I)
+                          TIPO_FRONTAL, TIPO_PERFIL_D, TIPO_PERFIL_I,
+                          detectar_oclusion)
+import face_engine as _fe
 from database   import (registrar_usuario, guardar_vectores_por_angulo,
                          guardar_vector_unico, reconocer_persona,
                          eliminar_persona, verificar_duplicado_facial,
                          validar_numero_cuenta, validar_correo,
                          validar_contrasena, validar_grado,
-                         validar_grupo, ROLES_VALIDOS)
+                         validar_grupo, ROLES_VALIDOS,
+                         registrar_acceso, conectar)
 
 try:
     from servo_puerta.servo_control import servo
@@ -49,14 +53,14 @@ except Exception as e:
         def desconectar(self):      pass
     servo = _ServoStub()
     print("[SERVO] Modulo no disponible — continuando sin servo.")
-    
+
 try:
     from ultrasonico import SensorUltrasonico
     _SENSOR_OK = True
 except Exception as e:
     print(f"[SENSOR] Error al importar ultrasonico: {e}")
     _SENSOR_OK = False
-    
+
 BG      = "#F5F0E8"   # beige institucional (fondo general)
 PANEL   = "#FFFFFF"   # blanco puro (paneles/cards)
 CARD    = "#EAE5D8"   # beige claro (fondos de campos)
@@ -76,50 +80,7 @@ GOLD_LN = "#B5860D"   # dorado institucional UdeC
 
 COLOR_ROL = {"estudiante": NAVY_LN, "maestro": TEAL_LN, "admin": ACCENT}
 
-import platform as _platform
-
-def _beep_cambio_paso():
-    """Emite un pitido corto para indicar cambio de paso en el registro."""
-    try:
-        import sys
-        if sys.platform == "win32":
-            import winsound
-            winsound.Beep(880, 200)   # 880 Hz, 200 ms
-        else:
-            # Linux / Raspberry Pi — intenta con beep o speaker-test
-            import subprocess
-            # Método 1: beep (requiere el paquete 'beep')
-            r = subprocess.run(["beep", "-f", "880", "-l", "200"],
-                               capture_output=True, timeout=1)
-            if r.returncode != 0:
-                # Método 2: tono con python usando /dev/audio o paplay
-                subprocess.run(
-                    ["python3", "-c",
-                     "import subprocess; subprocess.run(['paplay','/usr/share/sounds/freedesktop/stereo/message.oga'], capture_output=True)"],
-                    capture_output=True, timeout=2)
-    except Exception:
-        pass   # Si no hay audio disponible, ignorar silenciosamente
-
-def _es_raspberry():
-    nodo = _platform.node().lower()
-    return "raspberry" in nodo or "raspberrypi" in nodo
-
-# ── Resolución adaptativa ─────────────────────────────────────────────────────
-# En Raspberry Pi ajustamos al tamaño real de pantalla en modo vertical.
-# En escritorio usamos el tamaño fijo de diseño (600×1024).
-if _es_raspberry():
-    import tkinter as _tk_tmp
-    _r = _tk_tmp.Tk(); _r.withdraw()
-    _SW = _r.winfo_screenwidth()
-    _SH = _r.winfo_screenheight()
-    _r.destroy(); del _tk_tmp, _r
-    # Forzar orientación vertical: el lado corto es el ancho
-    W = min(_SW, _SH)
-    H = max(_SW, _SH)
-else:
-    W = 600
-    H = 1024
-
+W, H    = 600, 1024
 PANEL_H = 400   # altura del panel de formulario/resultados (parte superior)
 CAM_H_V = H - PANEL_H  # altura de la zona de cámara (parte inferior)
 # Compatibilidad con referencias antiguas
@@ -154,6 +115,64 @@ def _imgtk(frame, max_w, max_h):
     fr = cv2.resize(frame, (int(w0*r), int(h0*r)))
     return ImageTk.PhotoImage(
         image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)))
+
+
+def _draw_multiface_banner(frame):
+    """
+    Dibuja un banner centrado grande sobre el frame cuando hay varios
+    rostros detectados. No dibuja ningun bbox para evitar oscilaciones
+    visuales entre las caras detectadas.
+    """
+    h_img, w_img = frame.shape[:2]
+    overlay = frame.copy()
+
+    # Fondo oscuro semitransparente sobre todo el frame
+    cv2.rectangle(overlay, (0, 0), (w_img, h_img), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+    # Panel central
+    font  = cv2.FONT_HERSHEY_DUPLEX
+    msg1  = "NO SE PUEDE ESCANEAR"
+    msg2  = "Se detectaron varios rostros"
+    msg3  = "Solo una persona a la vez"
+
+    s1, s2, s3 = 0.9, 0.65, 0.55
+    th1, th2, th3 = 2, 1, 1
+
+    (w1, h1), _ = cv2.getTextSize(msg1, font, s1, th1)
+    (w2, h2), _ = cv2.getTextSize(msg2, font, s2, th2)
+    (w3, h3), _ = cv2.getTextSize(msg3, font, s3, th3)
+
+    total_h = h1 + 14 + h2 + 8 + h3 + 30
+    box_w   = max(w1, w2, w3) + 60
+    box_h   = total_h
+    bx1     = (w_img - box_w) // 2
+    by1     = (h_img - box_h) // 2
+    bx2     = bx1 + box_w
+    by2     = by1 + box_h
+
+    # Caja con borde naranja
+    bg = frame.copy()
+    cv2.rectangle(bg, (bx1, by1), (bx2, by2), (10, 10, 25), -1)
+    cv2.addWeighted(bg, 0.85, frame, 0.15, 0, frame)
+    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 140, 255), 3, cv2.LINE_AA)
+
+    # Texto centrado
+    y = by1 + 15 + h1
+    cv2.putText(frame, msg1, ((w_img - w1) // 2, y),
+                font, s1, (0, 0, 0), th1 + 3, cv2.LINE_AA)
+    cv2.putText(frame, msg1, ((w_img - w1) // 2, y),
+                font, s1, (0, 140, 255), th1, cv2.LINE_AA)
+
+    y += h2 + 14
+    cv2.putText(frame, msg2, ((w_img - w2) // 2, y),
+                font, s2, (255, 255, 255), th2, cv2.LINE_AA)
+
+    y += h3 + 8
+    cv2.putText(frame, msg3, ((w_img - w3) // 2, y),
+                font, s3, (200, 200, 200), th3, cv2.LINE_AA)
+
+    return frame
 
 
 # ── Helpers de dibujo ─────────────────────────────────────────────────────────
@@ -236,22 +255,18 @@ class App(tk.Tk):
         self.geometry(f"{W}x{H}+0+0")
         self.resizable(False, False)
         # Sin bordes solo en Raspberry Pi (pantalla embebida)
-        if _es_raspberry():
+        import platform
+        if "raspberry" in platform.node().lower() or "raspberrypi" in platform.node().lower():
             self.overrideredirect(True)
-            self.attributes("-fullscreen", True)
         self.configure(bg=BG)
 
         FONT = "Segoe UI"
-        # Escalar fuentes proporcionalmente al ancho de pantalla
-        _fs = max(0.7, W / 600)   # factor de escala (1.0 en diseño base 600px)
-        def _fs_i(n): return max(6, int(round(n * _fs)))
-
-        self.f_title  = tkfont.Font(family=FONT, size=_fs_i(20), weight="bold")
-        self.f_sub    = tkfont.Font(family=FONT, size=_fs_i(12))
-        self.f_btn    = tkfont.Font(family=FONT, size=_fs_i(13), weight="bold")
-        self.f_label  = tkfont.Font(family=FONT, size=_fs_i(12))
-        self.f_status = tkfont.Font(family=FONT, size=_fs_i(12),  weight="bold")
-        self.f_zona   = tkfont.Font(family=FONT, size=_fs_i(11))
+        self.f_title  = tkfont.Font(family=FONT, size=16, weight="bold")
+        self.f_sub    = tkfont.Font(family=FONT, size=9)
+        self.f_btn    = tkfont.Font(family=FONT, size=10, weight="bold")
+        self.f_label  = tkfont.Font(family=FONT, size=9)
+        self.f_status = tkfont.Font(family=FONT, size=9,  weight="bold")
+        self.f_zona   = tkfont.Font(family=FONT, size=8)
 
         self.picam2      = None
         self._cap        = None
@@ -262,7 +277,8 @@ class App(tk.Tk):
         self._frame_lock   = threading.Lock()
 
         self._analisis = {"vector": None, "coords": None,
-                          "frame_id": -1, "tipo": None}
+                          "frame_id": -1, "tipo": None,
+                          "ocluido": False, "razon_oclusion": ""}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
         self._tipo_esperado  = None
@@ -285,25 +301,40 @@ class App(tk.Tk):
         self._ov_color = None
         self._ov_texto = ""
         self._modo_acceso = False
-        self._en_registro = False   # ← bloquea _monitor_cara y _guia_posicion en registro
         self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
         self._build_main()
-        
-        # Sensor ultrasonico
+
+        # ── Sensor ultrasónico ────────────────────────────────────────────────
         self.sensor = None
         if _SENSOR_OK:
             try:
                 self.sensor = SensorUltrasonico(
-                    on_persona = self._sensor_persona_detectada,
-                    on_sin_persona= self._sensor_sin_persona,
-                    )
+                    on_persona     = self._sensor_persona_detectada,
+                    on_sin_persona = self._sensor_sin_persona,
+                )
                 self.sensor.iniciar()
-                print("[SENSOR] Sensor ultrasonico activo")
+                print("[SENSOR] Sensor ultrasónico activo")
             except Exception as e:
                 print(f"[SENSOR] No se pudo iniciar el sensor: {e}")
                 self.sensor = None
+
+        self.sensores_ir = None
+        try:
+            from sensores_ir import SensoresIR
+            self.sensores_ir = SensoresIR(
+                on_entrada = self._on_entrada_sensor,
+                on_salida  = self._on_salida_sensor,
+            )
+            self.sensores_ir.iniciar()
+            print("[IR] Sensores FC-51 activos")
+        except Exception as e:
+            print(f"[IR] No se pudieron iniciar los sensores IR: {e}")
+            self.sensores_ir = None
+
+        # ── Conectar botón de salida con el contador ──────────────────────────
+        servo._on_salida_manual = self._on_salida_boton
 
     @staticmethod
     def _lighten(hx):
@@ -314,20 +345,36 @@ class App(tk.Tk):
     def _clear(self):
         for w in self.winfo_children():
             w.destroy()
-    
+
+    def _stop_cam(self):
+        self.cam_running = False
+        time.sleep(0.25)
+        if USAR_PICAM:
+            if self.picam2:
+                try: self.picam2.close()
+                except: pass
+                self.picam2 = None
+        else:
+            if self._cap:
+                try: self._cap.release()
+                except: pass
+                self._cap = None
+
+    def _volver(self):
+        self._stop_cam()
+        self._usuario_login = None
+        self._modo_acceso   = False
+        self._build_main()
+
     # ── Callbacks del sensor ultrasónico ─────────────────────────────────────
     def _sensor_persona_detectada(self):
         """El sensor detectó una persona — encender cámara si está en modo acceso."""
-        if self._en_registro:
-            return   # no interferir con el registro biométrico
         if self._modo_acceso and not self.cam_running:
             print("[SENSOR] Persona detectada — encendiendo cámara")
             self.after(0, self._activar_camara_acceso)
 
     def _sensor_sin_persona(self):
         """La persona se alejó — apagar cámara y modo espera."""
-        if self._en_registro:
-            return   # no interferir con el registro biométrico
         if self._modo_acceso and self.cam_running:
             print("[SENSOR] Sin persona — apagando cámara")
             self.after(0, self._desactivar_camara_acceso)
@@ -353,22 +400,12 @@ class App(tk.Tk):
             self.cam_running = False
 
     def _desactivar_camara_acceso(self):
-        """Apaga la cámara y muestra pantalla negra de espera."""
-        # No apagar si estamos en medio de un registro biométrico
-        if self._en_registro:
-            return
+        """Apaga la cámara y muestra pantalla de espera."""
         if not self.cam_running:
             return
         self._stop_cam()
+        self.after(300, lambda: self.cam_label.configure(image=""))
         servo.espera()
-        try:
-            # pantalla negra de espera
-            negro = np.zeros((CAM_H_V, CAM_W, 3), dtype=np.uint8)
-            imgtk_negro = _imgtk(negro, CAM_W, CAM_H_V)
-            self.cam_label.imgtk = imgtk_negro
-            self.cam_label.configure(image=imgtk_negro)
-        except Exception:
-            pass
         try:
             self.resultado_var.set("Esperando persona...")
             self.resultado_label.config(fg=ACCENT)
@@ -382,27 +419,6 @@ class App(tk.Tk):
             self.posicion_var.set("Acércate para identificarte")
         except Exception:
             pass
-
-
-    def _stop_cam(self):
-        self.cam_running = False
-        time.sleep(0.25)
-        if USAR_PICAM:
-            if self.picam2:
-                try: self.picam2.close()
-                except: pass
-                self.picam2 = None
-        else:
-            if self._cap:
-                try: self._cap.release()
-                except: pass
-                self._cap = None
-
-    def _volver(self):
-        self._stop_cam()
-        self._usuario_login = None
-        self._modo_acceso   = False
-        self._build_main()
 
     def _set_overlay(self, color, texto=""):
         with self._ov_lock:
@@ -419,8 +435,11 @@ class App(tk.Tk):
             time.sleep(0.3)
         else:
             self._cap = cv2.VideoCapture(0)
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  320)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            self._cap.set(cv2.CAP_PROP_FPS, 15)
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if not self._cap.isOpened():
                 raise RuntimeError("No se pudo abrir ninguna camara.")
             for _ in range(5):
@@ -448,16 +467,32 @@ class App(tk.Tk):
                 self._frame_actual = frame
 
             with self._analisis_lock:
-                coords = self._analisis["coords"]
-                vector = self._analisis["vector"]
-                tipo   = self._analisis["tipo"]
+                coords         = self._analisis["coords"]
+                vector         = self._analisis["vector"]
+                tipo           = self._analisis["tipo"]
+                ocluido        = self._analisis.get("ocluido", False)
+                razon_oclusion = self._analisis.get("razon_oclusion", "")
 
             with self._ov_lock:
                 ov_color = self._ov_color
                 ov_texto = self._ov_texto
 
+            _msgs_oc = {
+                "mascara":     "Descubre tu rostro",
+                "gorra":       "Descubre tu rostro",
+                "mano":        "Descubre tu rostro",
+                "lentes":      "Descubre tu rostro",
+                "obstruccion": "Descubre tu rostro",
+            }
+
             vis = frame.copy()
-            if coords:
+
+            # Caso especial: varios rostros similares en camara.
+            # No se dibuja ningun bbox para evitar oscilaciones.
+            # Solo se muestra un banner grande en el centro.
+            if _fe._multiple_faces and coords is None:
+                vis = _draw_multiface_banner(vis)
+            elif coords:
                 if self._modo_acceso:
                     if ov_color:
                         c = ov_color
@@ -469,6 +504,10 @@ class App(tk.Tk):
                         c = (80, 80, 80)
                     t = ov_texto if ov_texto else ""
                     vis = dibujar_overlay(vis, coords, c, t, tipo=None)
+                elif ocluido:
+                    msg = _msgs_oc.get(razon_oclusion, "Descubre tu rostro")
+                    vis = dibujar_overlay(vis, coords, (255, 130, 0),
+                                          msg, tipo=tipo)
                 else:
                     c = ov_color if ov_color else (
                         (0, 212, 255) if vector is not None else (80, 80, 80))
@@ -490,31 +529,69 @@ class App(tk.Tk):
             pass
 
     def _loop_analisis(self):
-        ultimo_id = -1
-        while self.cam_running or self._en_registro:
-            with self._frame_lock:
-                frame    = self._frame_actual
-                frame_id = id(frame) if frame is not None else -1
+        ultimo_id   = -1
+        # Suavizado temporal: solo confirmar oclusion si se detecta
+        # en N frames consecutivos. Evita falsos positivos por movimiento.
+        _FRAMES_CONFIRM = 6   # frames seguidos necesarios para confirmar
+        _oc_contador    = 0   # frames consecutivos con oclusion detectada
+        _oc_razon_buf   = ""  # razon del ultimo frame con oclusion
 
-            if frame is None or frame_id == ultimo_id:
-                time.sleep(0.02)
-                continue
+        while self.cam_running:
+            try:
+                with self._frame_lock:
+                    frame    = self._frame_actual
+                    frame_id = id(frame) if frame is not None else -1
 
-            ultimo_id = frame_id
-            vector, coords, tipo = extraer_caracteristicas(
-                frame, HAAR_PATH,
-                modo=self._modo_deteccion,
-                tipo_esperado=self._tipo_esperado)
+                if frame is None or frame_id == ultimo_id:
+                    time.sleep(0.02)
+                    continue
 
-            with self._analisis_lock:
-                self._analisis["vector"]   = vector
-                self._analisis["coords"]   = coords
-                self._analisis["frame_id"] = frame_id
-                self._analisis["tipo"]     = tipo
+                ultimo_id = frame_id
+                vector, coords, tipo = extraer_caracteristicas(
+                    frame, HAAR_PATH,
+                    modo=self._modo_deteccion,
+                    tipo_esperado=self._tipo_esperado)
+
+                ocluido_raw, razon_raw = False, ""
+                if coords is not None and not self._modo_acceso:
+                    try:
+                        ocluido_raw, razon_raw = detectar_oclusion(frame, coords, tipo=tipo)
+                    except Exception:
+                        import traceback
+                        traceback.print_exc()
+                        ocluido_raw, razon_raw = False, ""
+
+                # Suavizado temporal estable: +1 detecta / -1 no detecta
+                # Requiere 6 frames consecutivos para confirmar (-> 0.24s a 25fps)
+                # Esto filtra falsos positivos por movimiento o ruido
+                if ocluido_raw:
+                    _oc_contador  = min(_oc_contador + 1, _FRAMES_CONFIRM)
+                    _oc_razon_buf = razon_raw
+                else:
+                    _oc_contador  = max(_oc_contador - 1, 0)
+
+                # Solo confirmar oclusion si se mantuvo N frames seguidos
+                ocluido        = (_oc_contador >= _FRAMES_CONFIRM)
+                razon_oclusion = _oc_razon_buf if ocluido else ""
+
+                if ocluido:
+                    vector = None
+
+                with self._analisis_lock:
+                    self._analisis["vector"]         = vector
+                    self._analisis["coords"]         = coords
+                    self._analisis["frame_id"]       = frame_id
+                    self._analisis["tipo"]           = tipo
+                    self._analisis["ocluido"]        = ocluido
+                    self._analisis["razon_oclusion"] = razon_oclusion
+
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)
 
     def _safe(self, fn):
-        # Durante el registro biométrico siempre ejecutar (no depender de cam_running)
-        if self.cam_running or self._en_registro:
+        if self.cam_running:
             try: fn()
             except: pass
 
@@ -523,8 +600,6 @@ class App(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_main(self):
         self._clear()
-        self._modo_acceso = False          # ← limpiar al regresar al menú principal
-        self._en_registro = False
         self.geometry(f"{W}x{H}+0+0")
         self.configure(bg=BG)
 
@@ -532,7 +607,7 @@ class App(tk.Tk):
         cv.place(x=0, y=0)
 
         # ── Barra superior blanca (logo UdeC + título + cerrar) ───────────────
-        TOP_H = max(52, int(64 * H / 1024))
+        TOP_H = 64
         cv.create_rectangle(0, 0, W, TOP_H, fill="#FFFFFF", outline="")
         # Separador inferior
         cv.create_rectangle(0, TOP_H - 1, W, TOP_H, fill=BORDER, outline="")
@@ -585,7 +660,7 @@ class App(tk.Tk):
                             tags="drag_zone")
 
         # ── Segunda barra: fondo azul marino + acento verde biselado ───────────
-        SUB_H = max(38, int(46 * H / 1024))
+        SUB_H = 46
         SUB_Y = TOP_H
         cv.create_rectangle(0, SUB_Y, W, SUB_Y + SUB_H, fill=NAVY_LN, outline="")
 
@@ -619,10 +694,11 @@ class App(tk.Tk):
                        fill=BORDER, width=1)
 
         # ── Tarjetas horizontales ─────────────────────────────────────────────
-        BW, BH = W - 40, max(130, int(148 * H / 1024))
+        BW, BH = W - 40, 148
         BX = 20
         BY1 = CONTENT_Y + 58
         BY2 = BY1 + BH + 22
+        BY3 = BY2 + BH + 22
 
         self._horiz_card_btn(cv, BX, BY1, BW, BH,
                              "Registrar",
@@ -634,12 +710,25 @@ class App(tk.Tk):
                              "Verificar identidad",
                              "Reconocimiento facial en tiempo real",
                              TEAL_LN, self._show_acceso)
+        self._horiz_card_btn(cv, BX, BY3, BW, BH,
+                             "Dashboard",
+                             "Panel de administración",
+                             "Gestión de usuarios, registros y estadísticas",
+                             GOLD_LN, self._show_dashboard)
 
         # ── Barra inferior ────────────────────────────────────────────────────
         cv.create_rectangle(0, H - 32, W, H, fill=NAVY_LN, outline="")
         cv.create_text(W // 2, H - 16,
                        text=f"Universidad de Colima · v5.5 · {int(TIEMPO_ESCANEO)}s por ciclo · máx {MAX_MUESTRAS_PASO} muestras/paso",
                        font=("Segoe UI", 7), fill="#AABBCC")
+
+    def _ir_a_dashboard(self):
+        """Abre el dashboard si hay un usuario autenticado con rol permitido."""
+        usuario = getattr(self, '_usuario_login', None)
+        if usuario and usuario.get('rol') in ('admin', 'maestro'):
+            self._abrir_dashboard(usuario)
+        else:
+            self._show_dashboard()
 
     def _card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd):
         r = 18
@@ -761,6 +850,39 @@ class App(tk.Tk):
                            fill="#FFFFFF", width=3)
             cc.create_line(ic_cx+13, ic_cy+29, ic_cx+25, ic_cy+29,
                            fill="#FFFFFF", width=3)
+        elif "Dashboard" in titulo or "administración" in subtitulo or "estadísticas" in desc:
+            # Ícono: barras de estadisticas (dashboard)
+            # Fondo de "monitor"
+            cc.create_rectangle(ic_cx-30, ic_cy-30, ic_cx+30, ic_cy+22,
+                                fill="#FFFFFF", outline="")
+            # Línea base del monitor
+            cc.create_rectangle(ic_cx-30, ic_cy+22, ic_cx+30, ic_cy+26,
+                                fill="#FFFFFF", outline="")
+            # Pata del monitor
+            cc.create_rectangle(ic_cx-4, ic_cy+26, ic_cx+4, ic_cy+34,
+                                fill="#FFFFFF", outline="")
+            cc.create_rectangle(ic_cx-12, ic_cy+34, ic_cx+12, ic_cy+38,
+                                fill="#FFFFFF", outline="")
+            # Barras de grafica de estadisticas (3 barras de distintas alturas)
+            bar_w = 6
+            bar_y_base = ic_cy + 14
+            heights    = [16, 26, 20]  # altura de cada barra
+            x_starts   = [ic_cx - 22, ic_cx - 6, ic_cx + 10]
+            for bx, bh in zip(x_starts, heights):
+                cc.create_rectangle(bx, bar_y_base - bh,
+                                    bx + bar_w, bar_y_base,
+                                    fill=color, outline="")
+            # Linea de tendencia (flecha subiendo)
+            cc.create_line(ic_cx - 22, ic_cy - 6,
+                           ic_cx - 6,  ic_cy - 14,
+                           ic_cx + 10, ic_cy - 10,
+                           ic_cx + 22, ic_cy - 22,
+                           fill=color, width=2, smooth=True)
+            # Punta de flecha
+            cc.create_polygon(ic_cx + 22, ic_cy - 22,
+                              ic_cx + 16, ic_cy - 22,
+                              ic_cx + 20, ic_cy - 16,
+                              fill=color, outline="")
         else:
             # Ícono: cara con escáner / check de acceso
             # Cara oval
@@ -818,9 +940,6 @@ class App(tk.Tk):
     #  PANTALLA REGISTRO
     # ══════════════════════════════════════════════════════════════════════════
     def _show_registro(self):
-        # Bloquear sensor/monitor ANTES de detener la cámara para evitar race condition
-        self._en_registro = True           # ← bloquear monitor_cara y guia_posicion
-        self._modo_acceso = False          # ← resetear para no heredar estado de Acceso
         # Asegurar que cualquier cámara previa esté liberada antes de reiniciar
         self._stop_cam()
         self._clear()
@@ -831,11 +950,11 @@ class App(tk.Tk):
         self._registro_cancelado = False
 
         FONT   = "Segoe UI"
-        HDR_H  = max(42, int(50 * WIN_H / 1024))
-        PILL_H = max(28, int(34 * WIN_H / 1024))
+        HDR_H  = 50
+        PILL_H = 34
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 8
-        BOT_H  = max(120, int(140 * WIN_H / 1024))
+        BOT_H  = 120
         CAM_H  = WIN_H - CAM_Y - BOT_H
 
         # ── Header oscuro ─────────────────────────────────────────────────────
@@ -858,7 +977,7 @@ class App(tk.Tk):
         tk.Frame(self, bg=BG, width=W, height=PILL_H + 18).place(x=0, y=HDR_H)
 
         # ── Pill de instrucción ───────────────────────────────────────────────
-        PILL_W = 300
+        PILL_W = 260
         self.pill_cv_reg = tk.Canvas(self, width=PILL_W, height=PILL_H,
                                      bg=BG, highlightthickness=0)
         self.pill_cv_reg.place(x=W // 2 - PILL_W // 2, y=PILL_Y)
@@ -882,7 +1001,7 @@ class App(tk.Tk):
         self._draw_pill_reg = _draw_pill_reg
         self._pill_reg_lbl = tk.Label(
             self.pill_cv_reg, textvariable=self.posicion_var,
-            font=(FONT, 11, "bold"), fg="#FFFFFF",
+            font=(FONT, 9, "bold"), fg="#FFFFFF",
             bg=ACCENT2, wraplength=PILL_W - 16)
         self._pill_reg_lbl.place(relx=.5, rely=.5, anchor="center")
 
@@ -910,7 +1029,7 @@ class App(tk.Tk):
                                         start=270, extent=180, fill=color, outline=color)
             self.scan_btn_cv.create_rectangle(r, 0, BTN_W - r, BTN_H_b,
                                               fill=color, outline="")
-            icono = "⬤  INICIAR ESCANEO" if listo else "Completa el formulario para continuar"
+            icono = "⬤  INICIAR ESCANEO" if listo else "🔒  Completa el formulario para continuar"
             self.scan_btn_cv.create_text(BTN_W // 2, BTN_H_b // 2,
                                          text=icono, font=(FONT, 10, "bold"), fill=tc)
 
@@ -936,26 +1055,26 @@ class App(tk.Tk):
         self.reg_nombre_var  = tk.StringVar(value="")
         self.reg_detalle_var = tk.StringVar(value="")
         tk.Label(scan_bot, textvariable=self.reg_nombre_var,
-                 font=(FONT, 12, "bold"), fg="#FFFFFF", bg=NAVY_LN,
-                 anchor="w").place(x=14, y=8, width=W - 180)
+                 font=(FONT, 10, "bold"), fg="#FFFFFF", bg=NAVY_LN,
+                 anchor="w").place(x=14, y=8, width=W - 28)
         tk.Label(scan_bot, textvariable=self.reg_detalle_var,
-                 font=(FONT, 9), fg="#AABBCC", bg=NAVY_LN,
-                 anchor="w").place(x=14, y=28, width=W - 180)
+                 font=(FONT, 8), fg="#AABBCC", bg=NAVY_LN,
+                 anchor="w").place(x=14, y=28, width=W - 120)
 
         # Pasos (círculos 1-4)
-        CIRCLE_R    = 18
+        CIRCLE_R    = 11
         step_labels = ["F", "I", "D", "F"]
         step_names  = ["Frente", "Izq.", "Der.", "Frente"]
         STEP_GAP    = (W - 28 - 4 * CIRCLE_R * 2) // 5
         self._paso_frames = []
 
-        paso_cv = tk.Canvas(scan_bot, width=W - 28, height=62,
+        paso_cv = tk.Canvas(scan_bot, width=W - 28, height=48,
                             bg=NAVY_LN, highlightthickness=0)
-        paso_cv.place(x=14, y=46)
+        paso_cv.place(x=14, y=52)
 
         paso_cv.create_line(CIRCLE_R * 2 + STEP_GAP, CIRCLE_R,
                             W - 28 - CIRCLE_R * 2 - STEP_GAP, CIRCLE_R,
-                            fill="#2A4060", width=3)
+                            fill="#2A4060", width=2)
 
         self._paso_canvas  = paso_cv
         self._paso_cx      = []
@@ -971,11 +1090,11 @@ class App(tk.Tk):
                                       cx + CIRCLE_R, cy + CIRCLE_R,
                                       fill="#2A4060", outline="#2A4060", width=2)
             nid = paso_cv.create_text(cx, cy, text=step_labels[i],
-                                      font=(FONT, 10, "bold"), fill="#AABBCC")
-            paso_cv.create_text(cx, cy + CIRCLE_R + 11,
-                                text=step_names[i], font=(FONT, 8, "bold"), fill="#5577AA")
-            cnt = paso_cv.create_text(cx, cy + CIRCLE_R + 24,
-                                      text="", font=(FONT, 8, "bold"), fill="#5577AA")
+                                      font=(FONT, 7, "bold"), fill="#AABBCC")
+            paso_cv.create_text(cx, cy + CIRCLE_R + 9,
+                                text=step_names[i], font=(FONT, 6), fill="#5577AA")
+            cnt = paso_cv.create_text(cx, cy + CIRCLE_R + 19,
+                                      text="", font=(FONT, 6), fill="#5577AA")
             self._paso_cx.append(cx)
             self._paso_cy.append(cy)
             self._paso_circles.append(cid)
@@ -989,24 +1108,14 @@ class App(tk.Tk):
         self.prog_bar = tk.Frame(self.prog_frame, bg=ACCENT, width=0, height=4)
         self.prog_bar.place(x=0, y=0)
 
-        # Botón CANCELAR — flotante sobre la cámara (encima del panel inferior)
-        # Se posiciona justo encima de scan_bot, pegado a la derecha
-        CANCEL_W, CANCEL_H = 160, 38
-        CANCEL_X = W - CANCEL_W - 12
-        CANCEL_Y = WIN_H - BOT_H - CANCEL_H - 10   # justo sobre el panel inferior
-
+        # Botón CANCELAR (dentro del panel, aparece durante escaneo)
         self._cancel_btn = tk.Button(
-            self, text="✕  CANCELAR",
-            font=(FONT, 10, "bold"), fg="#FFFFFF", bg=DANGER,
-            relief="flat", bd=0, highlightthickness=2,
-            highlightbackground="#FF0000",
-            activebackground="#A50000", activeforeground="#FFFFFF",
-            cursor="hand2",
+            scan_bot, text="✕  Cancelar registro",
+            font=(FONT, 8, "bold"), fg=DANGER, bg=NAVY_LN,
+            relief="flat", bd=0, highlightthickness=0, cursor="hand2",
             command=self._cancelar_registro)
-        self._cancel_btn.bind("<Enter>", lambda e: self._cancel_btn.config(bg="#A50000"))
-        self._cancel_btn.bind("<Leave>", lambda e: self._cancel_btn.config(bg=DANGER))
-        self._cancel_btn.place_forget()   # oculto hasta que inicie el escaneo
-        self._cancel_btn_pos = (CANCEL_X, CANCEL_Y, CANCEL_W, CANCEL_H)
+        self._cancel_btn.place(x=W - 150, y=24, width=136, height=20)
+        self._cancel_btn.place_forget()  # oculto hasta que inicie el escaneo
 
         # Variables de compatibilidad
         self.paso_desc_var  = tk.StringVar(value="")
@@ -1015,9 +1124,9 @@ class App(tk.Tk):
         self.status_var.set("Listo")
         self.progreso_var = tk.StringVar(value="")
         self.prog_label   = tk.Label(scan_bot, textvariable=self.progreso_var,
-                                     font=(FONT, 9, "bold"), fg=SUCCESS,
+                                     font=(FONT, 7, "bold"), fg=SUCCESS,
                                      bg=NAVY_LN, anchor="w")
-        self.prog_label.place(x=14, y=BOT_H - 22, width=W - 28)
+        self.prog_label.place(x=14, y=BOT_H - 20, width=W - 28)
         self.timer_var    = tk.StringVar(value="")
         self.paso_txt_var = tk.StringVar(value="")
 
@@ -1073,10 +1182,13 @@ class App(tk.Tk):
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
 
+        # Auto-abrir formulario para que el usuario empiece llenandolo.
+        # El FAB sigue disponible para editarlo despues si es necesario.
+        self.after(450, lambda: self._show_form_sheet(WIN_H, FONT))
+
     def _cancelar_registro(self):
         """Detiene el escaneo en curso y regresa a la pantalla de registro."""
         self._registro_cancelado = True
-        self._en_registro = False
         self.cam_running = False
         self.verificando = False
         self.after(200, self._show_registro)
@@ -1120,7 +1232,7 @@ class App(tk.Tk):
                  ).place(x=18, y=y+16, width=284, height=24)  # Más altura (24 en lugar de 22)
 
     def _activar_paso_ui(self, paso_idx, progreso=0.0):
-        if not hasattr(self, "_paso_canvas") or (not self.cam_running and not self._en_registro):
+        if not hasattr(self, "_paso_canvas") or not self.cam_running:
             return
         try:
             cv = self._paso_canvas
@@ -1130,7 +1242,7 @@ class App(tk.Tk):
                 cnt = self._paso_prog[i]
                 cx  = self._paso_cx[i]
                 cy  = self._paso_cy[i]
-                r   = 18
+                r   = 14
                 if i < paso_idx:
                     cv.itemconfig(cid, fill=SUCCESS, outline=SUCCESS)
                     cv.itemconfig(nid, fill="#FFFFFF")
@@ -1198,15 +1310,14 @@ class App(tk.Tk):
         # Restaurar estado normal después de 5 segundos
         def _restaurar():
             try:
-                self.prog_label.config(font=("Segoe UI", 9, "bold"))
+                self.prog_label.config(font=("Segoe UI", 7, "bold"))
                 self.progreso_var.set("")
                 self.status_var.set("Listo")
                 self._set_overlay(None, "")
-                # Mostrar de nuevo el botón de escaneo y FAB, ocultar cancelar
+                # Mostrar de nuevo el botón de escaneo y FAB
                 try:
                     self.scan_btn_cv.place(x=16, y=self.scan_btn_cv.winfo_y())
-                    self._fab_cv.place(x=self._fab_cv.winfo_x(),
-                                       y=self._fab_cv.winfo_y())
+                    self._fab_cv.place(x=16, y=self._fab_cv.winfo_y())
                     self._cancel_btn.place_forget()
                 except Exception:
                     pass
@@ -1297,8 +1408,41 @@ class App(tk.Tk):
                               font=(FONT, 8), fg=SUBTEXT, bg=PANEL, anchor="w")
         estado_lbl.place(x=PAD, y=346)
 
+        # ── Botón GUARDAR (esquina inferior derecha) ─────────────────────────
+        # Solo se habilita cuando el formulario es valido.
+        # Al presionarlo cierra el sheet Y asegura que _form_listo este sincronizado.
+        BTN_G_W, BTN_G_H = 130, 38
+        guardar_cv = tk.Canvas(sheet, width=BTN_G_W, height=BTN_G_H,
+                               bg=PANEL, highlightthickness=0)
+        guardar_cv.place(x=W - BTN_G_W - PAD,
+                         y=SHEET_H - BTN_G_H - 14)
+
+        def _draw_guardar(activo):
+            guardar_cv.delete("all")
+            r = BTN_G_H // 2
+            col = SUCCESS if activo else "#2A4060"
+            tc  = "#FFFFFF" if activo else "#5577AA"
+            guardar_cv.create_arc(0, 0, 2*r, BTN_G_H,
+                                  start=90, extent=180, fill=col, outline=col)
+            guardar_cv.create_arc(BTN_G_W - 2*r, 0, BTN_G_W, BTN_G_H,
+                                  start=270, extent=180, fill=col, outline=col)
+            guardar_cv.create_rectangle(r, 0, BTN_G_W - r, BTN_G_H,
+                                        fill=col, outline="")
+            guardar_cv.create_text(BTN_G_W // 2, BTN_G_H // 2,
+                                   text="✓  GUARDAR" if activo else "GUARDAR",
+                                   font=(FONT, 10, "bold"), fill=tc)
+
+        _draw_guardar(False)
+        self._draw_guardar = _draw_guardar
+
         def _validar_y_actualizar(*args):
             """Valida los campos en tiempo real y desbloquea el botón de escaneo."""
+            # Si el sheet fue cerrado, el label ya no existe — ignorar silenciosamente
+            try:
+                if not estado_lbl.winfo_exists():
+                    return
+            except Exception:
+                return
             nombre = self.nombre_var.get().strip()
             ap_pat = self.ap_pat_var.get().strip()
             cuenta = self.cuenta_var.get().strip()
@@ -1308,47 +1452,44 @@ class App(tk.Tk):
             grado  = self.grado_var.get()
             grupo  = self.grupo_var.get()
 
-            if not nombre or not ap_pat:
-                estado_lbl.config(text="Escribe nombre y apellido paterno", fg=SUBTEXT)
+            def _set_invalido(msg):
+                try:
+                    estado_lbl.config(text=msg, fg=SUBTEXT)
+                except Exception:
+                    pass
                 self._form_listo = False
                 self._draw_scan_btn(False)
-                return
+                _draw_guardar(False)
+
+            if not nombre or not ap_pat:
+                _set_invalido("Escribe nombre y apellido paterno");  return
             ok, msg = validar_numero_cuenta(cuenta)
             if not ok:
-                estado_lbl.config(text=f"Cuenta: {msg}", fg=SUBTEXT)
-                self._form_listo = False
-                self._draw_scan_btn(False)
-                return
+                _set_invalido(f"Cuenta: {msg}");  return
             if rol in ("admin", "maestro"):
                 ok2, msg2 = validar_correo(correo)
                 if not ok2:
-                    estado_lbl.config(text=f"Correo: {msg2}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Correo: {msg2}");  return
                 ok3, msg3 = validar_contrasena(pwd)
                 if not ok3:
-                    estado_lbl.config(text=f"Contraseña: {msg3}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Contraseña: {msg3}");  return
             else:
                 ok4, msg4 = validar_grado(grado)
                 if not ok4:
-                    estado_lbl.config(text=f"Grado: {msg4}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Grado: {msg4}");  return
                 ok5, msg5 = validar_grupo(grupo)
                 if not ok5:
-                    estado_lbl.config(text=f"Grupo: {msg5}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Grupo: {msg5}");  return
             # Todo válido
-            estado_lbl.config(text="✓  Formulario completo — puedes iniciar el escaneo", fg=SUCCESS)
+            try:
+                estado_lbl.config(
+                    text="✓  Formulario completo — presiona GUARDAR",
+                    fg=SUCCESS)
+            except Exception:
+                pass
             self._form_listo = True
             self._draw_scan_btn(True)
+            _draw_guardar(True)
 
         # Guardar datos del alumno cuando cambian (para el panel inferior)
         def _guardar_datos(*args):
@@ -1424,6 +1565,15 @@ class App(tk.Tk):
         # Disparar validación inicial con los datos que ya tenga
         _validar_y_actualizar()
 
+        # Handler del botón GUARDAR: valida una ultima vez, cierra el sheet
+        # y deja _form_listo correctamente sincronizado (corrige el bug donde
+        # a veces el registro no avanzaba aunque el formulario estuviera listo).
+        def _on_guardar_click(e):
+            _validar_y_actualizar()    # forzar refresco de _form_listo
+            if self._form_listo:
+                _close_sheet()
+        guardar_cv.bind("<Button-1>", _on_guardar_click)
+
         # Animar apertura
         def _slide_up(y):
             target = WIN_H - SHEET_H
@@ -1446,13 +1596,45 @@ class App(tk.Tk):
         grado  = self.grado_var.get()
         grupo  = self.grupo_var.get()
 
-        # Ocultar FAB y botón de escaneo, mostrar cancelar flotante
+        # ── Pre-validacion: cuenta duplicada ──────────────────────────────
+        # Evita iniciar el escaneo si la cuenta ya esta en la BD.
+        # Avisa al usuario antes de que la camara empiece a capturar.
+        try:
+            conn = conectar()
+            c = conn.cursor()
+            c.execute(
+                "SELECT id, nombre, apellido_paterno FROM usuarios "
+                "WHERE numero_cuenta = ?", (cuenta,))
+            existe = c.fetchone()
+            conn.close()
+            if existe:
+                nom = f"{existe[1]} {existe[2]}".strip()
+                try:
+                    self.posicion_var.set(
+                        f"✗  Cuenta ya registrada: {nom}")
+                    if hasattr(self, "_draw_pill_reg"):
+                        self._draw_pill_reg(DANGER)
+                    self.reg_detalle_var.set(
+                        f"Numero de cuenta {cuenta} ya pertenece a otro usuario")
+                except Exception:
+                    pass
+                return   # NO inicia el escaneo
+        except Exception as e:
+            print(f"[REG] Error validando duplicado: {e}")
+
+        # Ocultar FAB y botón de escaneo, mostrar cancelar
         try:
             self.scan_btn_cv.place_forget()
             self._fab_cv.place_forget()
-            cx, cy, cw, ch = self._cancel_btn_pos
-            self._cancel_btn.place(x=cx, y=cy, width=cw, height=ch)
-            self._cancel_btn.lift()
+            self._cancel_btn.place(x=W - 150, y=24, width=136, height=20)
+        except Exception:
+            pass
+
+        # Restaurar pildora a su color normal por si tenia un error previo
+        try:
+            self.posicion_var.set("Posiciónate frente a la cámara")
+            if hasattr(self, "_draw_pill_reg"):
+                self._draw_pill_reg(ACCENT2)
         except Exception:
             pass
 
@@ -1488,14 +1670,46 @@ class App(tk.Tk):
                            if self._usuario_login else None)
 
         if uid == -1:
-            self.after(0, lambda: self._safe(
-                lambda: self.progreso_var.set(
-                    "Error al registrar. Verifica los datos.")))
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_label.config(fg=DANGER)))
-            self.after(0, lambda: self._safe(
-                lambda: None))  # cap_btn removed in new design
-            self._en_registro = False
+            # ── Error visible al usuario y restauracion de la UI ─────────────
+            # La causa mas comun es DUPLICADO: ese numero de cuenta ya existe.
+            # El error de la BD se imprime en consola pero hay que avisar
+            # tambien en pantalla y dejar al usuario volver a editar.
+            def _mostrar_error():
+                # 1. Pildora superior roja con mensaje claro
+                try:
+                    self.posicion_var.set(
+                        "✗  Esa cuenta ya esta registrada. Edita el formulario.")
+                    if hasattr(self, "_draw_pill_reg"):
+                        self._draw_pill_reg(DANGER)
+                except Exception:
+                    pass
+                # 2. Tambien en el panel inferior
+                try:
+                    self.reg_detalle_var.set(
+                        "Numero de cuenta duplicado — verifica los datos")
+                except Exception:
+                    pass
+                # 3. Restaurar boton de escaneo y FAB; ocultar Cancelar
+                try:
+                    BTN_W, BTN_H_b = W - 32, 42
+                    BTN_Y_b = self.cam_label.winfo_y() + self.cam_label.winfo_height() - BTN_H_b - 14
+                    self.scan_btn_cv.place(x=16, y=BTN_Y_b)
+                    if hasattr(self, "_fab_cv"):
+                        BTN_R = 28
+                        FAB_H = BTN_R * 2
+                        self._fab_cv.place(x=W - FAB_H - 16,
+                                           y=BTN_Y_b - FAB_H - 10)
+                    if hasattr(self, "_cancel_btn"):
+                        self._cancel_btn.place_forget()
+                except Exception:
+                    pass
+                # 4. Marcar formulario como NO listo (forzar nueva edicion)
+                self._form_listo = False
+                try:
+                    self._draw_scan_btn(False)
+                except Exception:
+                    pass
+            self.after(0, lambda: self._safe(_mostrar_error))
             return
 
         vectores_angulo: dict = {}
@@ -1515,10 +1729,6 @@ class App(tk.Tk):
             self._modo_deteccion = modo_det
             self._tipo_esperado  = tipo_esperado
 
-            # Sonido de aviso al cambiar de paso (no en el primero)
-            if paso_idx > 0:
-                threading.Thread(target=_beep_cambio_paso, daemon=True).start()
-
             self.after(0, lambda i=instruccion: self._safe(
                 lambda: self.status_var.set(i)))
             self.after(0, lambda pi=paso_idx:
@@ -1526,17 +1736,20 @@ class App(tk.Tk):
             self._set_overlay((255, 184, 48),
                                f"{paso_idx+1}/{N_PASOS}: {instruccion}")
 
-            while t_paso_activo < duracion and self._en_registro and self.cam_running:
+            while t_paso_activo < duracion and self.cam_running:
                 if len(vectores_paso) >= MAX_MUESTRAS_PASO:
                     t_paso_activo = duracion; break
 
                 with self._analisis_lock:
-                    frame_id = self._analisis["frame_id"]
-                    v        = self._analisis["vector"]
-                    tipo_det = self._analisis["tipo"]
+                    frame_id       = self._analisis["frame_id"]
+                    v              = self._analisis["vector"]
+                    tipo_det       = self._analisis["tipo"]
+                    coords_det     = self._analisis["coords"]
+                    ocluido        = self._analisis.get("ocluido", False)
+                    razon_oclusion = self._analisis.get("razon_oclusion", "")
 
                 angulo_ok     = (tipo_det == tipo_esperado) and (v is not None)
-                cara_presente = (v is not None)
+                cara_presente = coords_det is not None
                 ahora = time.time()
 
                 if angulo_ok:
@@ -1580,6 +1793,20 @@ class App(tk.Tk):
                             lambda pi=paso_idx,
                                    nm=n_muestras_paso[paso_idx]:
                             self._update_barra_paso(pi, nm))
+                    elif ocluido:
+                        _oc_msgs = {
+                            "mascara":     "Descubre tu rostro",
+                            "gorra":       "Descubre tu rostro",
+                            "mano":        "Descubre tu rostro",
+                            "lentes":      "Descubre tu rostro",
+                            "obstruccion": "Descubre tu rostro",
+                        }
+                        msg_oc = _oc_msgs.get(razon_oclusion, "Descubre tu rostro")
+                        self._set_overlay((255, 130, 0), msg_oc)
+                        self.after(0, lambda m=msg_oc: self._safe(
+                            lambda: self.status_var.set(m)))
+                        self.after(0, lambda: self._safe(
+                            lambda: self.prog_label.config(fg=WARNING)))
                     elif cara_presente and not angulo_ok:
                         self._set_overlay((255, 59, 92),
                                           f"ESPERANDO — {msg_correccion}")
@@ -1598,7 +1825,7 @@ class App(tk.Tk):
                 time.sleep(0.04)
 
             # Verificacion anti-duplicado al terminar cada paso
-            if self._en_registro and self.cam_running and \
+            if self.cam_running and \
                     n_muestras_paso[paso_idx] >= MUESTRAS_MIN_PASO:
                 snapshot = {
                     ang: np.mean(datos["vectores"], axis=0).astype(np.float32)
@@ -1609,7 +1836,6 @@ class App(tk.Tk):
                 if duplicado:
                     try: eliminar_persona(uid)
                     except: pass
-                    self._en_registro = False
                     self.after(0, lambda d=duplicado:
                                self._cancelar_por_duplicado(d))
                     return
@@ -1640,7 +1866,6 @@ class App(tk.Tk):
             if duplicado:
                 try: eliminar_persona(uid)
                 except: pass
-                self._en_registro = False
                 self.after(0, lambda d=duplicado:
                            self._cancelar_por_duplicado(d))
                 return
@@ -1688,13 +1913,10 @@ class App(tk.Tk):
                 lambda: None))  # cap_btn removed in new design
             self.after(0, self._resetear_pasos_ui)
 
-        # Registro terminado (éxito o fallo) — liberar modo registro
-        self._en_registro = False
-
     # ══════════════════════════════════════════════════════════════════════════
     #  DIÁLOGO DE AUTENTICACIÓN PARA MENÚ
     # ══════════════════════════════════════════════════════════════════════════
-    def _pedir_auth_menu(self):
+    def _pedir_auth_menu(self, on_success=None):
         FONT  = "Segoe UI"
         BEIGE = "#F5E6C8"
         GREEN = "#1A7A4A"
@@ -1779,12 +2001,57 @@ class App(tk.Tk):
             if not cuenta or not pwd:
                 error_var.set("Completa ambos campos.")
                 return
-            # TODO: conectar validación real con base de datos
-            usuario = {"id": 0, "rol": "admin"}
-            overlay.destroy()
-            self._stop_cam()
-            self._usuario_login = usuario
-            self._build_main()
+
+            # ── Validación real contra la base de datos ────────────────
+            try:
+                conn = conectar()
+                c = conn.cursor()
+                if '@' in cuenta:
+                    c.execute("""
+                        SELECT id, nombre, apellido_paterno, apellido_materno,
+                               numero_cuenta, correo, rol, contrasena
+                        FROM usuarios
+                        WHERE LOWER(correo)=LOWER(?) AND rol IN ('admin','maestro')
+                    """, (cuenta,))
+                else:
+                    c.execute("""
+                        SELECT id, nombre, apellido_paterno, apellido_materno,
+                               numero_cuenta, correo, rol, contrasena
+                        FROM usuarios
+                        WHERE numero_cuenta=? AND rol IN ('admin','maestro')
+                    """, (cuenta,))
+                user = c.fetchone()
+                conn.close()
+
+                if not user:
+                    error_var.set("Usuario no encontrado o sin permisos.")
+                    return
+
+                hash_input = hashlib.sha256(pwd.encode()).hexdigest()
+                if hash_input != user[7]:
+                    error_var.set("Contraseña incorrecta.")
+                    return
+
+                usuario_data = {
+                    'id':              user[0],
+                    'nombre':          user[1],
+                    'apellido_paterno':user[2],
+                    'apellido_materno':user[3],
+                    'numero_cuenta':   user[4],
+                    'correo':          user[5],
+                    'rol':             user[6]
+                }
+
+                overlay.destroy()
+                self._stop_cam()
+                self._usuario_login = usuario_data
+
+                if on_success:
+                    on_success(usuario_data)   # ← ejecuta la acción personalizada
+                else:
+                    self._build_main()          # ← comportamiento original
+            except Exception as e:
+                error_var.set(f"Error de conexión: {e}")
 
         btn_cancel = tk.Button(
             btn_row, text="Cancelar",
@@ -1823,15 +2090,14 @@ class App(tk.Tk):
         self.geometry(f"{W}x{WIN_H}+0+0")
         self.verificando = False
         self._modo_acceso = True
-        self._en_registro = False          # ← habilitar monitor_cara y guia_posicion
         self._set_overlay(None, "")
 
         FONT   = "Segoe UI"
-        HDR_H  = max(46, int(56 * WIN_H / 1024))
-        PILL_H = max(28, int(36 * WIN_H / 1024))
+        HDR_H  = 56
+        PILL_H = 36
         PILL_Y = HDR_H + 10
         CAM_Y  = PILL_Y + PILL_H + 10
-        BOT_H  = max(110, int(130 * WIN_H / 1024))
+        BOT_H  = 130
         CAM_H  = WIN_H - CAM_Y - BOT_H   # cámara ocupa exactamente el espacio central
 
         # ── Header verde ──────────────────────────────────────────────────────
@@ -2082,6 +2348,8 @@ class App(tk.Tk):
                 "Persona no reconocida." if hay
                 else "No hay usuarios registrados."))
             if hay:
+                self.after(0, lambda: self.hdr_status_var.set("DENEGADO ✕"))
+                self.after(0, lambda: self.hdr_status_lbl.config(fg="#FF8888"))
                 self.after(0, lambda: self.hdr_nombre_var.set(""))
                 self.after(0, lambda: self._draw_pill(DANGER))
                 self.after(0, lambda: self.posicion_var.set("Acceso denegado"))
@@ -2157,9 +2425,6 @@ class App(tk.Tk):
 
         while self.cam_running:
             time.sleep(INTERVALO)
-            # No interferir con la pantalla de registro
-            if self._en_registro:
-                ultimo_msg = ""; t_sin_cara = None; continue
             if self.verificando:
                 ultimo_msg = ""; t_sin_cara = None; continue
             with self._analisis_lock:
@@ -2203,10 +2468,6 @@ class App(tk.Tk):
         t_ultimo_scan      = 0.0
 
         while self.cam_running:
-            # No interferir con el registro biométrico
-            if self._en_registro:
-                time.sleep(0.12)
-                continue
             with self._analisis_lock:
                 v = self._analisis["vector"]
 
@@ -2252,12 +2513,102 @@ class App(tk.Tk):
         except:
             pass
 
+    # ── Dashboard y sensores IR ───────────────────────────────────────────────
+    def _notificar_dashboard(self):
+        """Escribe un archivo de señal para que el dashboard refresque."""
+        try:
+            import os as _os
+            _ruta = _os.path.join(_os.path.dirname(__file__),
+                                  '..', 'database', '.refresh_signal')
+            with open(_ruta, 'w') as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+
+    def _on_entrada_sensor(self, uid):
+        """S1→S2 detectado. Solo cuenta si hubo escaneo reciente (< 15s)."""
+        if time.time() - self._t_acceso_ok > 15:
+            print("[IR] Entrada ignorada — sin escaneo reciente")
+            return
+        if self.sensores_ir:
+            self.sensores_ir.incrementar()
+        uid_real = getattr(self, '_ultimo_uid_ok', None)
+        if not uid_real:
+            print("[IR] Entrada ignorada — uid no disponible")
+            return
+        try:
+            registrar_acceso(uid_real, "entrada", detalle="Sensor IR S1→S2")
+            print(f"[IR] Entrada registrada en BD (uid={uid_real})")
+        except Exception as e:
+            print(f"[IR] Error registrando entrada: {e}")
+        self._notificar_dashboard()
+
+    def _on_salida_boton(self):
+        """Botón presionado — arma el flag, espera que pase por S2→S1."""
+        self._t_boton_salida = time.time()
+        print("[IR] Botón presionado — esperando paso por sensores")
+
+    def _on_salida_sensor(self, uid):
+        """S2→S1 detectado. Solo cuenta si el botón fue presionado recientemente (< 15s)."""
+        t_boton = getattr(self, '_t_boton_salida', 0)
+        if time.time() - t_boton > 15:
+            print("[IR] Salida ignorada — botón no presionado recientemente")
+            return
+        self._t_boton_salida = 0
+        if self.sensores_ir:
+            self.sensores_ir.decrementar()
+        try:
+            conn = conectar()
+            conn.execute("""
+                INSERT INTO registro_acceso
+                    (usuario_id, nombre, apellido_paterno, apellido_materno,
+                    numero_cuenta, rol, tipo_evento, detalle)
+                VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                        'estudiante', 'salida', 'Botón + Sensor S2→S1')
+            """)
+            conn.commit()
+            conn.close()
+            print("[IR] Salida registrada en BD")
+        except Exception as e:
+            print(f"[IR] Error registrando salida: {e}")
+        self._notificar_dashboard()
+
+    def _show_dashboard(self):
+        """Abre el diálogo de autenticación y, si es válido, lanza el dashboard."""
+        self._pedir_auth_menu(on_success=lambda u: self._abrir_dashboard(u))
+
+    def _abrir_dashboard(self, usuario_data):
+        """Cierra la ventana actual y abre el Dashboard con los datos del usuario."""
+        import sys, os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        dashboard_dir = os.path.join(current_dir, 'dashboard')
+        if dashboard_dir not in sys.path:
+            sys.path.insert(0, dashboard_dir)
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+
+        try:
+            from dashboard import Dashboard
+            self.destroy()
+            dash = Dashboard(usuario_data)
+            dash.run()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            error_root = tk.Tk()
+            error_root.title("Error")
+            tk.Label(error_root, text=f"No se pudo abrir el dashboard:\n{e}").pack()
+            tk.Button(error_root, text="Cerrar", command=error_root.destroy).pack()
+            error_root.mainloop()
+
     def on_close(self):
         self._stop_cam()
         servo.desconectar()
-        if self.sensor:
+        if getattr(self, 'sensor', None):
             self.sensor.detener()
-        self.destroy() 
+        if getattr(self, 'sensores_ir', None):
+            self.sensores_ir.detener()
+        self.destroy()
 
 
 if __name__ == "__main__":
