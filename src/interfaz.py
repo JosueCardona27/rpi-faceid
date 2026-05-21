@@ -847,6 +847,39 @@ class App(tk.Tk):
                            fill="#FFFFFF", width=3)
             cc.create_line(ic_cx+13, ic_cy+29, ic_cx+25, ic_cy+29,
                            fill="#FFFFFF", width=3)
+        elif "Dashboard" in titulo or "administración" in subtitulo or "estadísticas" in desc:
+            # Ícono: barras de estadisticas (dashboard)
+            # Fondo de "monitor"
+            cc.create_rectangle(ic_cx-30, ic_cy-30, ic_cx+30, ic_cy+22,
+                                fill="#FFFFFF", outline="")
+            # Línea base del monitor
+            cc.create_rectangle(ic_cx-30, ic_cy+22, ic_cx+30, ic_cy+26,
+                                fill="#FFFFFF", outline="")
+            # Pata del monitor
+            cc.create_rectangle(ic_cx-4, ic_cy+26, ic_cx+4, ic_cy+34,
+                                fill="#FFFFFF", outline="")
+            cc.create_rectangle(ic_cx-12, ic_cy+34, ic_cx+12, ic_cy+38,
+                                fill="#FFFFFF", outline="")
+            # Barras de grafica de estadisticas (3 barras de distintas alturas)
+            bar_w = 6
+            bar_y_base = ic_cy + 14
+            heights    = [16, 26, 20]  # altura de cada barra
+            x_starts   = [ic_cx - 22, ic_cx - 6, ic_cx + 10]
+            for bx, bh in zip(x_starts, heights):
+                cc.create_rectangle(bx, bar_y_base - bh,
+                                    bx + bar_w, bar_y_base,
+                                    fill=color, outline="")
+            # Linea de tendencia (flecha subiendo)
+            cc.create_line(ic_cx - 22, ic_cy - 6,
+                           ic_cx - 6,  ic_cy - 14,
+                           ic_cx + 10, ic_cy - 10,
+                           ic_cx + 22, ic_cy - 22,
+                           fill=color, width=2, smooth=True)
+            # Punta de flecha
+            cc.create_polygon(ic_cx + 22, ic_cy - 22,
+                              ic_cx + 16, ic_cy - 22,
+                              ic_cx + 20, ic_cy - 16,
+                              fill=color, outline="")
         else:
             # Ícono: cara con escáner / check de acceso
             # Cara oval
@@ -1146,6 +1179,10 @@ class App(tk.Tk):
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
 
+        # Auto-abrir formulario para que el usuario empiece llenandolo.
+        # El FAB sigue disponible para editarlo despues si es necesario.
+        self.after(450, lambda: self._show_form_sheet(WIN_H, FONT))
+
     def _cancelar_registro(self):
         """Detiene el escaneo en curso y regresa a la pantalla de registro."""
         self._registro_cancelado = True
@@ -1368,6 +1405,33 @@ class App(tk.Tk):
                               font=(FONT, 8), fg=SUBTEXT, bg=PANEL, anchor="w")
         estado_lbl.place(x=PAD, y=346)
 
+        # ── Botón GUARDAR (esquina inferior derecha) ─────────────────────────
+        # Solo se habilita cuando el formulario es valido.
+        # Al presionarlo cierra el sheet Y asegura que _form_listo este sincronizado.
+        BTN_G_W, BTN_G_H = 130, 38
+        guardar_cv = tk.Canvas(sheet, width=BTN_G_W, height=BTN_G_H,
+                               bg=PANEL, highlightthickness=0)
+        guardar_cv.place(x=W - BTN_G_W - PAD,
+                         y=SHEET_H - BTN_G_H - 14)
+
+        def _draw_guardar(activo):
+            guardar_cv.delete("all")
+            r = BTN_G_H // 2
+            col = SUCCESS if activo else "#2A4060"
+            tc  = "#FFFFFF" if activo else "#5577AA"
+            guardar_cv.create_arc(0, 0, 2*r, BTN_G_H,
+                                  start=90, extent=180, fill=col, outline=col)
+            guardar_cv.create_arc(BTN_G_W - 2*r, 0, BTN_G_W, BTN_G_H,
+                                  start=270, extent=180, fill=col, outline=col)
+            guardar_cv.create_rectangle(r, 0, BTN_G_W - r, BTN_G_H,
+                                        fill=col, outline="")
+            guardar_cv.create_text(BTN_G_W // 2, BTN_G_H // 2,
+                                   text="✓  GUARDAR" if activo else "GUARDAR",
+                                   font=(FONT, 10, "bold"), fill=tc)
+
+        _draw_guardar(False)
+        self._draw_guardar = _draw_guardar
+
         def _validar_y_actualizar(*args):
             """Valida los campos en tiempo real y desbloquea el botón de escaneo."""
             # Si el sheet fue cerrado, el label ya no existe — ignorar silenciosamente
@@ -1385,47 +1449,44 @@ class App(tk.Tk):
             grado  = self.grado_var.get()
             grupo  = self.grupo_var.get()
 
-            if not nombre or not ap_pat:
-                estado_lbl.config(text="Escribe nombre y apellido paterno", fg=SUBTEXT)
+            def _set_invalido(msg):
+                try:
+                    estado_lbl.config(text=msg, fg=SUBTEXT)
+                except Exception:
+                    pass
                 self._form_listo = False
                 self._draw_scan_btn(False)
-                return
+                _draw_guardar(False)
+
+            if not nombre or not ap_pat:
+                _set_invalido("Escribe nombre y apellido paterno");  return
             ok, msg = validar_numero_cuenta(cuenta)
             if not ok:
-                estado_lbl.config(text=f"Cuenta: {msg}", fg=SUBTEXT)
-                self._form_listo = False
-                self._draw_scan_btn(False)
-                return
+                _set_invalido(f"Cuenta: {msg}");  return
             if rol in ("admin", "maestro"):
                 ok2, msg2 = validar_correo(correo)
                 if not ok2:
-                    estado_lbl.config(text=f"Correo: {msg2}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Correo: {msg2}");  return
                 ok3, msg3 = validar_contrasena(pwd)
                 if not ok3:
-                    estado_lbl.config(text=f"Contraseña: {msg3}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Contraseña: {msg3}");  return
             else:
                 ok4, msg4 = validar_grado(grado)
                 if not ok4:
-                    estado_lbl.config(text=f"Grado: {msg4}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Grado: {msg4}");  return
                 ok5, msg5 = validar_grupo(grupo)
                 if not ok5:
-                    estado_lbl.config(text=f"Grupo: {msg5}", fg=SUBTEXT)
-                    self._form_listo = False
-                    self._draw_scan_btn(False)
-                    return
+                    _set_invalido(f"Grupo: {msg5}");  return
             # Todo válido
-            estado_lbl.config(text="✓  Formulario completo — puedes iniciar el escaneo", fg=SUCCESS)
+            try:
+                estado_lbl.config(
+                    text="✓  Formulario completo — presiona GUARDAR",
+                    fg=SUCCESS)
+            except Exception:
+                pass
             self._form_listo = True
             self._draw_scan_btn(True)
+            _draw_guardar(True)
 
         # Guardar datos del alumno cuando cambian (para el panel inferior)
         def _guardar_datos(*args):
@@ -1501,6 +1562,15 @@ class App(tk.Tk):
         # Disparar validación inicial con los datos que ya tenga
         _validar_y_actualizar()
 
+        # Handler del botón GUARDAR: valida una ultima vez, cierra el sheet
+        # y deja _form_listo correctamente sincronizado (corrige el bug donde
+        # a veces el registro no avanzaba aunque el formulario estuviera listo).
+        def _on_guardar_click(e):
+            _validar_y_actualizar()    # forzar refresco de _form_listo
+            if self._form_listo:
+                _close_sheet()
+        guardar_cv.bind("<Button-1>", _on_guardar_click)
+
         # Animar apertura
         def _slide_up(y):
             target = WIN_H - SHEET_H
@@ -1523,11 +1593,45 @@ class App(tk.Tk):
         grado  = self.grado_var.get()
         grupo  = self.grupo_var.get()
 
+        # ── Pre-validacion: cuenta duplicada ──────────────────────────────
+        # Evita iniciar el escaneo si la cuenta ya esta en la BD.
+        # Avisa al usuario antes de que la camara empiece a capturar.
+        try:
+            conn = conectar()
+            c = conn.cursor()
+            c.execute(
+                "SELECT id, nombre, apellido_paterno FROM usuarios "
+                "WHERE numero_cuenta = ?", (cuenta,))
+            existe = c.fetchone()
+            conn.close()
+            if existe:
+                nom = f"{existe[1]} {existe[2]}".strip()
+                try:
+                    self.posicion_var.set(
+                        f"✗  Cuenta ya registrada: {nom}")
+                    if hasattr(self, "_draw_pill_reg"):
+                        self._draw_pill_reg(DANGER)
+                    self.reg_detalle_var.set(
+                        f"Numero de cuenta {cuenta} ya pertenece a otro usuario")
+                except Exception:
+                    pass
+                return   # NO inicia el escaneo
+        except Exception as e:
+            print(f"[REG] Error validando duplicado: {e}")
+
         # Ocultar FAB y botón de escaneo, mostrar cancelar
         try:
             self.scan_btn_cv.place_forget()
             self._fab_cv.place_forget()
             self._cancel_btn.place(x=W - 150, y=24, width=136, height=20)
+        except Exception:
+            pass
+
+        # Restaurar pildora a su color normal por si tenia un error previo
+        try:
+            self.posicion_var.set("Posiciónate frente a la cámara")
+            if hasattr(self, "_draw_pill_reg"):
+                self._draw_pill_reg(ACCENT2)
         except Exception:
             pass
 
@@ -1563,13 +1667,46 @@ class App(tk.Tk):
                            if self._usuario_login else None)
 
         if uid == -1:
-            self.after(0, lambda: self._safe(
-                lambda: self.progreso_var.set(
-                    "Error al registrar. Verifica los datos.")))
-            self.after(0, lambda: self._safe(
-                lambda: self.prog_label.config(fg=DANGER)))
-            self.after(0, lambda: self._safe(
-                lambda: None))  # cap_btn removed in new design
+            # ── Error visible al usuario y restauracion de la UI ─────────────
+            # La causa mas comun es DUPLICADO: ese numero de cuenta ya existe.
+            # El error de la BD se imprime en consola pero hay que avisar
+            # tambien en pantalla y dejar al usuario volver a editar.
+            def _mostrar_error():
+                # 1. Pildora superior roja con mensaje claro
+                try:
+                    self.posicion_var.set(
+                        "✗  Esa cuenta ya esta registrada. Edita el formulario.")
+                    if hasattr(self, "_draw_pill_reg"):
+                        self._draw_pill_reg(DANGER)
+                except Exception:
+                    pass
+                # 2. Tambien en el panel inferior
+                try:
+                    self.reg_detalle_var.set(
+                        "Numero de cuenta duplicado — verifica los datos")
+                except Exception:
+                    pass
+                # 3. Restaurar boton de escaneo y FAB; ocultar Cancelar
+                try:
+                    BTN_W, BTN_H_b = W - 32, 42
+                    BTN_Y_b = self.cam_label.winfo_y() + self.cam_label.winfo_height() - BTN_H_b - 14
+                    self.scan_btn_cv.place(x=16, y=BTN_Y_b)
+                    if hasattr(self, "_fab_cv"):
+                        BTN_R = 28
+                        FAB_H = BTN_R * 2
+                        self._fab_cv.place(x=W - FAB_H - 16,
+                                           y=BTN_Y_b - FAB_H - 10)
+                    if hasattr(self, "_cancel_btn"):
+                        self._cancel_btn.place_forget()
+                except Exception:
+                    pass
+                # 4. Marcar formulario como NO listo (forzar nueva edicion)
+                self._form_listo = False
+                try:
+                    self._draw_scan_btn(False)
+                except Exception:
+                    pass
+            self.after(0, lambda: self._safe(_mostrar_error))
             return
 
         vectores_angulo: dict = {}
