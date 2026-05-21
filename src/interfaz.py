@@ -434,9 +434,11 @@ class App(tk.Tk):
             self.picam2.start()
             time.sleep(0.3)
         else:
-            self._cap = cv2.VideoCapture(0)
+            self._cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  320)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            self._cap.set(cv2.CAP_PROP_FPS, 15)
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if not self._cap.isOpened():
                 raise RuntimeError("No se pudo abrir ninguna camara.")
