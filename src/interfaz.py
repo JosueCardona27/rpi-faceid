@@ -435,8 +435,9 @@ class App(tk.Tk):
             time.sleep(0.3)
         else:
             self._cap = cv2.VideoCapture(0)
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  320)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if not self._cap.isOpened():
                 raise RuntimeError("No se pudo abrir ninguna camara.")
             for _ in range(5):
