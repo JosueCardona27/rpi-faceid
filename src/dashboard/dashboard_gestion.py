@@ -19,7 +19,7 @@ from dash_theme import (
     BG, CARD, CARD2, ACCENT, RED, BLUE, T1, T2, T3, BORDER,
     card_head, make_treeview, iniciales,
 )
-from lang_dict import t
+from lang_dict import t, toggle_lang, fecha_local
 
 
 # ═══════════════════════════════════════════════════════════════════

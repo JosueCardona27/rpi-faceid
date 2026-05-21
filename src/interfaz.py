@@ -20,6 +20,7 @@ import threading
 import hashlib
 import time
 from PIL import Image, ImageTk
+from lang_dict import t, toggle_lang
 
 USAR_PICAM = False
 try:
@@ -343,7 +344,7 @@ class App(tk.Tk):
         self.after(300, lambda: self.cam_label.configure(image=""))
         servo.espera()
         try:
-            self.resultado_var.set("Esperando persona...")
+            self.resultado_var.set(t("acc_esperando_persona"))
             self.resultado_label.config(fg=ACCENT)
             self.candidato_var.set("")
             self.detalle_var.set("")
@@ -352,7 +353,7 @@ class App(tk.Tk):
             self.hdr_status_var.set("")
             self.hdr_nombre_var.set("")
             self._draw_pill(ACCENT2)
-            self.posicion_var.set("Acércate para identificarte")
+            self.posicion_var.set(t("acc_acercate_identificar"))
         except Exception:
             pass
 
@@ -374,6 +375,12 @@ class App(tk.Tk):
         self._stop_cam()
         self._usuario_login = None
         self._modo_acceso   = False
+        self._build_main()
+
+    def _toggle_language(self):
+        """Alterna entre español e inglés y reconstruye la pantalla principal."""
+        toggle_lang()
+        self._stop_cam()
         self._build_main()
 
     def _set_overlay(self, color, texto=""):
@@ -539,10 +546,9 @@ class App(tk.Tk):
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
         cv.place(x=0, y=0)
 
-        # ── Barra superior blanca (logo UdeC + título + cerrar) ───────────────
+        # ── Barra superior blanca ───────────────────────────────────────────
         TOP_H = 64
         cv.create_rectangle(0, 0, W, TOP_H, fill="#FFFFFF", outline="")
-        # Separador inferior
         cv.create_rectangle(0, TOP_H - 1, W, TOP_H, fill=BORDER, outline="")
 
         self._logo_img = None
@@ -562,13 +568,26 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        # Título central (SICEUC)
-        cv.create_text(W // 2, 32, text="SICEUC",
+        # Título central
+        cv.create_text(W // 2, 32, text=t("main_title"),
                        font=("Segoe UI", 13, "bold"), fill=NAVY_LN)
 
-        # ── Botón SALIR (visible, con icono X y texto) ───────────────────────
+        # ── Botón TRADUCTOR ─────────────────────────────────────────────────
+        self._btn_traductor = tk.Button(
+            self, text=t("btn_traductor"),
+            font=("Segoe UI", 9, "bold"),
+            fg=TEAL_LN, bg="#FFFFFF",
+            relief="flat", cursor="hand2",
+            bd=0, highlightthickness=1,
+            highlightbackground=TEAL_LN,
+            command=self._toggle_language)
+        self._btn_traductor.place(x=W - 170, y=14, width=68, height=28)
+        self._btn_traductor.bind("<Enter>", lambda e: self._btn_traductor.config(bg=TEAL_LN, fg="#FFFFFF"))
+        self._btn_traductor.bind("<Leave>", lambda e: self._btn_traductor.config(bg="#FFFFFF", fg=TEAL_LN))
+
+        # ── Botón SALIR ─────────────────────────────────────────────────────
         close_btn = tk.Button(
-            self, text="✕  Salir",
+            self, text=t("main_btn_close"),
             font=("Segoe UI", 9, "bold"),
             fg="#C1121F", bg="#FFF0F0",
             relief="flat", cursor="hand2",
@@ -579,7 +598,7 @@ class App(tk.Tk):
         close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#C1121F", fg="#FFFFFF"))
         close_btn.bind("<Leave>", lambda e: close_btn.config(bg="#FFF0F0", fg="#C1121F"))
 
-        # ── Arrastre de ventana (drag) ────────────────────────────────────────
+        # ── Arrastre de ventana ─────────────────────────────────────────────
         self._drag_x = 0; self._drag_y = 0
         def _drag_start(e):
             self._drag_x = e.x_root - self.winfo_x()
@@ -588,45 +607,39 @@ class App(tk.Tk):
             self.geometry(f"+{e.x_root - self._drag_x}+{e.y_root - self._drag_y}")
         cv.tag_bind("drag_zone", "<ButtonPress-1>",   _drag_start)
         cv.tag_bind("drag_zone", "<B1-Motion>",       _drag_move)
-        # Área invisible de arrastre sobre el header blanco (evita el botón cerrar)
         cv.create_rectangle(0, 0, W - 48, TOP_H, fill="", outline="",
                             tags="drag_zone")
 
-        # ── Segunda barra: fondo azul marino + acento verde biselado ───────────
+        # ── Segunda barra: fondo azul marino + acento verde biselado ────────
         SUB_H = 46
         SUB_Y = TOP_H
         cv.create_rectangle(0, SUB_Y, W, SUB_Y + SUB_H, fill=NAVY_LN, outline="")
-
-        # Rectángulo verde con lado derecho en diagonal (bisel/paralelo)
-        SKEW  = 18   # inclinación del lado derecho en px
-        REC_W = 210  # ancho total del bloque verde
+        SKEW  = 18
+        REC_W = 210
         cv.create_polygon(
             0,            SUB_Y,
             REC_W,        SUB_Y,
             REC_W - SKEW, SUB_Y + SUB_H,
             0,            SUB_Y + SUB_H,
             fill=TEAL_LN, outline="")
-
-        # Texto del sistema sobre la barra
-        cv.create_text(14, SUB_Y + 23, text="SISTEMA DE CONTROL DE ACCESO FACIAL",
+        cv.create_text(14, SUB_Y + 23, text=t("main_system"),
                        font=("Segoe UI", 11, "bold"), fill="#FFFFFF", anchor="w")
         cv.create_text(W - 14, SUB_Y + 23,
-                       text="Facultad de Ingeniería Electromecánica",
+                       text=t("main_facultad"),
                        font=("Segoe UI", 9), fill="#AABBCC", anchor="e")
 
-        # ── Zona central: título selección ────────────────────────────────────
+        # ── Título selección ─────────────────────────────────────────────────
         CONTENT_Y = SUB_Y + SUB_H + 28
         cv.create_text(W // 2, CONTENT_Y,
-                       text="Selecciona una opción",
+                       text=t("main_subtitle"),
                        font=("Segoe UI", 17, "bold"), fill=TEXT)
         cv.create_text(W // 2, CONTENT_Y + 24,
-                       text="Sistema de identificación biométrica — Universidad de Colima",
+                       text=t("main_desc"),
                        font=("Segoe UI", 8), fill=SUBTEXT)
-        # Separador
         cv.create_line(20, CONTENT_Y + 40, W - 20, CONTENT_Y + 40,
                        fill=BORDER, width=1)
 
-        # ── Tarjetas horizontales ─────────────────────────────────────────────
+        # ── Tarjetas horizontales ───────────────────────────────────────────
         BW, BH = W - 40, 148
         BX = 20
         BY1 = CONTENT_Y + 58
@@ -634,28 +647,30 @@ class App(tk.Tk):
         BY3 = BY2 + BH + 22
 
         self._horiz_card_btn(cv, BX, BY1, BW, BH,
-                             "Registrar",
-                             "Nuevo usuario",
-                             "Captura biométrica guiada en 4 ángulos",
-                             NAVY_LN, self._show_registro)
-        self._horiz_card_btn(cv, BX, BY2, BW, BH,
-                             "Acceso",
-                             "Verificar identidad",
-                             "Reconocimiento facial en tiempo real",
-                             TEAL_LN, self._show_acceso)
-        self._horiz_card_btn(cv, BX, BY3, BW, BH,
-                             "Dashboard",
-                             "Panel de administración",
-                             "Gestión de usuarios, registros y estadísticas",
-                             GOLD_LN, self._ir_a_dashboard) # Cambiarlo en caso de no funcionar el acceso, es generico por lo que no existe
-                            #GOLD_LN, lambda: self._abrir_dashboard({'rol': 'admin'}))
+                             t("main_btn_register"),
+                             t("main_btn_register_sub"),
+                             t("main_btn_register_desc"),
+                             NAVY_LN, self._show_registro,
+                             icon_type="register")   # ← esto
 
-        # ── Barra inferior ────────────────────────────────────────────────────
+        self._horiz_card_btn(cv, BX, BY2, BW, BH,
+                             t("main_btn_access"),
+                             t("main_btn_access_sub"),
+                             t("main_btn_access_desc"),
+                             TEAL_LN, self._show_acceso,
+                             icon_type="access")     # ← esto
+
+        self._horiz_card_btn(cv, BX, BY3, BW, BH,
+                             t("main_btn_dashboard"),
+                             t("main_btn_dashboard_sub"),
+                             t("main_btn_dashboard_desc"),
+                             GOLD_LN, self._show_dashboard,
+                             icon_type="dashboard")  # ← esto
+        # ── Barra inferior ──────────────────────────────────────────────────
         cv.create_rectangle(0, H - 32, W, H, fill=NAVY_LN, outline="")
         cv.create_text(W // 2, H - 16,
                        text=f"Universidad de Colima · v5.5 · {int(TIEMPO_ESCANEO)}s por ciclo · máx {MAX_MUESTRAS_PASO} muestras/paso",
                        font=("Segoe UI", 7), fill="#AABBCC")
-
     def _ir_a_dashboard(self):
         """Abre el dashboard si hay un usuario autenticado con rol permitido."""
         usuario = getattr(self, '_usuario_login', None)
@@ -713,7 +728,7 @@ class App(tk.Tk):
                              font_size=9, bg_parent=CARD)
         btn_f.place(relx=.5, y=h - 30, anchor="center")
 
-    def _horiz_card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd):
+    def _horiz_card_btn(self, cv, x, y, w, h, titulo, subtitulo, desc, color, cmd, icon_type =""):
         """
         Tarjeta horizontal pill — todo dibujado en un solo Canvas por tarjeta.
         Layout: [banda·icono redondeada izquierda | sep | textos | ENTRAR pill]
@@ -754,7 +769,7 @@ class App(tk.Tk):
 
         # ── Ícono intuitivo centrado en la banda ─────────────────────────────
         ic_cx, ic_cy = bw // 2, h // 2
-        if "REGISTRAR" in titulo or "Nuevo" in subtitulo:
+        if icon_type == "register":
             # Ícono: clipboard / hoja de registro
             # Cuerpo del clipboard (rectángulo redondeado)
             cc.create_rectangle(ic_cx-22, ic_cy-30, ic_cx+22, ic_cy+32,
@@ -785,7 +800,7 @@ class App(tk.Tk):
                            fill="#FFFFFF", width=3)
             cc.create_line(ic_cx+13, ic_cy+29, ic_cx+25, ic_cy+29,
                            fill="#FFFFFF", width=3)
-        elif "DASHBOARD" in titulo.upper() or "Panel" in subtitulo:
+        elif icon_type == "dashboard":
             ic_cx, ic_cy = bw // 2, h // 2
             # Barras del gráfico (blancas)
             bars = [(15, 28), (15, 20), (15, 24), (15, 16)]
@@ -839,7 +854,7 @@ class App(tk.Tk):
 
         # ── Botón pill ENTRAR (Canvas embebido via create_window) ─────────────
         btn_w2, btn_h2 = 150, 46
-        btn_f = _rounded_btn(cc, "ENTRAR  ▶", cmd,
+        btn_f = _rounded_btn(cc, t("main_btn_enter"), cmd,
                              width=btn_w2, height=btn_h2,
                              bg=color, fg="#FFFFFF",
                              hover=hover_c,
@@ -881,9 +896,9 @@ class App(tk.Tk):
         hdr = tk.Frame(self, bg=NAVY_LN, width=W, height=HDR_H)
         hdr.place(x=0, y=0)
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="REGISTRO", font=(FONT, 13, "bold"),
+        tk.Label(hdr, text=t("reg_header"), font=(FONT, 13, "bold"),
                  fg="#FFFFFF", bg=NAVY_LN).place(x=18, y=14)
-        menu_hdr = tk.Button(hdr, text="☰  Menú",
+        menu_hdr = tk.Button(hdr, text=t("main_btn_menu"),
                               font=(FONT, 8, "bold"), fg="#FFFFFF", bg=TEAL_LN,
                               relief="flat", cursor="hand2", bd=0,
                               highlightthickness=0,
@@ -901,7 +916,7 @@ class App(tk.Tk):
         self.pill_cv_reg = tk.Canvas(self, width=PILL_W, height=PILL_H,
                                      bg=BG, highlightthickness=0)
         self.pill_cv_reg.place(x=W // 2 - PILL_W // 2, y=PILL_Y)
-        self.posicion_var = tk.StringVar(value="Posiciónate frente a la cámara")
+        self.posicion_var = tk.StringVar(value=t("reg_initial_pill"))
 
         def _draw_pill_reg(color):
             r = PILL_H // 2
@@ -949,7 +964,7 @@ class App(tk.Tk):
                                         start=270, extent=180, fill=color, outline=color)
             self.scan_btn_cv.create_rectangle(r, 0, BTN_W - r, BTN_H_b,
                                               fill=color, outline="")
-            icono = "⬤  INICIAR ESCANEO" if listo else "🔒  Completa el formulario para continuar"
+            icono = t("reg_scan_btn_ready") if listo else t("reg_scan_btn_locked")
             self.scan_btn_cv.create_text(BTN_W // 2, BTN_H_b // 2,
                                          text=icono, font=(FONT, 10, "bold"), fill=tc)
 
@@ -1030,7 +1045,7 @@ class App(tk.Tk):
 
         # Botón CANCELAR (dentro del panel, aparece durante escaneo)
         self._cancel_btn = tk.Button(
-            scan_bot, text="✕  Cancelar registro",
+            scan_bot, text=t("reg_cancel_btn"),
             font=(FONT, 8, "bold"), fg=DANGER, bg=NAVY_LN,
             relief="flat", bd=0, highlightthickness=0, cursor="hand2",
             command=self._cancelar_registro)
@@ -1261,7 +1276,7 @@ class App(tk.Tk):
         sheet.pack_propagate(False)
 
         # Título + botón cerrar
-        tk.Label(sheet, text="📋  Datos del usuario",
+        tk.Label(sheet, text=t("reg_form_title"),
                  font=(FONT, 11, "bold"), fg=TEXT, bg=PANEL,
                  anchor="w").place(x=18, y=24)
 
@@ -1303,16 +1318,15 @@ class App(tk.Tk):
             return e
 
         # Sección Identidad
-        tk.Label(sheet, text="Identidad", font=(FONT, 8, "bold"),
+        tk.Label(sheet, text=t("reg_section_identity"), font=(FONT, 8, "bold"),
                  fg=NAVY_LN, bg=PANEL).place(x=PAD, y=64)
 
-        campo("Nombre(s)",   self.nombre_var, PAD,  84, w=W - 36)
-        campo("Ap. paterno", self.ap_pat_var, PAD,  132)
-        campo("Ap. materno", self.ap_mat_var, COL2, 132)
-        campo("Número de cuenta (8 dígitos)", self.cuenta_var, PAD, 180, w=W - 36)
-
+        campo(t("reg_field_nombre"), self.nombre_var, PAD,  84, w=W - 36)
+        campo(t("reg_field_ap_pat"), self.ap_pat_var, PAD,  132)
+        campo(t("reg_field_ap_mat"), self.ap_mat_var, COL2, 132)
+        campo(t("reg_field_cuenta"), self.cuenta_var, PAD, 180, w=W - 36)
         # Sección Rol
-        tk.Label(sheet, text="Rol", font=(FONT, 8, "bold"),
+        tk.Label(sheet, text=t("reg_section_rol"), font=(FONT, 8, "bold"),
                  fg=NAVY_LN, bg=PANEL).place(x=PAD, y=228)
 
         rol_frame = tk.Frame(sheet, bg=CARD, width=W - 36, height=34)
@@ -1320,7 +1334,7 @@ class App(tk.Tk):
         rol_frame.pack_propagate(False)
 
         # Estado en tiempo real
-        estado_lbl = tk.Label(sheet, text="Estado: Formulario incompleto",
+        estado_lbl = tk.Label(sheet, text=t("reg_status_incomplete"),
                               font=(FONT, 8), fg=SUBTEXT, bg=PANEL, anchor="w")
         estado_lbl.place(x=PAD, y=346)
 
@@ -1336,44 +1350,44 @@ class App(tk.Tk):
             grupo  = self.grupo_var.get()
 
             if not nombre or not ap_pat:
-                estado_lbl.config(text="Escribe nombre y apellido paterno", fg=SUBTEXT)
+                estado_lbl.config(text=t("reg_status_name"), fg=SUBTEXT)
                 self._form_listo = False
                 self._draw_scan_btn(False)
                 return
             ok, msg = validar_numero_cuenta(cuenta)
             if not ok:
-                estado_lbl.config(text=f"Cuenta: {msg}", fg=SUBTEXT)
+                estado_lbl.config(text=t("reg_status_cuenta", msg=msg), fg=SUBTEXT)
                 self._form_listo = False
                 self._draw_scan_btn(False)
                 return
             if rol in ("admin", "maestro"):
                 ok2, msg2 = validar_correo(correo)
                 if not ok2:
-                    estado_lbl.config(text=f"Correo: {msg2}", fg=SUBTEXT)
+                    estado_lbl.config(text=t("reg_status_correo", msg=msg2), fg=SUBTEXT)
                     self._form_listo = False
                     self._draw_scan_btn(False)
                     return
                 ok3, msg3 = validar_contrasena(pwd)
                 if not ok3:
-                    estado_lbl.config(text=f"Contraseña: {msg3}", fg=SUBTEXT)
+                    estado_lbl.config(text=t("reg_status_pwd", msg=msg3), fg=SUBTEXT)
                     self._form_listo = False
                     self._draw_scan_btn(False)
                     return
             else:
                 ok4, msg4 = validar_grado(grado)
                 if not ok4:
-                    estado_lbl.config(text=f"Grado: {msg4}", fg=SUBTEXT)
+                    estado_lbl.config(text=t("reg_status_grado", msg=msg4), fg=SUBTEXT)
                     self._form_listo = False
                     self._draw_scan_btn(False)
                     return
                 ok5, msg5 = validar_grupo(grupo)
                 if not ok5:
-                    estado_lbl.config(text=f"Grupo: {msg5}", fg=SUBTEXT)
+                    estado_lbl.config(text=t("reg_status_grupo", msg=msg5), fg=SUBTEXT)
                     self._form_listo = False
                     self._draw_scan_btn(False)
                     return
             # Todo válido
-            estado_lbl.config(text="✓  Formulario completo — puedes iniciar el escaneo", fg=SUCCESS)
+            estado_lbl.config(text=t("reg_status_complete"), fg=SUCCESS)
             self._form_listo = True
             self._draw_scan_btn(True)
 
@@ -1756,10 +1770,10 @@ class App(tk.Tk):
         ico_cv.create_oval(23, 30, 29, 36, fill="#FFFFFF", outline="")
         ico_cv.create_rectangle(25, 33, 27, 40, fill="#FFFFFF", outline="")
 
-        tk.Label(card, text="Acceso Restringido",
+        tk.Label(card, text=t("auth_title"),
                  font=(FONT, 14, "bold"), fg=NAVY_LN,
                  bg="#FFFFFF").pack(pady=(10, 2))
-        tk.Label(card, text="Solo administradores y maestros",
+        tk.Label(card, text=t("auth_subtitle"),
                  font=(FONT, 9), fg="#777777",
                  bg="#FFFFFF").pack(pady=(0, 16))
 
@@ -1787,8 +1801,8 @@ class App(tk.Tk):
 
         auth_cuenta_var = tk.StringVar()
         auth_pwd_var    = tk.StringVar()
-        ent_cuenta = _mk_field(fields, "Número de cuenta", auth_cuenta_var)
-        ent_pwd    = _mk_field(fields, "Contraseña",       auth_pwd_var, show="●")
+        ent_cuenta = _mk_field(fields, t("auth_field_cuenta"), auth_cuenta_var)
+        ent_pwd    = _mk_field(fields, t("auth_field_pwd"), auth_pwd_var, show="●")
         ent_cuenta.focus_set()
 
         error_var = tk.StringVar(value="")
@@ -1809,7 +1823,7 @@ class App(tk.Tk):
             cuenta = auth_cuenta_var.get().strip()
             pwd    = auth_pwd_var.get().strip()
             if not cuenta or not pwd:
-                error_var.set("Completa ambos campos.")
+                error_var.set(t("auth_error_empty"))
                 return
 
             # ── Validación real contra la base de datos ────────────────
@@ -1834,12 +1848,12 @@ class App(tk.Tk):
                 conn.close()
 
                 if not user:
-                    error_var.set("Usuario no encontrado o sin permisos.")
+                    error_var.set(t("auth_error_notfound"))
                     return
 
                 hash_input = hashlib.sha256(pwd.encode()).hexdigest()
                 if hash_input != user[7]:
-                    error_var.set("Contraseña incorrecta.")
+                    error_var.set(t("auth_error_wrongpwd"))
                     return
 
                 usuario_data = {
@@ -1861,10 +1875,10 @@ class App(tk.Tk):
                 else:
                     self._build_main()          # ← comportamiento original
             except Exception as e:
-                error_var.set(f"Error de conexión: {e}")
+                error_var.set(t("auth_error_conn", error=e))
 
         btn_cancel = tk.Button(
-            btn_row, text="Cancelar",
+            btn_row, text=t("auth_btn_cancel"),
             font=(FONT, 10), fg="#555555", bg="#FFFFFF",
             relief="flat", cursor="hand2", bd=0,
             highlightthickness=0, command=_cerrar)
@@ -1875,7 +1889,7 @@ class App(tk.Tk):
         tk.Frame(btn_row, bg=BEIGE, width=1).pack(side="left", fill="y")
 
         btn_ok = tk.Button(
-            btn_row, text="Ingresar  ▶",
+            btn_row, text=t("auth_btn_ingresar"),
             font=(FONT, 10, "bold"), fg="#FFFFFF", bg=GREEN,
             relief="flat", cursor="hand2", bd=0,
             highlightthickness=0, command=_confirmar)
@@ -1915,12 +1929,12 @@ class App(tk.Tk):
         hdr.place(x=0, y=0)
         hdr.create_rectangle(0, 0, W, HDR_H, fill=ACCENT, outline="")
         hdr.create_text(W // 2, HDR_H // 2 - 5,
-                        text="ACCESO", font=(FONT, 14, "bold"),
+                        text=t("acc_header"), font=(FONT, 14, "bold"),
                         fill="#FFFFFF", anchor="center")
 
         # ── Botón MENÚ (lleva al main con autenticación) ──────────────────────
         menu_btn = tk.Button(
-            self, text="☰  Menú",
+            self, text=t("main_btn_menu"),
             font=(FONT, 8, "bold"), fg="#FFFFFF", bg=NAVY_LN,
             relief="flat", cursor="hand2", bd=0,
             highlightthickness=1, highlightbackground=TEAL_LN,
@@ -1947,7 +1961,7 @@ class App(tk.Tk):
                                  bg=BG, highlightthickness=0)
         self.pill_cv.place(x=W // 2 - PILL_W // 2, y=PILL_Y)
 
-        self.posicion_var = tk.StringVar(value="Esperando...")
+        self.posicion_var = tk.StringVar(value=t("acc_pill_esperando"))
 
         def _draw_pill(color):
             r = PILL_H // 2
@@ -2000,7 +2014,7 @@ class App(tk.Tk):
         self.detalle_lbl.place(x=14, y=34, width=W - 28)
 
         # Etiqueta SIMILITUD + porcentaje (en la misma línea)
-        tk.Label(bot, text="SIMILITUD", font=(FONT, 7, "bold"),
+        tk.Label(bot, text=t("acc_similitud"), font=(FONT, 7, "bold"),
                  fg="#5577AA", bg=NAVY_LN, anchor="w"
                  ).place(x=14, y=62)
         self.sim_lbl = tk.Label(bot, text="",
@@ -2112,7 +2126,7 @@ class App(tk.Tk):
         self.after(0, lambda: self.resultado_label.config(fg=ACCENT))
         self.after(0, lambda: self.candidato_var.set(""))
         self.after(0, lambda: self.detalle_var.set(""))
-        self._set_overlay((255, 184, 48), "Analizando...")
+        self._set_overlay((255, 184, 48), t("scan_analyzing"))
         threading.Thread(target=self._verificar, daemon=True).start()
 
     def _verificar(self):
@@ -2352,11 +2366,11 @@ class App(tk.Tk):
                 if v is not None:
                     t_sin_cara = None
                     if tipo == TIPO_FRONTAL:
-                        msg = "✓  Listo · mira a la camara"; color = ACCENT2
+                        msg = t("acc_pill_listo"); color = ACCENT2
                     elif tipo in (TIPO_PERFIL_D, TIPO_PERFIL_I):
-                        msg = "Estas volteado — mira al frente"; color = WARNING
+                        msg = t("acc_pill_volteado"); color = WARNING
                     else:
-                        msg = "✓  Listo · mira a la camara"; color = ACCENT2
+                        msg = t("acc_pill_listo"); color = ACCENT2
                 else:
                     if t_sin_cara is None:
                         t_sin_cara = time.time()

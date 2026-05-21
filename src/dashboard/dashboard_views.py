@@ -23,7 +23,7 @@ from dash_theme import (
     T1, T2, T3, BORDER,
     card_head, scrollable_frame, make_treeview, iniciales,
 )
-from lang_dict import t
+from lang_dict import t, toggle_lang, fecha_local
 
 # ══════════════════════════════════════════════════════════════════════
 #  CAPA DE DATOS UNIFICADA

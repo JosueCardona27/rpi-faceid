@@ -1,7 +1,7 @@
 """
 lang_dict.py
 ============
-Diccionario de traducción para LabControl Dashboard.
+Diccionario de traducción para LabControl Dashboard + Interfaz táctil.
 Idiomas disponibles: Español (es), Inglés (en).
 
 Uso:
@@ -9,13 +9,8 @@ Uso:
 
     set_lang("en")          # cambiar idioma
     label = t("resumen")    # → "Summary"
-
-Para agregar un nuevo idioma:
-    1. Añade una entrada en TRANSLATIONS con el código ISO.
-    2. Copia todas las claves del diccionario "es" y tradúcelas.
 """
 
-# Idioma activo (estado global de la sesión)
 _current_lang: str = "es"
 
 LANGS: dict[str, str] = {
@@ -25,12 +20,8 @@ LANGS: dict[str, str] = {
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
 
-    # ══════════════════════════════════════════════════════════════
-    # ESPAÑOL  (fuente de verdad — todas las claves deben existir aquí)
-    # ══════════════════════════════════════════════════════════════
     "es": {
-
-        # ── Sidebar ───────────────────────────────────────────────
+        # ── Sidebar ───────────────────────────────────────────
         "sistema_gestion":   "Sistema de Gestión",
         "nav_panel":         "Panel",
         "nav_resumen":       "📊  Resumen",
@@ -49,12 +40,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "maestro":           "Maestro",
         "alumno":            "Alumno",
 
-        # ── Header ────────────────────────────────────────────────
-        "btn_traductor":     "🌐 EN",   # texto del botón cuando idioma activo es ES
+        # ── Header ────────────────────────────────────────────
+        "btn_traductor":     "🌐 EN",
         "confirmar_salida":  "¿Deseas cerrar la sesión actual?",
         "logout_titulo":     "Cerrar sesión",
 
-        # ── Títulos / subtítulos de vistas ────────────────────────
+        # ── Títulos / subtítulos de vistas ────────────────────
         "title_resumen":     "Resumen del laboratorio",
         "sub_resumen":       "Vista general en tiempo real",
         "title_inside":      "En el laboratorio",
@@ -74,12 +65,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "title_config":      "Configuración",
         "sub_config":        "Preferencias del sistema",
 
-        # ── Resumen: KPIs ─────────────────────────────────────────
+        # ── Resumen: KPIs ─────────────────────────────────────
         "kpi_inside":        "Personas adentro",
         "kpi_hoy":           "Accesos hoy",
         "kpi_semana":        "Accesos esta semana",
 
-        # ── Resumen: cards ────────────────────────────────────────
+        # ── Resumen: cards ────────────────────────────────────
         "ultimos_accesos":   "Últimos 4 accesos",
         "accesos_rt":        "Accesos recientes en tiempo real",
         "accesos_recientes": "Accesos recientes",
@@ -88,7 +79,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nadie_lab":         "Sin accesos registrados aún",
         "en_vivo":           "● EN VIVO",
 
-        # ── Tabla resumen / accesos ───────────────────────────────
+        # ── Tabla resumen / accesos ───────────────────────────
         "col_persona":       "Persona",
         "col_tipo":          "Tipo",
         "col_hora":          "Hora",
@@ -106,7 +97,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dentro":            "✓ Dentro",
         "tiempo_exc":        "⚠ Tiempo excedido",
 
-        # ── Vista Accesos ─────────────────────────────────────────
+        # ── Vista Accesos ─────────────────────────────────────
         "filtro_todos":      "Todos",
         "filtro_estudiante": "Estudiantes",
         "filtro_maestro":    "Maestros",
@@ -118,7 +109,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "registro_completo": "Registro completo de accesos",
         "hist_entradas":     "Historial de entradas al laboratorio",
 
-        # ── Estadísticas ──────────────────────────────────────────
+        # ── Estadísticas ──────────────────────────────────────
         "top_visitantes":    "Top 7 — Más accesos registrados",
         "top_sub":           "Usuarios con mayor número de ingresos",
         "col_visitas":       "visitas",
@@ -129,7 +120,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sin_datos":         "Sin datos",
         "sin_datos_semana":  "Sin datos de esta semana",
 
-        # ── Perfil ────────────────────────────────────────────────
+        # ── Perfil ────────────────────────────────────────────
         "num_cuenta":        "Número de cuenta",
         "correo":            "Correo",
         "activo":            "Activo",
@@ -137,7 +128,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "accesos_mes":       "Accesos registrados este mes",
         "usuarios_mes":      "Usuarios registrados este mes",
 
-        # ── Configuración ─────────────────────────────────────────
+        # ── Configuración ─────────────────────────────────────
         "config_sistema":    "Configuración del sistema",
         "prefs":             "Preferencias de la sesión",
         "horario_acceso":    "Horario de acceso",
@@ -157,7 +148,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "autoactualizacion_desc": "Los datos se refrescan cada 30 segundos",
         "activo_30s":        "✓  Activo — cada 30 segundos",
 
-        # ── Gestión (tabla) ───────────────────────────────────────
+        # ── Gestión (tabla) ───────────────────────────────────
         "agregar":           "＋  Agregar",
         "editar":            "✏  Editar",
         "eliminar":          "🗑  Eliminar",
@@ -173,7 +164,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "col_act_por":       "Actualizado por",
         "col_ult_act":       "Últ. actualiz.",
 
-        # ── Gestión: formulario ───────────────────────────────────
+        # ── Gestión: formulario ───────────────────────────────
         "agregar_alumno":    "Agregar Alumno",
         "editar_alumno":     "Editar Alumno",
         "agregar_maestro":   "Agregar Maestro",
@@ -199,31 +190,128 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "exito":             "Éxito",
         "error":             "Error",
 
-        # ── Eliminar ──────────────────────────────────────────────
+        # ── Eliminar ──────────────────────────────────────────
         "eliminar_titulo":   "Confirmar eliminación",
         "eliminar_pregunta": "¿Seguro que deseas eliminar a\n{nombre}?\n\nEsta acción no se puede deshacer.",
         "no_autoeliminar":   "No puedes eliminarte a ti mismo.",
         "selecciona_reg":    "Selecciona un registro de la tabla.",
         "seleccion":         "Selección",
 
-        # ── Horario: errores ──────────────────────────────────────
+        # ── Horario: errores ──────────────────────────────────
         "err_hora":          "Formato inválido. Usa HH:MM (p. ej. 08:00).",
 
-        # ── Nombres de días y meses ───────────────────────────────
+        # ── Nombres de días y meses ───────────────────────────
         "day_0": "Lun", "day_1": "Mar", "day_2": "Mié",
         "day_3": "Jue", "day_4": "Vie", "day_5": "Sáb", "day_6": "Dom",
         "mon_1":  "Ene",  "mon_2":  "Feb",  "mon_3":  "Mar",
         "mon_4":  "Abr",  "mon_5":  "May",  "mon_6":  "Jun",
         "mon_7":  "Jul",  "mon_8":  "Ago",  "mon_9":  "Sep",
         "mon_10": "Oct",  "mon_11": "Nov",  "mon_12": "Dic",
+
+        # ═══════ NUEVAS CLAVES PARA interfaz.py ══════════════
+        # Menú principal
+        "main_title":                   "SICEUC",
+        "main_system":                  "SISTEMA DE CONTROL DE ACCESO FACIAL",
+        "main_facultad":                "Facultad de Ingeniería Electromecánica",
+        "main_subtitle":                "Selecciona una opción",
+        "main_desc":                    "Sistema de identificación biométrica — Universidad de Colima",
+        "main_btn_register":            "Registrar",
+        "main_btn_register_sub":        "Nuevo usuario",
+        "main_btn_register_desc":       "Captura biométrica guiada en 4 ángulos",
+        "main_btn_access":              "Acceso",
+        "main_btn_access_sub":          "Verificar identidad",
+        "main_btn_access_desc":         "Reconocimiento facial en tiempo real",
+        "main_btn_dashboard":           "Dashboard",
+        "main_btn_dashboard_sub":       "Panel de administración",
+        "main_btn_dashboard_desc":      "Gestión de usuarios, registros y estadísticas",
+        "main_btn_enter":               "ENTRAR  ▶",
+        "main_btn_close":               "✕  Salir",
+        "main_btn_menu":                "☰  Menú",
+
+        # Registro
+        "reg_header":                   "REGISTRO",
+        "reg_initial_pill":             "Posiciónate frente a la cámara",
+        "reg_scan_btn_ready":           "⬤  INICIAR ESCANEO",
+        "reg_scan_btn_locked":          "🔒  Completa el formulario para continuar",
+        "reg_form_title":               "📋  Datos del usuario",
+        "reg_section_identity":         "Identidad",
+        "reg_field_nombre":             "Nombre(s)",
+        "reg_field_ap_pat":             "Ap. paterno",
+        "reg_field_ap_mat":             "Ap. materno",
+        "reg_field_cuenta":             "Número de cuenta (8 dígitos)",
+        "reg_section_rol":              "Rol",
+        "reg_status_incomplete":        "Estado: Formulario incompleto",
+        "reg_status_name":              "Escribe nombre y apellido paterno",
+        "reg_status_cuenta":            "Cuenta: {msg}",
+        "reg_status_correo":            "Correo: {msg}",
+        "reg_status_pwd":               "Contraseña: {msg}",
+        "reg_status_grado":             "Grado: {msg}",
+        "reg_status_grupo":             "Grupo: {msg}",
+        "reg_status_complete":          "✓  Formulario completo — puedes iniciar el escaneo",
+        "reg_cancel_btn":               "✕  Cancelar registro",
+        "reg_fab_tooltip":              "Datos del usuario",
+
+        # Registro: pasos (nombres cortos)
+        "step_front":                   "Frente",
+        "step_left":                    "Izq.",
+        "step_right":                   "Der.",
+
+        # Registro: mensajes de progreso
+        "scan_step_instruction":        "{paso}/{total}: {instruccion}",
+        "scan_occluded":                "OBSTRUIDO — {razon}",
+        "scan_waiting":                 "ESPERANDO — {correccion}",
+        "scan_detected":                "Detectado",
+        "scan_searching":               "Buscando...",
+        "scan_analyzing":               "Analizando...",
+        "scan_denied":                  "Desconocido",
+        "scan_duplicate":               "YA REGISTRADO\n{nombre}",
+        "scan_success":                 "Listo. {nombre}\n{muestras} muestras.",
+        "scan_fail":                    "Inténtalo de nuevo.",
+        "scan_pasos_incompletos":       "Pasos incompletos:\n{lista}",
+
+        # Auth dialog
+        "auth_title":                   "Acceso Restringido",
+        "auth_subtitle":                "Solo administradores y maestros",
+        "auth_field_cuenta":            "Número de cuenta",
+        "auth_field_pwd":               "Contraseña",
+        "auth_error_empty":             "Completa ambos campos.",
+        "auth_error_notfound":          "Usuario no encontrado o sin permisos.",
+        "auth_error_wrongpwd":          "Contraseña incorrecta.",
+        "auth_error_conn":              "Error de conexión: {error}",
+        "auth_btn_cancel":              "Cancelar",
+        "auth_btn_ingresar":            "Ingresar  ▶",
+
+        # Acceso
+        "acc_header":                   "ACCESO",
+        "acc_esperando":                "Esperando...",
+        "acc_similitud":                "SIMILITUD",
+        "acc_pill_esperando":           "Esperando...",
+        "acc_pill_listo":               "✓  Listo · mira a la cámara",
+        "acc_pill_acercate":            "Acércate a la cámara",
+        "acc_pill_volteado":            "Estás volteado — mira al frente",
+        "acc_scan_escaneando":          "Escaneando...",
+        "acc_no_rostro":                "Sin rostro",
+        "acc_gira_frente":              "Gira al frente",
+        "acc_mira_directo":             "Mira directo a la cámara.",
+        "acc_ponte_frente":             "Ponte frente a la cámara.",
+        "acc_denegado":                 "ACCESO DENEGADO",
+        "acc_sin_registros":            "Sin registros",
+        "acc_persona_no_reconocida":    "Persona no reconocida.",
+        "acc_no_hay_usuarios":          "No hay usuarios registrados.",
+        "acc_estado_denegado":          "DENEGADO ✕",
+        "acc_pill_denegado":            "Acceso denegado",
+        "acc_angulo_match":             "Ángulo match: {angulo}",
+        "acc_permitido":                "ACCESO PERMITIDO",
+        "acc_estado_permitido":         "PERMITIDO ✓",
+        "acc_laboratorio_lleno":        "LABORATORIO LLENO ({dentro}/{capacidad})",
+        "acc_estado_lleno":             "LLENO {dentro}/{capacidad}",
+        "acc_detalle_persona":          "Cuenta: {cuenta} · {rol}",
+        "acc_esperando_persona":        "Esperando persona...",
+        "acc_acercate_identificar":     "Acércate para identificarte",
     },
 
-    # ══════════════════════════════════════════════════════════════
-    # ENGLISH
-    # ══════════════════════════════════════════════════════════════
     "en": {
-
-        # ── Sidebar ───────────────────────────────────────────────
+        # ── Sidebar ───────────────────────────────────────────
         "sistema_gestion":   "Management System",
         "nav_panel":         "Panel",
         "nav_resumen":       "📊  Summary",
@@ -242,12 +330,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "maestro":           "Teacher",
         "alumno":            "Student",
 
-        # ── Header ────────────────────────────────────────────────
+        # ── Header ────────────────────────────────────────────
         "btn_traductor":     "🌐 ES",
         "confirmar_salida":  "Do you want to end the current session?",
         "logout_titulo":     "Log out",
 
-        # ── View titles ───────────────────────────────────────────
+        # ── View titles ───────────────────────────────────────
         "title_resumen":     "Lab summary",
         "sub_resumen":       "Real-time overview",
         "title_inside":      "In the laboratory",
@@ -267,12 +355,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "title_config":      "Settings",
         "sub_config":        "System preferences",
 
-        # ── KPIs ──────────────────────────────────────────────────
+        # ── KPIs ──────────────────────────────────────────────
         "kpi_inside":        "People inside",
         "kpi_hoy":           "Accesses today",
         "kpi_semana":        "Accesses this week",
 
-        # ── Summary cards ─────────────────────────────────────────
+        # ── Summary cards ─────────────────────────────────────
         "ultimos_accesos":   "Last 4 accesses",
         "accesos_rt":        "Recent accesses in real time",
         "accesos_recientes": "Recent accesses",
@@ -281,7 +369,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nadie_lab":         "No accesses recorded yet",
         "en_vivo":           "● LIVE",
 
-        # ── Table columns ─────────────────────────────────────────
+        # ── Table columns ─────────────────────────────────────
         "col_persona":       "Person",
         "col_tipo":          "Type",
         "col_hora":          "Time",
@@ -299,7 +387,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dentro":            "✓ Inside",
         "tiempo_exc":        "⚠ Time exceeded",
 
-        # ── Access log view ───────────────────────────────────────
+        # ── Access log view ───────────────────────────────────
         "filtro_todos":      "All",
         "filtro_estudiante": "Students",
         "filtro_maestro":    "Teachers",
@@ -311,7 +399,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "registro_completo": "Full access log",
         "hist_entradas":     "Entry history for the laboratory",
 
-        # ── Statistics ────────────────────────────────────────────
+        # ── Statistics ────────────────────────────────────────
         "top_visitantes":    "Top 7 — Most accesses",
         "top_sub":           "Users with the highest number of entries",
         "col_visitas":       "visits",
@@ -322,7 +410,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sin_datos":         "No data",
         "sin_datos_semana":  "No data for this week",
 
-        # ── Profile ───────────────────────────────────────────────
+        # ── Profile ───────────────────────────────────────────
         "num_cuenta":        "Account number",
         "correo":            "Email",
         "activo":            "Active",
@@ -330,7 +418,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "accesos_mes":       "Accesses logged this month",
         "usuarios_mes":      "Users registered this month",
 
-        # ── Settings ──────────────────────────────────────────────
+        # ── Settings ──────────────────────────────────────────
         "config_sistema":    "System settings",
         "prefs":             "Session preferences",
         "horario_acceso":    "Access schedule",
@@ -350,7 +438,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "autoactualizacion_desc": "Data refreshes every 30 seconds",
         "activo_30s":        "✓  Active — every 30 seconds",
 
-        # ── Management table ──────────────────────────────────────
+        # ── Management table ──────────────────────────────────
         "agregar":           "＋  Add",
         "editar":            "✏  Edit",
         "eliminar":          "🗑  Delete",
@@ -366,7 +454,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "col_act_por":       "Updated by",
         "col_ult_act":       "Last updated",
 
-        # ── Form ─────────────────────────────────────────────────
+        # ── Form ──────────────────────────────────────────────
         "agregar_alumno":    "Add Student",
         "editar_alumno":     "Edit Student",
         "agregar_maestro":   "Add Teacher",
@@ -392,23 +480,124 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "exito":             "Success",
         "error":             "Error",
 
-        # ── Delete ────────────────────────────────────────────────
+        # ── Delete ────────────────────────────────────────────
         "eliminar_titulo":   "Confirm deletion",
         "eliminar_pregunta": "Are you sure you want to delete\n{nombre}?\n\nThis action cannot be undone.",
         "no_autoeliminar":   "You cannot delete your own account.",
         "selecciona_reg":    "Select a record from the table.",
         "seleccion":         "Selection",
 
-        # ── Schedule errors ───────────────────────────────────────
+        # ── Schedule errors ───────────────────────────────────
         "err_hora":          "Invalid format. Use HH:MM (e.g. 08:00).",
 
-        # ── Date names ────────────────────────────────────────────
+        # ── Date names ────────────────────────────────────────
         "day_0": "Mon", "day_1": "Tue", "day_2": "Wed",
         "day_3": "Thu", "day_4": "Fri", "day_5": "Sat", "day_6": "Sun",
         "mon_1":  "Jan",  "mon_2":  "Feb",  "mon_3":  "Mar",
         "mon_4":  "Apr",  "mon_5":  "May",  "mon_6":  "Jun",
         "mon_7":  "Jul",  "mon_8":  "Aug",  "mon_9":  "Sep",
         "mon_10": "Oct",  "mon_11": "Nov",  "mon_12": "Dec",
+
+        # ═══════ NEW KEYS FOR interfaz.py ════════════════════
+        # Main menu
+        "main_title":                   "SICEUC",
+        "main_system":                  "FACIAL ACCESS CONTROL SYSTEM",
+        "main_facultad":                "Faculty of Electromechanical Engineering",
+        "main_subtitle":                "Select an option",
+        "main_desc":                    "Biometric identification system — University of Colima",
+        "main_btn_register":            "Register",
+        "main_btn_register_sub":        "New user",
+        "main_btn_register_desc":       "Guided biometric capture in 4 angles",
+        "main_btn_access":              "Access",
+        "main_btn_access_sub":          "Verify identity",
+        "main_btn_access_desc":         "Real-time facial recognition",
+        "main_btn_dashboard":           "Dashboard",
+        "main_btn_dashboard_sub":       "Administration panel",
+        "main_btn_dashboard_desc":      "User, log, and statistics management",
+        "main_btn_enter":               "ENTER  ▶",
+        "main_btn_close":               "✕  Exit",
+        "main_btn_menu":                "☰  Menu",
+
+        # Registration
+        "reg_header":                   "REGISTRATION",
+        "reg_initial_pill":             "Position yourself in front of the camera",
+        "reg_scan_btn_ready":           "⬤  START SCAN",
+        "reg_scan_btn_locked":          "🔒  Complete the form to continue",
+        "reg_form_title":               "📋  User data",
+        "reg_section_identity":         "Identity",
+        "reg_field_nombre":             "First name(s)",
+        "reg_field_ap_pat":             "First surname",
+        "reg_field_ap_mat":             "Second surname",
+        "reg_field_cuenta":             "Account number (8 digits)",
+        "reg_section_rol":              "Role",
+        "reg_status_incomplete":        "Status: Incomplete form",
+        "reg_status_name":              "Enter first name and first surname",
+        "reg_status_cuenta":            "Account: {msg}",
+        "reg_status_correo":            "Email: {msg}",
+        "reg_status_pwd":               "Password: {msg}",
+        "reg_status_grado":             "Grade: {msg}",
+        "reg_status_grupo":             "Group: {msg}",
+        "reg_status_complete":          "✓  Form complete — you can start the scan",
+        "reg_cancel_btn":               "✕  Cancel registration",
+        "reg_fab_tooltip":              "User data",
+
+        # Registration: step labels
+        "step_front":                   "Front",
+        "step_left":                    "Left",
+        "step_right":                   "Right",
+
+        # Registration: scan messages
+        "scan_step_instruction":        "{paso}/{total}: {instruccion}",
+        "scan_occluded":                "OBSTRUCTED — {razon}",
+        "scan_waiting":                 "WAITING — {correccion}",
+        "scan_detected":                "Detected",
+        "scan_searching":               "Searching...",
+        "scan_analyzing":               "Analyzing...",
+        "scan_denied":                  "Unknown",
+        "scan_duplicate":               "ALREADY REGISTERED\n{nombre}",
+        "scan_success":                 "Done. {nombre}\n{muestras} samples.",
+        "scan_fail":                    "Try again.",
+        "scan_pasos_incompletos":       "Incomplete steps:\n{lista}",
+
+        # Auth dialog
+        "auth_title":                   "Restricted Access",
+        "auth_subtitle":                "Administrators and teachers only",
+        "auth_field_cuenta":            "Account number",
+        "auth_field_pwd":               "Password",
+        "auth_error_empty":             "Fill in both fields.",
+        "auth_error_notfound":          "User not found or no permissions.",
+        "auth_error_wrongpwd":          "Incorrect password.",
+        "auth_error_conn":              "Connection error: {error}",
+        "auth_btn_cancel":              "Cancel",
+        "auth_btn_ingresar":            "Log in  ▶",
+
+        # Access
+        "acc_header":                   "ACCESS",
+        "acc_esperando":                "Waiting...",
+        "acc_similitud":                "SIMILARITY",
+        "acc_pill_esperando":           "Waiting...",
+        "acc_pill_listo":               "✓  Ready · look at the camera",
+        "acc_pill_acercate":            "Move closer to the camera",
+        "acc_pill_volteado":            "You are turned away — face the camera",
+        "acc_scan_escaneando":          "Scanning...",
+        "acc_no_rostro":                "No face",
+        "acc_gira_frente":              "Turn to the front",
+        "acc_mira_directo":             "Look straight at the camera.",
+        "acc_ponte_frente":             "Stand in front of the camera.",
+        "acc_denegado":                 "ACCESS DENIED",
+        "acc_sin_registros":            "No records",
+        "acc_persona_no_reconocida":    "Person not recognized.",
+        "acc_no_hay_usuarios":          "No registered users.",
+        "acc_estado_denegado":          "DENIED ✕",
+        "acc_pill_denegado":            "Access denied",
+        "acc_angulo_match":             "Match angle: {angulo}",
+        "acc_permitido":                "ACCESS GRANTED",
+        "acc_estado_permitido":         "GRANTED ✓",
+        "acc_laboratorio_lleno":        "LAB FULL ({dentro}/{capacidad})",
+        "acc_estado_lleno":             "FULL {dentro}/{capacidad}",
+        "acc_detalle_persona":          "Account: {cuenta} · {rol}",
+        "acc_esperando_persona":        "Waiting for a person...",
+        "acc_acercate_identificar":     "Approach to identify yourself",
     },
 }
 
@@ -418,7 +607,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 # ══════════════════════════════════════════════════════════════
 
 def set_lang(lang: str) -> None:
-    """Cambia el idioma activo. Lanza ValueError si el código no existe."""
     global _current_lang
     if lang not in TRANSLATIONS:
         raise ValueError(f"Idioma '{lang}' no disponible. Opciones: {list(TRANSLATIONS)}")
@@ -426,15 +614,10 @@ def set_lang(lang: str) -> None:
 
 
 def current_lang() -> str:
-    """Devuelve el código del idioma activo ('es', 'en', …)."""
     return _current_lang
 
 
 def toggle_lang() -> str:
-    """
-    Alterna entre los idiomas disponibles en orden.
-    Devuelve el código del nuevo idioma activo.
-    """
     langs = list(TRANSLATIONS.keys())
     idx   = langs.index(_current_lang)
     nxt   = langs[(idx + 1) % len(langs)]
@@ -443,15 +626,6 @@ def toggle_lang() -> str:
 
 
 def t(key: str, **kwargs) -> str:
-    """
-    Devuelve la cadena traducida para *key* en el idioma activo.
-
-    Si la clave no existe en el idioma activo, intenta con 'es'.
-    Si tampoco existe, devuelve la propia clave como fallback visible.
-
-    Soporte de interpolación via str.format():
-        t("registros_encontrados", n=42)  →  "42 registros encontrados"
-    """
     text = (TRANSLATIONS.get(_current_lang, {}).get(key)
             or TRANSLATIONS.get("es", {}).get(key)
             or key)
@@ -464,12 +638,6 @@ def t(key: str, **kwargs) -> str:
 
 
 def fecha_local(dt=None) -> str:
-    """
-    Devuelve la fecha en el idioma activo, p. ej.:
-        ES → "Lun 14 Abr 2025"
-        EN → "Mon 14 Apr 2025"
-    Si dt es None usa datetime.now().
-    """
     from datetime import datetime
     d = dt or datetime.now()
     dia_semana = t(f"day_{d.weekday()}")
