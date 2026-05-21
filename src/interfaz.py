@@ -1840,6 +1840,9 @@ class App(tk.Tk):
                                self._cancelar_por_duplicado(d))
                     return
 
+            # Beep de fin de paso (sin LEDs, distinto al de acceso/denegado)
+            threading.Thread(target=servo.beep_registro, daemon=True).start()
+
             self.after(0, lambda pi=paso_idx:
                        self._activar_paso_ui(pi+1, 0.0))
 

@@ -114,6 +114,21 @@ class _ControladorHW:
                 time.sleep(T_BEEP)
         threading.Thread(target=_run, daemon=True).start()
 
+    def _doble_beep_registro(self):
+        """Dos beeps cortos (0.1 s ON / 0.08 s OFF / 0.1 s ON).
+        Indica fin de un paso de registro — sin LEDs, distinto al de acceso
+        (0.2 s único) y al de denegado (3 × 0.3 s)."""
+        def _run():
+            for i in range(2):
+                if not self._running:
+                    break
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 1)
+                time.sleep(0.10)
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 0)
+                if i == 0:
+                    time.sleep(0.08)   # pausa solo entre los dos beeps
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── Parpadeo LED rojo ─────────────────────────────────────────────────────
     def _parpadeo_rojo(self):
         def _run():
@@ -162,6 +177,11 @@ class _ControladorHW:
     #  API PÚBLICA
     # ══════════════════════════════════════════════════════════════════════════
 
+    def beep_registro(self):
+        """Señal sonora de fin de paso de registro (sin LEDs)."""
+        print("[HW] beep_registro()")
+        self._doble_beep_registro()
+
     def abrir(self, nombre: str = ""):
         print(f"[HW] ACCESO PERMITIDO — {nombre}")
         with self._lock:
@@ -207,6 +227,8 @@ class _ControladorHW:
 
 # ══════════════════════════════════════════════════════════════════════════════
 class _ServoStub:
+    def beep_registro(self):
+        print("[STUB] beep_registro()")
     def abrir(self, nombre: str = ""):
         print(f"[STUB] abrir() — {nombre}")
     def denegar(self):
