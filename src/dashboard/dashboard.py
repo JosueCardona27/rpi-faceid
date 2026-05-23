@@ -1,31 +1,31 @@
-"""
-dashboard.py  (v6)
-==================
-Ventana principal del dashboard LabControl.
-
-Cambios v6:
-  - Detección correcta de modo portrait (pantalla rotada 90°).
-  - Maximizar ventana compatible con Windows Y Linux/Raspberry Pi.
-  - minsize reducido a 500×600 para permitir 600px de ancho en portrait.
-  - Eliminado doble-emoji en botones de navegación (las claves de lang_dict
-    ya incluyen el emoji; el dict de icons extra fue eliminado).
-  - Eliminado el pack duplicado del nav_scrollbar (causaba error en tkinter).
-  - Spacer de relleno movido al FINAL de la lista de navegación, no al inicio.
-  - font_size en navigate() ahora respeta compact_mode.
-  - Scroll de la nav-canvas usa Enter/Leave (alineado con dash_theme).
-"""
-
+import os
 import platform
 import tkinter as tk
 from tkinter import messagebox, ttk
-from datetime import datetime
 from typing import Dict, Optional
 
 from dash_theme import (
-    BG, SIDEBAR, CARD, CARD2, ACCENT, RED, T1, T2, T3, BORDER,
     aplicar_estilo_treeview, iniciales, rounded_card, modern_button,
 )
 from lang_dict import t, toggle_lang, fecha_local
+
+# ── Paleta institucional UdeC ──────────────────────────────────
+BG           = "#F5F0E8"   # beige institucional (fondo general)
+SIDEBAR      = "#1B2A4A"   # azul navy (sidebar)
+SIDEBAR_TEXT = "#FFFFFF"   # blanco para texto sobre navy
+CARD         = "#EAE5D8"   # beige claro (cards/campos)
+CARD2        = "#DDD8CB"   # beige medio (hover / filas alternas)
+ACCENT       = "#006644"   # verde loro institucional UdeC
+ACCENT2      = "#008855"   # verde loro medio
+RED          = "#C1121F"   # rojo institucional
+AMBER        = "#E07A00"   # naranja advertencia
+BLUE         = "#1B2A4A"   # azul marino institucional UdeC
+T1           = "#1A1A2E"   # texto oscuro casi negro
+T2           = "#5C6170"   # gris medio (subtextos)
+T3           = "#8A8FA0"   # gris claro (hints)
+BORDER       = "#C8C2B2"   # borde beige-gris
+BORDER_SB    = "#2E4068"   # borde dentro del sidebar navy
+HDR_BG       = "#FFFFFF"   # blanco para el header (independiente del sidebar)
 
 
 class Dashboard:
@@ -37,46 +37,90 @@ class Dashboard:
         self.root = tk.Tk()
         self.root.title("LabControl")
 
-        # ── Detección de pantalla ────────────────────────────────
+        # ── Detección de Raspberry Pi ────────────────────────────
+        self.es_rpi = self._detectar_rpi()
+        print(f"[SCREEN] Raspberry Pi detectada: {self.es_rpi}")
+
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        print(f"[DEBUG] Pantalla: {screen_w}x{screen_h}")
+        print(f"[SCREEN] Resolución: {screen_w}x{screen_h}")
 
-        # Portrait = pantalla más alta que ancha (ej. 1024×600 rotada → 600×1024)
-        portrait = screen_h > screen_w
-
-        if portrait:
-            # Pantalla vertical (Raspberry Pi con display rotado)
+        # ── Modo responsivo ──────────────────────────────────────
+        if self.es_rpi or (screen_w <= 1024 and screen_h <= 600):
+            # Raspberry Pi 7" — 1024×600 landscape
             self.compact_mode  = True
+            self.rpi_mode      = True
+            self.sidebar_width = 170
+        elif screen_h > screen_w:
+            # Portrait en otro dispositivo
+            self.compact_mode  = True
+            self.rpi_mode      = False
             self.sidebar_width = 160
         elif screen_w <= 1366:
             # Laptop / pantalla mediana
             self.compact_mode  = False
+            self.rpi_mode      = False
             self.sidebar_width = 220
         else:
             # Desktop / pantalla grande
             self.compact_mode  = False
+            self.rpi_mode      = False
             self.sidebar_width = 260
 
-        # Mínimo reducido para soportar portrait de 600 px de ancho
-        self.root.minsize(500, 600)
-
-        # Maximizar: compatible con Windows y Linux/Raspberry Pi
-        try:
-            if platform.system() == "Windows":
-                self.root.state("zoomed")
-            else:
-                self.root.attributes("-zoomed", True)
-        except Exception:
-            self.root.geometry(f"{screen_w}x{screen_h}")
+        # ── Tamaño y posición de ventana ────────────────────────
+        if self.rpi_mode:
+            # En RPi: pantalla completa exacta sin decoraciones de WM
+            self.root.geometry("1024x600+0+0")
+            self.root.overrideredirect(True)   # sin barra de título del SO
+            self.root.resizable(False, False)
+        else:
+            self.root.minsize(800, 500)
+            try:
+                if platform.system() == "Windows":
+                    self.root.state("zoomed")
+                else:
+                    self.root.attributes("-zoomed", True)
+            except Exception:
+                self.root.geometry(f"{screen_w}x{screen_h}")
 
         self.root.configure(bg=BG)
 
         aplicar_estilo_treeview()
         self._build_ui()
-        self._start_clock()
         self.root.after(1_000, self._monitor_señal_refresh)
-        self.root.after(600, lambda: self.navigate("resumen"))
+        self.root.after(600, lambda: self.navigate("inicio"))
+        self.root.after(5_000, self._ciclo_refresh)
+
+    @staticmethod
+    def _detectar_rpi() -> bool:
+        """Devuelve True si el programa corre sobre una Raspberry Pi."""
+        # Método 1: archivo de modelo del device-tree (más fiable)
+        for ruta in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+            try:
+                with open(ruta, "r", errors="ignore") as f:
+                    if "Raspberry Pi" in f.read():
+                        return True
+            except OSError:
+                pass
+        # Método 2: /proc/cpuinfo
+        try:
+            with open("/proc/cpuinfo", "r") as f:
+                contenido = f.read()
+                if "Raspberry Pi" in contenido or "BCM" in contenido:
+                    return True
+        except OSError:
+            pass
+        # Método 3: arquitectura ARM en Linux
+        if platform.system() == "Linux" and platform.machine().startswith(("arm", "aarch")):
+            return True
+        return False
+
+        self.root.configure(bg=BG)
+
+        aplicar_estilo_treeview()
+        self._build_ui()
+        self.root.after(1_000, self._monitor_señal_refresh)
+        self.root.after(600, lambda: self.navigate("inicio"))
         self.root.after(5_000, self._ciclo_refresh)
 
     # ─────────────────────────────────────────────────────────────
@@ -101,28 +145,64 @@ class Dashboard:
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
-        # Logo
-        logo_px   = 16 if self.compact_mode else 22
-        logo_pady = (16, 10) if self.compact_mode else (26, 18)
+        # ── Logo institucional ────────────────────────────────────
+        logo_px   = 12 if self.rpi_mode else (16 if self.compact_mode else 22)
+        logo_pady = (8, 6) if self.rpi_mode else ((16, 10) if self.compact_mode else (26, 18))
+
+        # Buscar carpeta img automáticamente y listar archivos para diagnóstico
+        _here    = os.path.dirname(os.path.abspath(__file__))
+        _img_dir = os.path.normpath(os.path.join(_here, "..", "img"))
+        print(f"[LOGO] Carpeta img: {_img_dir}")
+        print(f"[LOGO] Existe carpeta: {os.path.isdir(_img_dir)}")
+        if os.path.isdir(_img_dir):
+            print(f"[LOGO] Archivos: {os.listdir(_img_dir)}")
+
+        # Intentar múltiples variantes del nombre (espacio, mayúsculas, etc.)
+        LOGO_PATH = None
+        for _n in ["UdeC_2LC_Blanco.png", "UdeC_2LC _Blanco.png",
+                   "UdeC_2LC_blanco.png", "UdeC_2LC _blanco.png"]:
+            _c = os.path.join(_img_dir, _n)
+            if os.path.isfile(_c):
+                LOGO_PATH = _c
+                print(f"[LOGO] Encontrado: {_c}")
+                break
+
+        if not LOGO_PATH:
+            print("[LOGO] ⚠️  Archivo no encontrado en img/")
 
         logo_frame = tk.Frame(sb, bg=SIDEBAR)
         logo_frame.pack(fill="x", padx=logo_px, pady=logo_pady)
 
-        icon_sz  = 20 if self.compact_mode else 24
-        title_sz = 15 if self.compact_mode else 18
-        sub_sz   =  8 if self.compact_mode else  9
+        max_w = self.sidebar_width - logo_px * 2
+        max_h = 80 if self.rpi_mode else (130 if self.compact_mode else 170)
 
-        tk.Label(logo_frame, text="🧪", bg=SIDEBAR, fg=ACCENT,
-                 font=("Segoe UI", icon_sz)).pack()
-        tk.Label(logo_frame, text="LabControl", bg=SIDEBAR, fg=ACCENT,
-                 font=("Segoe UI", title_sz, "bold")).pack(pady=(4, 2))
-        tk.Label(logo_frame, text=t("sistema_gestion"), bg=SIDEBAR, fg=T3,
-                 font=("Segoe UI", sub_sz)).pack()
+        if LOGO_PATH:
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(LOGO_PATH).convert("RGBA")
+                img.thumbnail((max_w, max_h), Image.LANCZOS)
+                self._logo_img = ImageTk.PhotoImage(img)
+                tk.Label(logo_frame, image=self._logo_img,
+                         bg=SIDEBAR, borderwidth=0).pack()
+                print("[LOGO] Cargado con Pillow ✓")
+            except Exception as e_pil:
+                print(f"[LOGO Pillow] {e_pil}")
+                try:
+                    self._logo_img = tk.PhotoImage(file=LOGO_PATH)
+                    iw, ih = self._logo_img.width(), self._logo_img.height()
+                    factor = max(1, max(iw // max(max_w, 1), ih // max(max_h, 1)))
+                    if factor > 1:
+                        self._logo_img = self._logo_img.subsample(factor, factor)
+                    tk.Label(logo_frame, image=self._logo_img,
+                             bg=SIDEBAR, borderwidth=0).pack()
+                    print("[LOGO] Cargado con tk.PhotoImage ✓")
+                except Exception as e_tk:
+                    print(f"[LOGO tkinter] {e_tk}")
 
-        tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", padx=logo_px, pady=(12, 0))
+        tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", padx=logo_px, pady=(12, 0))
 
         self._build_profile(sb)
-        tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", padx=logo_px, pady=(8, 0))
+        tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", padx=logo_px, pady=(8, 0))
 
         self._nav_btns: Dict[str, tk.Button] = {}
 
@@ -175,17 +255,15 @@ class Dashboard:
 
         # ── Grupos de navegación ─────────────────────────────────
         def grp(key):
-            sz   =  7 if self.compact_mode else  8
+            sz   =  9 if self.compact_mode else 10
             pady = (5, 1) if self.compact_mode else (12, 3)
             padx = 10 if self.compact_mode else 14
-            tk.Label(nav, text=t(key).upper(), bg=SIDEBAR, fg=T3,
+            tk.Label(nav, text=t(key).upper(), bg=SIDEBAR, fg=SIDEBAR_TEXT,
                      font=("Segoe UI", sz, "bold"),
                      anchor="w").pack(fill="x", padx=padx, pady=pady)
 
         grp("nav_panel")
-        self._nav("resumen",  t("nav_resumen"),  nav)
-        self._nav("accesos",  t("nav_accesos"),  nav)
-        self._nav("stats",    t("nav_stats"),     nav)
+        self._nav("inicio",   "🏠 Inicio",        nav)
 
         grp("nav_gestion")
         self._nav("alumnos",  t("nav_alumnos"),  nav)
@@ -193,34 +271,23 @@ class Dashboard:
             self._nav("maestros", t("nav_maestros"), nav)
             self._nav("admins",   t("nav_admins"),   nav)
 
-        grp("nav_cuenta")
-        self._nav("perfil", t("nav_perfil"), nav)
-        self._nav("config", t("nav_config"), nav)
-
         # Espaciador al final para que el scroll funcione cuando hay poco contenido
         tk.Frame(nav, bg=SIDEBAR, height=30).pack(fill="x")
 
         # ── Footer fijo (reloj + logout) ─────────────────────────
-        tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", side="bottom")
+        tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", side="bottom")
 
         footer = tk.Frame(sb, bg=SIDEBAR)
         footer.pack(side="bottom", fill="x",
                     padx=12 if self.compact_mode else 16,
-                    pady=(8, 12))
+                    pady=(8, 14))
 
         logout_btn = modern_button(
-            footer, text=t("cerrar_sesion"), command=self.logout,
-            bg_color=RED, fg_color="white",
-            font_size=8 if self.compact_mode else 10,
-            padding=(10, 6) if self.compact_mode else (14, 8))
-        logout_btn.pack(fill="x", pady=(0, 8))
-
-        clock_frame = tk.Frame(footer, bg=CARD)
-        clock_frame.pack(fill="x")
-        self.clock_lbl = tk.Label(
-            clock_frame, text="--:--:--", bg=CARD, fg=ACCENT,
-            font=("Courier", 12 if self.compact_mode else 14, "bold"))
-        self.clock_lbl.pack(pady=6)
+            footer, text="⬅  Cerrar sesión", command=self.logout,
+            bg_color="#C1121F", fg_color=SIDEBAR_TEXT,
+            font_size=9 if self.compact_mode else 11,
+            padding=(10, 7) if self.compact_mode else (14, 9))
+        logout_btn.pack(fill="x")
 
     def _build_profile(self, sb):
         padx = 12 if self.compact_mode else 18
@@ -232,12 +299,13 @@ class Dashboard:
         ini = iniciales(
             self.usuario.get("nombre", ""),
             self.usuario.get("apellido_paterno", ""))
-        av_sz  =  9 if self.compact_mode else 13
-        av_pad =  5 if self.compact_mode else  7
+        av_sz  = 11 if self.compact_mode else 14
+        av_pad =  5 if self.compact_mode else  8
 
-        avatar_frame = tk.Frame(f, bg=ACCENT)
+        # Avatar: fondo blanco semitransparente simulado con ACCENT2
+        avatar_frame = tk.Frame(f, bg=SIDEBAR_TEXT)
         avatar_frame.pack(side="left", padx=(0, 8 if self.compact_mode else 11))
-        tk.Label(avatar_frame, text=ini, bg=ACCENT, fg=BG,
+        tk.Label(avatar_frame, text=ini, bg=SIDEBAR_TEXT, fg=BLUE,
                  font=("Segoe UI", av_sz, "bold"), width=3, height=1
                  ).pack(padx=av_pad, pady=av_pad)
 
@@ -249,98 +317,88 @@ class Dashboard:
             f"{self.usuario.get('nombre', '')} "
             f"{self.usuario.get('apellido_paterno', '')}").strip()[:max_len]
 
-        nf = (("Segoe UI",  9, "bold") if self.compact_mode
-              else ("Segoe UI", 10, "bold"))
-        rf = (("Segoe UI",  7) if self.compact_mode
-              else ("Segoe UI",  9))
+        nf = (("Segoe UI", 10, "bold") if self.compact_mode
+              else ("Segoe UI", 11, "bold"))
+        rf = (("Segoe UI",  8) if self.compact_mode
+              else ("Segoe UI", 10))
 
-        tk.Label(info, text=nombre_full, bg=SIDEBAR, fg=T1,
+        tk.Label(info, text=nombre_full, bg=SIDEBAR, fg=SIDEBAR_TEXT,
                  font=nf, anchor="w").pack(anchor="w")
         rol_key = {"admin": "administrador", "maestro": "maestro"}.get(
             self.rol, "alumno")
-        tk.Label(info, text=t(rol_key), bg=SIDEBAR, fg=ACCENT,
+        tk.Label(info, text=t(rol_key), bg=SIDEBAR, fg=ACCENT2,
                  font=rf, anchor="w").pack(anchor="w")
 
+        # Todo el bloque de perfil abre el modal al hacer clic
+        for w in f.winfo_children() + [f]:
+            w.bind("<Button-1>", lambda e: self._show_perfil_popup())
+            w.configure(cursor="hand2")
+
     def _nav(self, view_id: str, label: str, parent):
-        """
-        Crea un botón de navegación.
-        Las etiquetas ya contienen emoji (vienen de lang_dict), no se duplican.
-        """
         btn_frame = tk.Frame(parent, bg=SIDEBAR)
         btn_frame.pack(fill="x", pady=1)
 
-        font_sz = 9 if self.compact_mode else 10
+        font_sz = 11 if self.compact_mode else 12
         padx    = 10 if self.compact_mode else 14
-        pady    =  3 if self.compact_mode else  7
+        pady    =  4 if self.compact_mode else  8
+
+        # Hover suave: azul navy un tono más claro
+        NAV_HOVER = "#2E4068"
 
         btn = tk.Button(
             btn_frame, text=f" {label}", anchor="w",
-            bg=SIDEBAR, fg=T2,
-            activebackground=CARD2, activeforeground=T1,
+            bg=SIDEBAR, fg=SIDEBAR_TEXT,
+            activebackground=NAV_HOVER, activeforeground=SIDEBAR_TEXT,
             font=("Segoe UI", font_sz), relief="flat", cursor="hand2",
             padx=padx, pady=pady,
             command=lambda v=view_id: self.navigate(v))
         btn.pack(fill="x")
         self._nav_btns[view_id] = btn
 
-    # ── Header ───────────────────────────────────────────────────
     def _build_header(self, parent):
-        hdr_h = 56 if self.compact_mode else 68
-        hdr   = tk.Frame(parent, bg=SIDEBAR, height=hdr_h)
+        hdr_h = 50 if self.rpi_mode else (62 if self.compact_mode else 72)
+        hdr   = tk.Frame(parent, bg=HDR_BG, height=hdr_h)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
         tk.Frame(hdr, bg=BORDER, height=1).pack(side="bottom", fill="x")
 
-        left = tk.Frame(hdr, bg=SIDEBAR)
+        left = tk.Frame(hdr, bg=HDR_BG)
         left.pack(side="left",
                   padx=12 if self.compact_mode else 22,
                   pady= 8 if self.compact_mode else 14)
 
-        tf = ("Segoe UI", 13, "bold") if self.compact_mode else ("Segoe UI", 16, "bold")
-        sf = ("Segoe UI",  8)         if self.compact_mode else ("Segoe UI",  9)
+        tf = ("Segoe UI", 15, "bold") if self.compact_mode else ("Segoe UI", 19, "bold")
 
         self.hdr_title = tk.Label(left, text=t("title_resumen"),
-                                  bg=SIDEBAR, fg=T1, font=tf)
+                                  bg=HDR_BG, fg=BLUE, font=tf)
         self.hdr_title.pack(anchor="w")
-        self.hdr_sub = tk.Label(left, text=t("sub_resumen"),
-                                bg=SIDEBAR, fg=T3, font=sf)
-        self.hdr_sub.pack(anchor="w", pady=(1, 0))
 
-        right = tk.Frame(hdr, bg=SIDEBAR)
+        right = tk.Frame(hdr, bg=HDR_BG)
         right.pack(side="right",
                    padx=12 if self.compact_mode else 18,
                    pady= 6 if self.compact_mode else 10)
 
+        # ── Botón de traductor ────────────────────────────────────
         self._btn_lang = modern_button(
             right, text=t("btn_traductor"),
             command=self._toggle_language,
-            bg_color=CARD2, fg_color=ACCENT,
-            font_size=8 if self.compact_mode else 9,
-            padding=(8, 4) if self.compact_mode else (12, 6))
-        self._btn_lang.pack(side="right", padx=(6, 0))
-
-        # En compact la fecha no se muestra para no robar espacio al título
-        if not self.compact_mode:
-            self._hdr_fecha = tk.Label(
-                right, text=fecha_local(),
-                bg=SIDEBAR, fg=T2, font=("Segoe UI", 9))
-            self._hdr_fecha.pack(side="right", padx=6)
+            bg_color=BLUE, fg_color=HDR_BG,
+            font_size=9 if self.compact_mode else 10,
+            padding=(10, 5) if self.compact_mode else (14, 7))
+        self._btn_lang.pack(side="right")
 
     # ── Vistas ───────────────────────────────────────────────────
     def _build_views(self, parent):
-        from dashboard_views   import ResumenView, AccesosView, StatsView, PerfilView, ConfigView
+        from dashboard_views   import InicioView, AccesosView
         from dashboard_gestion import GestionView
 
         self.content = tk.Frame(parent, bg=BG)
         self.content.pack(fill="both", expand=True)
 
         self.views: Dict = {
-            "resumen": ResumenView(self.content, self),
+            "inicio":  InicioView(self.content,  self),
             "accesos": AccesosView(self.content, self),
-            "stats":   StatsView(self.content,   self),
             "alumnos": GestionView(self.content, self, "estudiante"),
-            "perfil":  PerfilView(self.content,  self),
-            "config":  ConfigView(self.content,  self),
         }
         if self.rol == "admin":
             self.views["maestros"] = GestionView(self.content, self, "maestro")
@@ -352,14 +410,19 @@ class Dashboard:
     # NAVEGACIÓN
     # ─────────────────────────────────────────────────────────────
     _META_KEYS = {
-        "resumen":  ("title_resumen",  "sub_resumen"),
+        "inicio":   ("title_inicio",   "sub_inicio"),
         "accesos":  ("title_accesos",  "sub_accesos"),
-        "stats":    ("title_stats",    "sub_stats"),
         "alumnos":  ("title_alumnos",  "sub_alumnos"),
         "maestros": ("title_maestros", "sub_maestros"),
         "admins":   ("title_admins",   "sub_admins"),
-        "perfil":   ("title_perfil",   "sub_perfil"),
-        "config":   ("title_config",   "sub_config"),
+    }
+
+    _HDR_LABELS = {
+        "inicio":   ("Dashboard", ""),
+        "accesos":  None,
+        "alumnos":  None,
+        "maestros": None,
+        "admins":   None,
     }
 
     def navigate(self, view_id: str):
@@ -378,18 +441,22 @@ class Dashboard:
         self._current = view_id
 
         # Resaltar botón activo (respeta tamaño de fuente del modo)
-        nav_sz = 9 if self.compact_mode else 10
+        NAV_HOVER = "#2E4068"
+        nav_sz = 11 if self.compact_mode else 12
         for vid, btn in self._nav_btns.items():
             if vid == view_id:
-                btn.configure(bg=CARD, fg=ACCENT,
+                btn.configure(bg=NAV_HOVER, fg=SIDEBAR_TEXT,
                               font=("Segoe UI", nav_sz, "bold"))
             else:
-                btn.configure(bg=SIDEBAR, fg=T2,
+                btn.configure(bg=SIDEBAR, fg=SIDEBAR_TEXT,
                               font=("Segoe UI", nav_sz, "normal"))
 
         keys = self._META_KEYS.get(view_id, ("title_resumen", "sub_resumen"))
-        self.hdr_title.configure(text=t(keys[0]))
-        self.hdr_sub.configure(text=t(keys[1]))
+        hardcoded = self._HDR_LABELS.get(view_id)
+        if hardcoded:
+            self.hdr_title.configure(text=hardcoded[0])
+        else:
+            self.hdr_title.configure(text=t(keys[0]))
 
     # ─────────────────────────────────────────────────────────────
     # TRADUCTOR
@@ -398,19 +465,11 @@ class Dashboard:
         toggle_lang()
         prev = self._current
         self._build_ui()
-        self.navigate(prev if prev else "resumen")
+        self.navigate(prev if prev else "inicio")
 
     # ─────────────────────────────────────────────────────────────
-    # RELOJ Y AUTO-REFRESH
+    # AUTO-REFRESH
     # ─────────────────────────────────────────────────────────────
-    def _start_clock(self):
-        def tick():
-            if self.root.winfo_exists():
-                self.clock_lbl.configure(
-                    text=datetime.now().strftime("%H:%M:%S"))
-                self.root.after(1_000, tick)
-        tick()
-
     def _ciclo_refresh(self):
         if not self.root.winfo_exists():
             return
@@ -442,6 +501,69 @@ class Dashboard:
             self.root.after(1_000, _check)
 
         _check()
+
+    # ─────────────────────────────────────────────────────────────
+    # POPUP DE PERFIL
+    # ─────────────────────────────────────────────────────────────
+    def _show_perfil_popup(self):
+        u   = self.usuario
+        ini = iniciales(u.get("nombre", ""), u.get("apellido_paterno", ""))
+        nombre_full = (
+            f"{u.get('nombre', '')} "
+            f"{u.get('apellido_paterno', '')} "
+            f"{(u.get('apellido_materno') or '')}").strip()
+
+        pop = tk.Toplevel(self.root)
+        pop.title("Perfil de usuario")
+        pop.resizable(False, False)
+        pop.configure(bg=HDR_BG)
+        pop.transient(self.root)
+
+        W, H = 380, 360
+        px = self.root.winfo_rootx() + self.root.winfo_width()  // 2 - W // 2
+        py = self.root.winfo_rooty() + self.root.winfo_height() // 2 - H // 2
+        pop.geometry(f"{W}x{H}+{px}+{py}")
+        pop.grab_set()
+        pop.lift()
+        pop.focus_force()
+
+        # Avatar
+        tk.Label(pop, text=ini, bg=ACCENT, fg=HDR_BG,
+                 font=("Segoe UI", 28, "bold"),
+                 width=3, height=1).pack(pady=(28, 10),
+                                         ipadx=12, ipady=12)
+
+        # Nombre y rol
+        tk.Label(pop, text=nombre_full, bg=HDR_BG, fg=BLUE,
+                 font=("Segoe UI", 14, "bold")).pack()
+        rol_display = {"admin": "Administrador",
+                       "maestro": "Maestro"}.get(u.get("rol", ""), "Alumno")
+        tk.Label(pop, text=rol_display, bg=HDR_BG, fg=ACCENT,
+                 font=("Segoe UI", 11)).pack(pady=(3, 14))
+
+        tk.Frame(pop, bg=BORDER, height=1).pack(fill="x", padx=28)
+
+        # Datos
+        grid = tk.Frame(pop, bg=HDR_BG)
+        grid.pack(fill="x", padx=28, pady=14)
+        for lbl, val in [
+            ("No. Cuenta", u.get("numero_cuenta") or "—"),
+            ("Correo",     u.get("correo")        or "—"),
+            ("Rol",        rol_display),
+        ]:
+            row = tk.Frame(grid, bg=HDR_BG)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=f"{lbl}:", bg=HDR_BG, fg=T3,
+                     font=("Segoe UI", 10), width=12, anchor="e").pack(side="left")
+            tk.Label(row, text=val, bg=HDR_BG, fg=BLUE,
+                     font=("Segoe UI", 10, "bold"), anchor="w"
+                     ).pack(side="left", padx=10)
+
+        tk.Frame(pop, bg=BORDER, height=1).pack(fill="x", padx=28)
+
+        # Cerrar haciendo clic fuera del modal
+        pop.bind("<FocusOut>", lambda e: pop.destroy() if not str(e.widget).startswith(str(pop)) else None)
+        pop.bind("<Escape>", lambda e: pop.destroy())
 
     # ─────────────────────────────────────────────────────────────
     # LOGOUT
