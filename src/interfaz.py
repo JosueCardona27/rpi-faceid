@@ -113,8 +113,11 @@ def _imgtk(frame, max_w, max_h):
     h0, w0 = frame.shape[:2]
     r  = min(max_w / w0, max_h / h0)
     fr = cv2.resize(frame, (int(w0*r), int(h0*r)))
-    return ImageTk.PhotoImage(
-        image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)))
+    if USAR_PICAM:
+        img = Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
+    else:
+        img = Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
+    return ImageTk.PhotoImage(image=img)
 
 
 def _draw_multiface_banner(frame):
