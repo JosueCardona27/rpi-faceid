@@ -1,36 +1,24 @@
-"""
-dash_theme.py
-=============
-Paleta de colores y utilidades de UI compartidas.
-
-Columnas en make_treeview aceptan 3 ó 4 elementos:
-    (id, cabecera, ancho)              → anchor "w" por defecto
-    (id, cabecera, ancho, anchor)      → anchor personalizado ("w","center","e")
-
-CAMBIOS:
-  · scrollable_frame usa bind en Enter/Leave en lugar de bind_all,
-    evitando que dos áreas scrollables (nav + contenido) interfieran.
-"""
 import tkinter as tk
 from tkinter import ttk
 from typing import Tuple, Union, Optional
 
-# ── Colores ─────────────────────────────────────────────────────
-BG      = "#0A0E1A"
-SIDEBAR = "#151923"
-CARD    = "#1A1F2E"
-CARD2   = "#232937"
-ACCENT  = "#00D4AA"
-BLUE    = "#4A9EFF"
-AMBER   = "#FBBF24"
-RED     = "#F87171"
-PURPLE  = "#C084FC"
-GREEN   = "#34D399"
-T1      = "#F8FAFC"
-T2      = "#CBD5E1"
-T3      = "#64748B"
-BORDER  = "#334155"
-SHADOW  = "#00000015"
+# ── Paleta institucional UdeC ────────────────────────────────────
+BG      = "#F5F0E8"   # beige institucional (fondo general)
+SIDEBAR = "#FFFFFF"   # blanco puro (sidebar / paneles)
+CARD    = "#EAE5D8"   # beige claro (cards / campos)
+CARD2   = "#DDD8CB"   # beige medio (hover / filas alternas)
+ACCENT  = "#006644"   # verde loro institucional UdeC
+ACCENT2 = "#008855"   # verde loro medio
+BLUE    = "#1B2A4A"   # azul marino institucional UdeC
+AMBER   = "#E07A00"   # naranja advertencia
+RED     = "#C1121F"   # rojo institucional
+PURPLE  = "#B5860D"   # dorado institucional UdeC (GOLD_LN)
+GREEN   = "#006644"   # verde loro (éxito)
+T1      = "#1A1A2E"   # texto oscuro casi negro
+T2      = "#5C6170"   # gris medio (subtextos)
+T3      = "#8A8FA0"   # gris claro (hints / placeholders)
+BORDER  = "#C8C2B2"   # borde beige-gris
+SHADOW  = "#00000010" # sombra suave
 
 
 # ── Estilos ttk ─────────────────────────────────────────────────
@@ -40,20 +28,26 @@ def aplicar_estilo_treeview():
         style.theme_use("default")
     except Exception:
         pass
+
     style.configure(
         "Dark.Treeview",
-        background=CARD, foreground=T1,
+        background=CARD,
+        foreground=T1,
         fieldbackground=CARD,
-        rowheight=30, font=("Arial", 9), borderwidth=0,
+        rowheight=34,
+        font=("Arial", 11),
+        borderwidth=0,
     )
     style.configure(
         "Dark.Treeview.Heading",
-        background=SIDEBAR, foreground=T2,
-        font=("Arial", 9, "bold"), relief="flat",
+        background=SIDEBAR,
+        foreground=BLUE,
+        font=("Arial", 11, "bold"),
+        relief="flat",
     )
     style.map(
         "Dark.Treeview",
-        background=[("selected", "#2D4A6B")],
+        background=[("selected", "#C5E8DC")],   # verde loro muy claro (fila seleccionada)
         foreground=[("selected", T1)],
     )
 
@@ -67,11 +61,11 @@ def rounded_card(parent, bg_color=CARD, border_color=BORDER, radius=8) -> tk.Fra
     frame.inner = inner
     return frame
 
-def modern_button(parent, text, command=None, bg_color=ACCENT, fg_color="white",
+def modern_button(parent, text, command=None, bg_color=ACCENT, fg_color=SIDEBAR,
                  hover_color=None, font_size=10, padding=(12, 8)):
     """Crea un botón moderno con hover effects."""
     if hover_color is None:
-        hover_color = adjust_brightness(bg_color, 20)
+        hover_color = adjust_brightness(bg_color, 15)
 
     btn = tk.Button(
         parent, text=text, command=command,
@@ -80,7 +74,7 @@ def modern_button(parent, text, command=None, bg_color=ACCENT, fg_color="white",
         relief="flat", cursor="hand2",
         font=("Segoe UI", font_size, "normal"),
         padx=padding[0], pady=padding[1],
-        borderwidth=0
+        borderwidth=0,
     )
     return btn
 
@@ -95,25 +89,27 @@ def card_head(parent, title: str, subtitle: str = "",
              compact: bool = False) -> tk.Frame:
     """
     Cabecera de tarjeta.
-    compact=True → título y subtítulo apilados verticalmente (evita desborde en 600 px).
-    compact=False → título y subtítulo en la misma fila (comportamiento original).
+    compact=True → título y subtítulo apilados verticalmente.
+    compact=False → título y subtítulo en la misma fila.
     """
-    h = tk.Frame(parent, bg=parent["bg"])
+    bg = parent["bg"]
+    h  = tk.Frame(parent, bg=bg)
     h.pack(fill="x", pady=(0, 8 if compact else 12))
+
     if compact:
-        tk.Label(h, text=title, bg=parent["bg"], fg=T1,
-                 font=("Segoe UI", 11, "bold"),
+        tk.Label(h, text=title, bg=bg, fg=T1,
+                 font=("Segoe UI", 13, "bold"),
                  anchor="w").pack(fill="x")
         if subtitle:
-            tk.Label(h, text=subtitle, bg=parent["bg"], fg=T3,
-                     font=("Segoe UI", 7),
+            tk.Label(h, text=subtitle, bg=bg, fg=T3,
+                     font=("Segoe UI", 9),
                      anchor="w").pack(fill="x")
     else:
-        tk.Label(h, text=title, bg=parent["bg"], fg=T1,
-                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        tk.Label(h, text=title, bg=bg, fg=T1,
+                 font=("Segoe UI", 14, "bold")).pack(side="left")
         if subtitle:
-            tk.Label(h, text=subtitle, bg=parent["bg"], fg=T3,
-                     font=("Segoe UI", 9)).pack(side="left", padx=10)
+            tk.Label(h, text=subtitle, bg=bg, fg=T3,
+                     font=("Segoe UI", 10)).pack(side="left", padx=10)
     return h
 
 
@@ -125,7 +121,8 @@ def scrollable_frame(parent) -> Tuple[tk.Canvas, tk.Frame]:
     dentro del canvas/frame, evitando conflictos entre el nav-canvas del
     sidebar y el canvas de contenido.
     """
-    canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
+    canvas = tk.Canvas(parent, bg=BG, highlightthickness=0,
+                       highlightbackground=BG)
     sb     = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
     inner  = tk.Frame(canvas, bg=BG)
 
@@ -173,13 +170,15 @@ def scrollable_frame(parent) -> Tuple[tk.Canvas, tk.Frame]:
 
 
 def make_treeview(parent, columns: list[tuple], height: int = 15,
-                  xscroll: bool = False) -> ttk.Treeview:
+                  xscroll: bool = False, stretch_col: int = 1) -> ttk.Treeview:
     """
-    Crea un Treeview oscuro con scrollbar vertical y, opcionalmente, horizontal.
+    Crea un Treeview con scrollbar vertical y, opcionalmente, horizontal.
 
-    columns : lista de tuplas (id, cabecera, ancho) o (id, cabecera, ancho, anchor).
-    xscroll : True para añadir barra de scroll horizontal (útil en pantallas angostas).
-    anchor por defecto: "center".
+    columns    : lista de (id, cabecera, ancho) o (id, cabecera, ancho, anchor).
+    xscroll    : True para añadir scroll horizontal.
+    stretch_col: índice de la columna que se estira para llenar el espacio
+                 disponible (por defecto 1 = columna de nombre).
+                 Usar -1 para la última columna.
     """
     col_ids = [c[0] for c in columns]
     tree    = ttk.Treeview(parent, columns=col_ids, show="headings",
@@ -205,7 +204,9 @@ def make_treeview(parent, columns: list[tuple], height: int = 15,
         vsb.pack(side="right",  fill="y")
         tree.pack(side="left",  fill="both", expand=True)
     else:
-        tree.column(col_ids[0], stretch=True)  # sin xscroll, el último se expande
+        # La columna indicada por stretch_col absorbe el espacio sobrante
+        expand_id = col_ids[stretch_col] if stretch_col < len(col_ids) else col_ids[-1]
+        tree.column(expand_id, stretch=True)
         vsb.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
 
