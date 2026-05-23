@@ -454,7 +454,10 @@ class App(tk.Tk):
                 return self.picam2.capture_array()
             else:
                 ret, raw = self._cap.read()
-                return raw if ret else None
+                if not ret or raw is None:
+                    return None
+            b, g, r = cv2.split(raw)
+            return cv2.merge([r, g, b])
         except:
             return None
 
