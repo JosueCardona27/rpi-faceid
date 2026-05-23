@@ -114,7 +114,7 @@ def _imgtk(frame, max_w, max_h):
     r  = min(max_w / w0, max_h / h0)
     fr = cv2.resize(frame, (int(w0*r), int(h0*r)))
     return ImageTk.PhotoImage(
-        image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)))
+        image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR)))
 
 
 def _draw_multiface_banner(frame):
