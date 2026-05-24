@@ -784,88 +784,124 @@ class Dashboard:
         pop.bind("<Escape>", lambda e: pop.destroy())
 
     # ─────────────────────────────────────────────────────────────
-    # ─────────────────────────────────────────────────────────────
     # LOGOUT
     # ─────────────────────────────────────────────────────────────
     def logout(self):
-        if messagebox.askyesno(t("logout_titulo"),
-                               t("confirmar_salida"),
-                               parent=self.root):
-            # No abrir login.py ni modificar interfaz.py.
-            # Marcamos que, al cerrar el mainloop del dashboard, se debe
-            # regresar al menú principal de interfaz.py en este mismo proceso.
-            self._volver_a_interfaz_menu = True
-            try:
-                self.root.quit()
-            except Exception:
-                pass
-            try:
-                self.root.destroy()
-            except Exception:
-                pass
+        """
+        Cerrar sesión sin usar messagebox nativo.
 
-    def _abrir_interfaz_menu(self):
-        """Abre interfaz.py en el menú principal sin tocar interfaz.py."""
-        import os
-        import sys
-        import importlib.util
-        import traceback
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        candidatos = [
-            os.path.join(base_dir, "interfaz.py"),
-            os.path.normpath(os.path.join(base_dir, "..", "interfaz.py")),
-            os.path.join(os.getcwd(), "interfaz.py"),
-        ]
-        interfaz_path = next((p for p in candidatos if os.path.isfile(p)), None)
-
-        if interfaz_path is None:
-            print("[LOGOUT] No se encontró interfaz.py para volver al menú.")
+        En Raspberry Pi OS / Raspbian, los diálogos nativos de tkinter
+        pueden quedar detrás de la ventana en modo kiosko/overrideredirect
+        y aparentar que el programa se congeló. Por eso este diálogo se
+        dibuja dentro del propio Dashboard.
+        """
+        # Evitar abrir varios cuadros si el usuario toca varias veces.
+        if getattr(self, "_logout_modal_abierto", False):
             return
-
-        interfaz_dir = os.path.dirname(interfaz_path)
-        if interfaz_dir not in sys.path:
-            sys.path.insert(0, interfaz_dir)
+        self._logout_modal_abierto = True
 
         try:
-            spec = importlib.util.spec_from_file_location(
-                "interfaz_logout_menu", interfaz_path)
-            interfaz_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(interfaz_mod)
+            self.root.update_idletasks()
+            win_w = max(1, self.root.winfo_width())
+            win_h = max(1, self.root.winfo_height())
+        except Exception:
+            win_w, win_h = 1024, 600
 
-            app = interfaz_mod.App()
+        overlay = tk.Frame(self.root, bg="#000000")
+        overlay.place(x=0, y=0, width=win_w, height=win_h)
+        overlay.lift()
 
-            # Tu interfaz actual inicia en Acceso con un after(). Como no vamos
-            # a modificar interfaz.py, cancelamos ese arranque programado y
-            # dibujamos el menú principal directamente.
+        # Panel central del diálogo
+        card_w = 330 if win_w >= 420 else max(280, win_w - 40)
+        card_h = 170
+        card_x = max(10, (win_w - card_w) // 2)
+        card_y = max(10, (win_h - card_h) // 2)
+
+        card = tk.Frame(overlay, bg=HDR_BG,
+                        highlightthickness=1,
+                        highlightbackground=BORDER)
+        card.place(x=card_x, y=card_y, width=card_w, height=card_h)
+
+        # Header del cuadro
+        tk.Frame(card, bg=BLUE, height=4).pack(fill="x")
+        tk.Label(card, text=t("logout_titulo"),
+                 bg=HDR_BG, fg=BLUE,
+                 font=("Segoe UI", 11, "bold"),
+                 anchor="w").pack(fill="x", padx=18, pady=(14, 4))
+
+        tk.Label(card, text=t("confirmar_salida"),
+                 bg=HDR_BG, fg=T1,
+                 font=("Segoe UI", 10),
+                 wraplength=card_w - 40,
+                 justify="center").pack(fill="x", padx=18, pady=(8, 12))
+
+        btns = tk.Frame(card, bg=HDR_BG)
+        btns.pack(fill="x", padx=18, pady=(0, 14))
+
+        def _cerrar_modal():
+            self._logout_modal_abierto = False
             try:
-                for after_id in app.tk.call("after", "info"):
+                overlay.destroy()
+            except Exception:
+                pass
+
+        def _confirmar_logout():
+            # Cerrar el modal primero para que no se quede capturando eventos.
+            _cerrar_modal()
+
+            def _abrir_interfaz_y_salir():
+                try:
+                    import sys
+                    import subprocess
+
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    candidatos = [
+                        os.path.join(base_dir, "interfaz.py"),
+                        os.path.abspath(os.path.join(base_dir, "..", "interfaz.py")),
+                    ]
+
+                    interfaz_path = next((p for p in candidatos if os.path.isfile(p)), None)
+
+                    if interfaz_path:
+                        subprocess.Popen(
+                            [sys.executable, interfaz_path],
+                            cwd=os.path.dirname(interfaz_path),
+                            start_new_session=True
+                        )
+                    else:
+                        print("[LOGOUT] No se encontró interfaz.py para regresar al menú.")
+                except Exception as e:
+                    print(f"[LOGOUT] Error al abrir interfaz.py: {e}")
+                finally:
                     try:
-                        app.after_cancel(after_id)
+                        self.root.destroy()
                     except Exception:
                         pass
-            except Exception:
-                pass
 
-            try:
-                app._stop_cam()
-            except Exception:
-                pass
+            # Ejecutarlo después de devolver control al loop de Tkinter.
+            self.root.after(80, _abrir_interfaz_y_salir)
 
-            try:
-                app._modo_acceso = False
-                app._usuario_login = None
-                app._build_main()
-            except Exception:
-                traceback.print_exc()
+        btn_no = tk.Button(btns, text="No",
+                           command=_cerrar_modal,
+                           bg=CARD, fg=T1,
+                           activebackground=CARD2,
+                           activeforeground=T1,
+                           relief="flat", cursor="hand2",
+                           font=("Segoe UI", 10, "bold"))
+        btn_no.pack(side="right", fill="x", expand=True, padx=(6, 0), ipady=6)
 
-            app.protocol("WM_DELETE_WINDOW", app.on_close)
-            app.mainloop()
-        except Exception:
-            traceback.print_exc()
+        btn_si = tk.Button(btns, text="Sí",
+                           command=_confirmar_logout,
+                           bg=RED, fg="#FFFFFF",
+                           activebackground="#A80F1A",
+                           activeforeground="#FFFFFF",
+                           relief="flat", cursor="hand2",
+                           font=("Segoe UI", 10, "bold"))
+        btn_si.pack(side="right", fill="x", expand=True, padx=(0, 6), ipady=6)
+
+        overlay.bind("<Escape>", lambda e: _cerrar_modal())
+        card.bind("<Escape>", lambda e: _cerrar_modal())
+        btn_no.focus_set()
 
     def run(self):
-        self._volver_a_interfaz_menu = False
         self.root.mainloop()
-        if getattr(self, "_volver_a_interfaz_menu", False):
-            self._abrir_interfaz_menu()
