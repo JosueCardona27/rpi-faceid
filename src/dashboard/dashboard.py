@@ -50,29 +50,46 @@ class Dashboard:
         print(f"[SCREEN] Resolución: {screen_w}x{screen_h}")
 
         # ── Modo responsivo ──────────────────────────────────────
-        if self.es_rpi or (screen_w <= 1024 and screen_h <= 600):
+        # NUEVO: detectar PORTRAIT (alto > ancho) — caso de la pantalla
+        # de 7" en vertical (600x1024). En ese modo el sidebar lateral
+        # no cabe; se reemplaza por una nav horizontal arriba.
+        es_portrait = screen_h > screen_w
+
+        if es_portrait:
+            # Pantalla vertical (7" portrait 600x1024 u otra).
+            self.portrait_mode = True
+            self.compact_mode  = True
+            self.rpi_mode      = self.es_rpi
+            self.sidebar_width = 0          # ya no hay sidebar lateral
+        elif self.es_rpi or (screen_w <= 1024 and screen_h <= 600):
             # Raspberry Pi 7" — 1024×600 landscape
+            self.portrait_mode = False
             self.compact_mode  = True
             self.rpi_mode      = True
             self.sidebar_width = 170
-        elif screen_h > screen_w:
-            # Portrait en otro dispositivo
-            self.compact_mode  = True
-            self.rpi_mode      = False
-            self.sidebar_width = 160
         elif screen_w <= 1366:
             # Laptop / pantalla mediana
+            self.portrait_mode = False
             self.compact_mode  = False
             self.rpi_mode      = False
             self.sidebar_width = 220
         else:
             # Desktop / pantalla grande
+            self.portrait_mode = False
             self.compact_mode  = False
             self.rpi_mode      = False
             self.sidebar_width = 260
 
         # ── Tamaño y posición de ventana ────────────────────────
-        if self.rpi_mode:
+        if self.portrait_mode:
+            # Pantalla vertical: usar resolucion real de la pantalla.
+            # En el caso del display de 7": 600x1024.
+            self.root.geometry(f"{screen_w}x{screen_h}+0+0")
+            if self.es_rpi:
+                # En RPi: kiosko sin barra de titulo
+                self.root.overrideredirect(True)
+                self.root.resizable(False, False)
+        elif self.rpi_mode:
             # En RPi: pantalla completa exacta sin decoraciones de WM
             self.root.geometry("1024x600+0+0")
             self.root.overrideredirect(True)   # sin barra de título del SO
@@ -134,6 +151,15 @@ class Dashboard:
         for w in self.root.winfo_children():
             w.destroy()
 
+        # Diccionarios de botones (los rellena tanto el sidebar como
+        # la nav horizontal de portrait — navigate() los lee igual).
+        self._nav_btns  = {}
+        self._nav_marks = {}
+
+        if getattr(self, "portrait_mode", False):
+            self._build_ui_portrait()
+            return
+
         root_frame = tk.Frame(self.root, bg=BG)
         root_frame.pack(fill="both", expand=True)
 
@@ -142,6 +168,163 @@ class Dashboard:
         self.main.pack(side="left", fill="both", expand=True)
         self._build_header(self.main)
         self._build_views(self.main)
+
+    # ─────────────────────────────────────────────────────────────
+    # UI PORTRAIT (600×1024 vertical)
+    # ─────────────────────────────────────────────────────────────
+    # Layout: header (logo+titulo+perfil+idioma) | nav horizontal scrollable
+    # | content | footer (logout). Sin sidebar.
+    def _build_ui_portrait(self):
+        root_frame = tk.Frame(self.root, bg=BG)
+        root_frame.pack(fill="both", expand=True)
+
+        self._build_topbar_portrait(root_frame)
+        self._build_topnav_portrait(root_frame)
+
+        # Footer (logout) PRIMERO al final, asi el content rellena el medio.
+        self._build_footer_portrait(root_frame)
+
+        # Content en el medio
+        self.main = tk.Frame(root_frame, bg=BG)
+        self.main.pack(side="top", fill="both", expand=True)
+        self._build_views(self.main)
+
+    def _build_topbar_portrait(self, parent):
+        """Top header: logo a la izquierda, titulo al medio, perfil+idioma a la derecha."""
+        HDR_H = 56
+        hdr   = tk.Frame(parent, bg=HDR_BG, height=HDR_H)
+        hdr.pack(side="top", fill="x")
+        hdr.pack_propagate(False)
+        tk.Frame(hdr, bg=BORDER, height=1).pack(side="bottom", fill="x")
+
+        # Logo (compacto, max 40px de alto)
+        _here    = os.path.dirname(os.path.abspath(__file__))
+        _img_dir = os.path.normpath(os.path.join(_here, "..", "img"))
+        LOGO_PATH = None
+        for _n in ["UdeC_2L_izq_Negro.png", "UdeC_2L_izq_negro.png",
+                   "UdeC_2LC_Negro.png", "UdeC_2LC_negro.png",
+                   "UdeC_2LC_Blanco.png"]:
+            _c = os.path.join(_img_dir, _n)
+            if os.path.isfile(_c):
+                LOGO_PATH = _c; break
+
+        if LOGO_PATH:
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(LOGO_PATH).convert("RGBA")
+                img.thumbnail((110, 40), Image.LANCZOS)
+                self._logo_img_port = ImageTk.PhotoImage(img)
+                tk.Label(hdr, image=self._logo_img_port,
+                         bg=HDR_BG, borderwidth=0).pack(side="left", padx=(10, 8))
+            except Exception:
+                pass
+
+        # Titulo (dinamico via navigate())
+        self.hdr_title = tk.Label(hdr, text=t("title_resumen"),
+                                  bg=HDR_BG, fg=BLUE,
+                                  font=("Segoe UI", 13, "bold"))
+        self.hdr_title.pack(side="left", padx=4)
+
+        # A la derecha: traductor + avatar/perfil
+        right = tk.Frame(hdr, bg=HDR_BG)
+        right.pack(side="right", padx=8)
+
+        self._btn_lang = modern_button(
+            right, text=t("btn_traductor"),
+            command=self._toggle_language,
+            bg_color=BLUE, fg_color=HDR_BG,
+            font_size=9, padding=(8, 4))
+        self._btn_lang.pack(side="right", padx=(6, 0))
+
+        # Avatar tappable que abre el popup de perfil
+        ini = iniciales(self.usuario.get("nombre", ""),
+                        self.usuario.get("apellido_paterno", ""))
+        avatar = tk.Label(right, text=ini, bg=ACCENT, fg=HDR_BG,
+                          font=("Segoe UI", 11, "bold"),
+                          width=2, height=1, cursor="hand2")
+        avatar.pack(side="right", padx=(0, 4), ipadx=4, ipady=2)
+        avatar.bind("<Button-1>", lambda e: self._show_perfil_popup())
+
+    def _build_topnav_portrait(self, parent):
+        """Nav horizontal scrollable de pestañas."""
+        NAV_H = 50
+        nav_wrap = tk.Frame(parent, bg=SIDEBAR, height=NAV_H)
+        nav_wrap.pack(side="top", fill="x")
+        nav_wrap.pack_propagate(False)
+        tk.Frame(nav_wrap, bg=ACCENT2, height=3).pack(side="top", fill="x")
+
+        # Canvas + frame interior para scroll horizontal si no caben
+        canvas = tk.Canvas(nav_wrap, bg=SIDEBAR, highlightthickness=0,
+                            height=NAV_H - 3)
+        canvas.pack(side="top", fill="both", expand=True)
+
+        inner = tk.Frame(canvas, bg=SIDEBAR)
+        inner_win = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _cfg_scroll(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _cfg_height(event):
+            canvas.itemconfig(inner_win, height=event.height)
+        inner.bind("<Configure>",  _cfg_scroll)
+        canvas.bind("<Configure>", _cfg_height)
+
+        # Botones de navegacion (mismas keys que el sidebar)
+        self._nav_horizontal("inicio",   "🏠 Inicio",       inner)
+        self._nav_horizontal("alumnos",  t("nav_alumnos"),  inner)
+        if self.rol == "admin":
+            self._nav_horizontal("maestros", t("nav_maestros"), inner)
+            self._nav_horizontal("admins",   t("nav_admins"),   inner)
+
+        # Scroll horizontal con touch/drag o rueda
+        def _on_wheel(event):
+            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        def _on_btn(event):
+            canvas.xview_scroll(-1 if event.num == 4 else 1, "units")
+        def _enter(_e=None):
+            canvas.bind_all("<MouseWheel>", _on_wheel)
+            canvas.bind_all("<Button-4>",   _on_btn)
+            canvas.bind_all("<Button-5>",   _on_btn)
+        def _leave(_e=None):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+        canvas.bind("<Enter>", _enter)
+        canvas.bind("<Leave>", _leave)
+
+    def _nav_horizontal(self, view_id: str, label: str, parent):
+        """Boton de nav en barra horizontal. Comparte _nav_btns con landscape."""
+        btn_frame = tk.Frame(parent, bg=SIDEBAR)
+        btn_frame.pack(side="left", fill="y", padx=2, pady=4)
+
+        btn = tk.Button(btn_frame, text=label,
+                        bg=SIDEBAR, fg="#EAF3FF",
+                        activebackground=NAV_HOVER, activeforeground="#FFFFFF",
+                        font=("Segoe UI", 10, "normal"),
+                        bd=0, relief="flat", cursor="hand2",
+                        padx=12, pady=8,
+                        command=lambda: self.navigate(view_id))
+        btn.pack(side="top", fill="both", expand=True)
+
+        # Stripe debajo para marcar el activo (en lugar de a la izquierda)
+        stripe = tk.Frame(btn_frame, bg=SIDEBAR, height=3)
+        stripe.pack(side="bottom", fill="x")
+
+        self._nav_btns[view_id]  = btn
+        self._nav_marks[view_id] = stripe
+
+    def _build_footer_portrait(self, parent):
+        """Footer con boton de cerrar sesion ocupando el ancho."""
+        FOOT_H = 56
+        foot   = tk.Frame(parent, bg=BG, height=FOOT_H)
+        foot.pack(side="bottom", fill="x")
+        foot.pack_propagate(False)
+        tk.Frame(foot, bg=BORDER, height=1).pack(side="top", fill="x")
+
+        logout_btn = modern_button(
+            foot, text="⬅  Cerrar sesión", command=self.logout,
+            bg_color="#C1121F", fg_color=SIDEBAR_TEXT,
+            font_size=10, padding=(14, 8))
+        logout_btn.pack(side="top", fill="x", padx=12, pady=8)
 
     # ── Sidebar ──────────────────────────────────────────────────
     def _build_sidebar(self, parent):
@@ -601,15 +784,88 @@ class Dashboard:
         pop.bind("<Escape>", lambda e: pop.destroy())
 
     # ─────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
     # LOGOUT
     # ─────────────────────────────────────────────────────────────
     def logout(self):
         if messagebox.askyesno(t("logout_titulo"),
                                t("confirmar_salida"),
                                parent=self.root):
-            self.root.destroy()
-            import login
-            login.LoginWindow().run()
+            # No abrir login.py ni modificar interfaz.py.
+            # Marcamos que, al cerrar el mainloop del dashboard, se debe
+            # regresar al menú principal de interfaz.py en este mismo proceso.
+            self._volver_a_interfaz_menu = True
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+
+    def _abrir_interfaz_menu(self):
+        """Abre interfaz.py en el menú principal sin tocar interfaz.py."""
+        import os
+        import sys
+        import importlib.util
+        import traceback
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidatos = [
+            os.path.join(base_dir, "interfaz.py"),
+            os.path.normpath(os.path.join(base_dir, "..", "interfaz.py")),
+            os.path.join(os.getcwd(), "interfaz.py"),
+        ]
+        interfaz_path = next((p for p in candidatos if os.path.isfile(p)), None)
+
+        if interfaz_path is None:
+            print("[LOGOUT] No se encontró interfaz.py para volver al menú.")
+            return
+
+        interfaz_dir = os.path.dirname(interfaz_path)
+        if interfaz_dir not in sys.path:
+            sys.path.insert(0, interfaz_dir)
+
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "interfaz_logout_menu", interfaz_path)
+            interfaz_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(interfaz_mod)
+
+            app = interfaz_mod.App()
+
+            # Tu interfaz actual inicia en Acceso con un after(). Como no vamos
+            # a modificar interfaz.py, cancelamos ese arranque programado y
+            # dibujamos el menú principal directamente.
+            try:
+                for after_id in app.tk.call("after", "info"):
+                    try:
+                        app.after_cancel(after_id)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            try:
+                app._stop_cam()
+            except Exception:
+                pass
+
+            try:
+                app._modo_acceso = False
+                app._usuario_login = None
+                app._build_main()
+            except Exception:
+                traceback.print_exc()
+
+            app.protocol("WM_DELETE_WINDOW", app.on_close)
+            app.mainloop()
+        except Exception:
+            traceback.print_exc()
 
     def run(self):
+        self._volver_a_interfaz_menu = False
         self.root.mainloop()
+        if getattr(self, "_volver_a_interfaz_menu", False):
+            self._abrir_interfaz_menu()
