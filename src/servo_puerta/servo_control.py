@@ -158,7 +158,18 @@ class _ControladorHW:
     # ── Botón manual ──────────────────────────────────────────────────────────
     def _iniciar_monitor_boton(self):
         def _monitor():
-            estado_anterior = 1
+            # Esperar a que el pull-up interno se estabilice antes de leer.
+            # Sin este retardo, el pin flota al arrancar y se detecta como
+            # pulsación falsa, disparando abrir() al inicio del programa.
+            time.sleep(1.5)
+
+            # Leer el estado REAL del pin después de estabilizarse
+            # para que estado_anterior refleje la realidad, no un flote.
+            try:
+                estado_anterior = lgpio.gpio_read(self._handle, PIN_BOTON)
+            except Exception:
+                estado_anterior = 1
+
             while self._running:
                 try:
                     lectura = lgpio.gpio_read(self._handle, PIN_BOTON)
