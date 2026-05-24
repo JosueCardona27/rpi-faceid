@@ -942,14 +942,23 @@ def detectar_oclusion(frame, bbox, tipo=None):
 
     def _bloqueo_boca_por_roi():
         """
-        Bloqueo frontal de boca/nariz baja tapada.
-        Usa ROIs fijos del bbox, no solo landmarks, porque MediaPipe puede
-        inventar puntos de boca sobre una camisa/papel.
+        Bloqueo de boca/nariz baja tapada.
+        Usa ROIs fijos del bbox YuNet, no solo landmarks, porque MediaPipe
+        puede inventar puntos de boca sobre una camisa/papel.
+
+        FUNCIONA EN CUALQUIER POSE (frontal y perfil):
+        - Los checks de contenido (white/dark/skin/edge/lap) son invariantes
+          a la pose: una camisa/papel/objeto sigue luciendo igual aunque
+          gires un poco la cabeza.
+        - Solo el check de "contraste con nariz" asume simetria frontal,
+          asi que ese si se limita a frontal.
         """
-        if es_perfil or not _OCLUSION_STRICT_MOUTH:
+        if not _OCLUSION_STRICT_MOUTH:
             return False, ""
 
         # Centro inferior: boca + bigote + parte alta del mentón.
+        # En perfil este ROI se desplaza con el bbox de YuNet, asi que
+        # sigue cayendo sobre la zona de la boca.
         boca_roi = _clip_roi(0.22, 0.56, 0.78, 0.86)
         if boca_roi is None:
             return False, ""
@@ -973,8 +982,10 @@ def detectar_oclusion(frame, bbox, tipo=None):
                            mb["lap"]  < 75.0)
 
         # Zona inferior casi sin piel comparada con nariz visible.
+        # SOLO FRONTAL: asume simetria entre arriba/abajo de la cara.
+        # En perfil la cara es asimetrica y este check da falsos positivos.
         contraste_con_nariz = False
-        if mn is not None:
+        if (not es_perfil) and mn is not None:
             contraste_con_nariz = (mn["skin"] > 0.12 and
                                    mb["skin"] < max(0.06, mn["skin"] * 0.38) and
                                    (mb["white"] > 0.22 or oscuro_uniforme))
@@ -985,13 +996,28 @@ def detectar_oclusion(frame, bbox, tipo=None):
                           (mb["white"] > 0.24 or mb["gray_std"] < 38.0) and
                           mb["val_mean"] > 95)
 
-        if blanco_tapando or oscuro_uniforme or contraste_con_nariz or neutro_extenso:
+        # NUEVO: tela skin-tone uniforme. Caso de camisa beige/tan/marron
+        # cubriendo boca — el color cae en rango de piel pero la textura
+        # es plana (no hay lips, no hay barba). La cara normal con barba
+        # del usuario tiene gray_std > 25 por la textura del vello.
+        # Una tela lisa tiene gray_std < 15.
+        tela_skin_tone_uniforme = (mb["gray_std"] < 14.0 and
+                                   mb["edge"]     < 0.030 and
+                                   mb["lap"]      < 50.0 and
+                                   # piel detectada pero NO abundante: zona
+                                   # cubierta donde solo se cuela algo de
+                                   # mejilla/cuello por los bordes
+                                   mb["skin"]     < 0.35)
+
+        if (blanco_tapando or oscuro_uniforme or contraste_con_nariz
+                or neutro_extenso or tela_skin_tone_uniforme):
             if _OCLUSION_DEBUG:
-                print("[OCL] Boca ROI: "
+                pose = "PERFIL" if es_perfil else "FRONTAL"
+                print(f"[OCL] Boca ROI ({pose}): "
                       f"skin={mb['skin']:.2f} white={mb['white']:.2f} "
                       f"dark={mb['dark']:.2f} sat={mb['sat_mean']:.0f} "
                       f"val={mb['val_mean']:.0f} edge={mb['edge']:.3f} "
-                      f"lap={mb['lap']:.1f}")
+                      f"lap={mb['lap']:.1f} g_std={mb['gray_std']:.1f}")
             return True, "mascara"
 
         return False, ""
@@ -1154,9 +1180,12 @@ def detectar_oclusion(frame, bbox, tipo=None):
                                        m_mouth["lap"] < 80.0)
                 casi_sin_piel = (m_mouth["skin"] < 0.035 and
                                   (m_mouth["white"] > 0.18 or boca_tapada_oscura))
-                if (not es_perfil) and (boca_tapada_clara or boca_tapada_oscura or casi_sin_piel):
+                # Estos checks son de CONTENIDO puro (skin/white/dark/edge/lap),
+                # no asumen pose, asi que valen en frontal y en perfil.
+                if boca_tapada_clara or boca_tapada_oscura or casi_sin_piel:
                     if _OCLUSION_DEBUG:
-                        print("[OCL] Capa 3 boca: "
+                        pose = "PERFIL" if es_perfil else "FRONTAL"
+                        print(f"[OCL] Capa 3 boca ({pose}): "
                               f"skin={m_mouth['skin']:.2f} white={m_mouth['white']:.2f} "
                               f"dark={m_mouth['dark']:.2f} edge={m_mouth['edge']:.3f} "
                               f"lap={m_mouth['lap']:.1f}")
@@ -1230,13 +1259,16 @@ def detectar_oclusion(frame, bbox, tipo=None):
         "meji_der": [425, 280, 371, 266, 329, 411],
     }
 
-    # Si la cara esta de perfil, NO se valida posicion frontal.
-    # Ese era el origen del falso "objeto en rostro": boca/nariz se desplazan
-    # a x=0.75-0.90 de forma normal y la capa 7 los marcaba como fallidos.
-    if es_perfil and _OCLUSION_SKIP_POS_EN_PERFIL:
-        return False, ""
+    # ── ESTRATEGIA: perfil afecta SOLO los checks de POSICION ───────────────
+    # Antes habia un `return False` aqui en perfil que desactivaba TODO Capa 7
+    # — incluido el contenido — lo que dejaba a un usuario cubrir su boca
+    # con camisa/papel sin deteccion si el clasificador lo marcaba como perfil.
+    # Ahora solo se omiten los checks de posicion (que dependen de simetria
+    # frontal); los checks de CONTENIDO (skin/std/firma de papel) son
+    # invariantes a la pose y se siguen ejecutando.
+    es_frontal = not es_perfil
 
-    # Tolerancia de posicion. Antes 0.20; era demasiado estricto.
+    # Tolerancia de posicion (frontal). 0.32 = 32% del bbox.
     TOL_POS = 0.32
 
     # Threshold de contenido por rasgo: (tipo, valor minimo).
@@ -1276,19 +1308,22 @@ def detectar_oclusion(frame, bbox, tipo=None):
     for nombre, (exp_x, exp_y) in EXPECTED_POSITIONS.items():
         indices = FEATURE_INDICES[nombre]
 
-        # Check 1: POSICION
-        center = _feature_center(indices)
+        # Check 1: POSICION — solo si la cara esta de FRENTE.
+        # En perfil la cara naturalmente esta desplazada (boca/nariz se mueven
+        # a x=0.70-0.90 sin que haya obstruccion). Omitimos el check.
         pos_fail = False
         pos_detail = ""
-        if center is not None:
-            cx, cy = center
-            rel_x = (cx - fx1) / fw if fw > 0 else 0.5
-            rel_y = (cy - fy1) / fh if fh > 0 else 0.5
-            if abs(rel_x - exp_x) > TOL_POS or abs(rel_y - exp_y) > TOL_POS:
-                pos_fail = True
-                pos_detail = f"pos=({rel_x:.2f},{rel_y:.2f})"
+        if es_frontal:
+            center = _feature_center(indices)
+            if center is not None:
+                cx, cy = center
+                rel_x = (cx - fx1) / fw if fw > 0 else 0.5
+                rel_y = (cy - fy1) / fh if fh > 0 else 0.5
+                if abs(rel_x - exp_x) > TOL_POS or abs(rel_y - exp_y) > TOL_POS:
+                    pos_fail = True
+                    pos_detail = f"pos=({rel_x:.2f},{rel_y:.2f})"
 
-        # Check 2: CONTENIDO
+        # Check 2: CONTENIDO — siempre, en cualquier pose.
         patch = _patch(indices, pad=4)
         cont_fail = False
         cont_detail = ""
@@ -1305,6 +1340,37 @@ def detectar_oclusion(frame, bbox, tipo=None):
                     cont_fail = True
                     cont_detail = f"r={val:.2f}"
 
+            # ── REFUERZO ESPECIAL PARA BOCA ─────────────────────────────────
+            # Si el check de piel no fallo (la tela tiene color tipo-piel o
+            # hay barba/lips), revisar la TEXTURA. La boca real con bigote+
+            # barba+labios tiene mucha varianza visual; papel/tela uniforme
+            # tienen casi cero.
+            #
+            # Firmas detectadas:
+            #   PAPEL/CUBREBOCAS CLARO:  mean V > 150 y std V < 12
+            #     - Papel blanco: V~200, std~5  → dispara
+            #     - Cubrebocas blanco: V~180, std~8  → dispara
+            #     - Barba: V~80-130, std>15  → NO dispara
+            #     - Labios visibles: V~100-180 PERO std>12 (lips+dientes+sombra)
+            #
+            #   TELA SKIN-TONE UNIFORME:  gray_std < 9
+            #     - Camisa beige/tan/marron: gray_std~4-8  → dispara
+            #     - Boca real con bigote+labios: gray_std>15  → NO dispara
+            #     - Piel de mejilla lisa: gray_std~10-15  → NO dispara
+            if not cont_fail and nombre == "boca":
+                hsv_b = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+                v_mean = float(hsv_b[:, :, 2].mean())
+                v_std  = float(hsv_b[:, :, 2].std())
+                gray_b = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+                g_std  = float(gray_b.std())
+
+                if v_mean > 150 and v_std < 12:
+                    cont_fail = True
+                    cont_detail = f"papel(v={v_mean:.0f},vstd={v_std:.1f})"
+                elif g_std < 9:
+                    cont_fail = True
+                    cont_detail = f"uniforme(g_std={g_std:.1f})"
+
         # La posicion sola ya NO bloquea: en perfil, fleco, barba y mala luz
         # MediaPipe puede desplazar puntos aunque el rostro este descubierto.
         if cont_fail:
@@ -1316,14 +1382,23 @@ def detectar_oclusion(frame, bbox, tipo=None):
         elif pos_fail:
             pos_fallos.append(nombre)
 
-    # ── Confirmacion conservadora de obstruccion ────────────────────────────
-    # 2 fallos de contenido => bloqueo.
-    # 1 fallo de contenido + 3 posiciones raras => bloqueo suave.
-    # Solo posiciones raras => NO bloquea, solo diagnostico.
-    if len(fallos) >= 2 or (len(fallos) >= 1 and len(pos_fallos) >= 3):
+    # ── Confirmacion de obstruccion ─────────────────────────────────────────
+    # Reglas:
+    #   • Boca sola con fallo de contenido → bloqueo (camisa/papel/cubrebocas)
+    #     La boca es la zona mas critica para identidad; cubrirla siempre bloquea.
+    #   • 2+ fallos de contenido distintos → bloqueo (obstruccion ancha)
+    #   • 1 fallo de contenido + 3 posiciones raras (solo frontal) → bloqueo suave
+    #   • Solo posiciones raras → NO bloquea (probablemente perfil/fleco)
+    disparo_boca   = "boca" in fallos
+    disparo_dos    = len(fallos) >= 2
+    disparo_mixto  = es_frontal and len(fallos) >= 1 and len(pos_fallos) >= 3
+
+    if disparo_boca or disparo_dos or disparo_mixto:
         if _OCLUSION_DEBUG:
+            pose  = "FRONTAL" if es_frontal else "PERFIL"
             extra = f" | pos_solo={pos_fallos}" if pos_fallos else ""
-            print(f"[OCL] Capa 7: contenido={len(fallos)} | {' | '.join(detalles)}{extra}")
+            print(f"[OCL] Capa 7 ({pose}): contenido={len(fallos)} "
+                  f"| {' | '.join(detalles)}{extra}")
         if "boca" in fallos:
             return True, "mascara"
         if "ojo_izq" in fallos and "ojo_der" in fallos:

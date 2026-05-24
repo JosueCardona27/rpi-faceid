@@ -368,7 +368,8 @@ class App(tk.Tk):
 
         self._analisis = {"vector": None, "coords": None,
                           "frame_id": -1, "tipo": None,
-                          "ocluido": False, "razon_oclusion": ""}
+                          "ocluido": False, "razon_oclusion": "",
+                          "multi_face": False}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
         self._tipo_esperado  = None
@@ -564,6 +565,7 @@ class App(tk.Tk):
                 tipo           = self._analisis["tipo"]
                 ocluido        = self._analisis.get("ocluido", False)
                 razon_oclusion = self._analisis.get("razon_oclusion", "")
+                multi_face     = self._analisis.get("multi_face", False)
 
             with self._ov_lock:
                 ov_color = self._ov_color
@@ -580,9 +582,14 @@ class App(tk.Tk):
             vis = frame.copy()
 
             # Caso especial: varios rostros similares en camara.
-            # No se dibuja ningun bbox para evitar oscilaciones.
-            # Solo se muestra un banner grande en el centro.
-            if _fe._multiple_faces and coords is None:
+            # Se usa el estado PEGAJOSO de _analisis (no el flag crudo del
+            # engine) para que el banner se mantenga 1 segundo despues de
+            # que la segunda persona se haya ido — eso evita el parpadeo
+            # entre banner / "Descubre tu rostro" / bbox cuando los rostros
+            # se solapan momentaneamente. _loop_analisis ya pone coords=None
+            # mientras multi_face esta activo, asi que no hace falta el
+            # "and coords is None" de antes.
+            if multi_face:
                 vis = _draw_multiface_banner(vis)
             elif coords:
                 # La oclusión tiene prioridad tanto en registro como en acceso.
@@ -631,6 +638,18 @@ class App(tk.Tk):
         _oc_contador    = 0   # frames consecutivos con oclusion detectada
         _oc_razon_buf   = ""  # razon del ultimo frame con oclusion
 
+        # ── Estado pegajoso de multi-rostro ─────────────────────────────────
+        # Cuando face_engine reporta 2+ rostros cercanos, encendemos el
+        # banner y lo MANTENEMOS hasta que pase 1 segundo limpio (sin
+        # multi-rostro). Eso impide el rebote que pasaba cuando una de las
+        # dos caras quedaba parcialmente ocluida un frame y la siguiente
+        # rama de codigo disparaba avisos absurdos como "Descubre tu rostro"
+        # sobre la otra cara. Mientras este estado este activo se suprime
+        # cualquier otro aviso (oclusion, "buscando", bbox).
+        _MULTI_DELAY_S = 1.0      # delay para apagar despues de que se va
+        _multi_active  = False    # banner visible actualmente?
+        _multi_clear_t = None     # timestamp para apagar (None = no programado)
+
         while self.cam_running:
             try:
                 with self._frame_lock:
@@ -646,6 +665,49 @@ class App(tk.Tk):
                     frame, HAAR_PATH,
                     modo=self._modo_deteccion,
                     tipo_esperado=self._tipo_esperado)
+
+                # ── Maquina de estados de multi-rostro ──────────────────────
+                # face_engine pone _multiple_faces=True cuando ve 2 rostros
+                # similares en tamaño y cercanos. Cuando esta True devuelve
+                # (None, None, None), pero el bool sigue marcado un instante.
+                ahora = time.time()
+                raw_multi = bool(getattr(_fe, "_multiple_faces", False))
+
+                if raw_multi:
+                    # Multi-rostro detectado AHORA mismo. Encender y cancelar
+                    # cualquier apagado programado.
+                    _multi_active  = True
+                    _multi_clear_t = None
+                elif _multi_active:
+                    # Antes habia multi-rostro, ahora ya no. Programar el
+                    # apagado a +1 segundo si no esta ya programado.
+                    if _multi_clear_t is None:
+                        _multi_clear_t = ahora + _MULTI_DELAY_S
+                    elif ahora >= _multi_clear_t:
+                        _multi_active  = False
+                        _multi_clear_t = None
+
+                # Mientras el banner este activo, SUPRIMIR todo lo demas
+                # para que no se cuelen warnings raros entre frames.
+                if _multi_active:
+                    vector         = None
+                    coords         = None
+                    ocluido        = False
+                    razon_oclusion = ""
+                    # Reset del suavizador de oclusion para que no quede
+                    # acumulado cuando salgamos del multi-rostro.
+                    _oc_contador   = 0
+                    _oc_razon_buf  = ""
+
+                    with self._analisis_lock:
+                        self._analisis["vector"]         = vector
+                        self._analisis["coords"]         = coords
+                        self._analisis["frame_id"]       = frame_id
+                        self._analisis["tipo"]           = tipo
+                        self._analisis["ocluido"]        = ocluido
+                        self._analisis["razon_oclusion"] = razon_oclusion
+                        self._analisis["multi_face"]     = True
+                    continue
 
                 ocluido_raw, razon_raw = False, ""
                 if coords is not None:
@@ -679,6 +741,7 @@ class App(tk.Tk):
                     self._analisis["tipo"]           = tipo
                     self._analisis["ocluido"]        = ocluido
                     self._analisis["razon_oclusion"] = razon_oclusion
+                    self._analisis["multi_face"]     = False
 
             except Exception:
                 import traceback
