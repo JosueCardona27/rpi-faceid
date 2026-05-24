@@ -212,26 +212,26 @@ class GestionView(tk.Frame):
 
         padx_card = 10 if cp else 14
         pady_card = 8  if cp else 12
-        c = tk.Frame(self, bg=CARD, padx=padx_card, pady=pady_card)
+        c = tk.Frame(self, bg="#FFFFFF", padx=padx_card, pady=pady_card)
         c.pack(fill="both", expand=True,
                padx=10 if cp else 18, pady=10 if cp else 14)
 
         # Cabecera
-        hdr = tk.Frame(c, bg=CARD)
+        hdr = tk.Frame(c, bg="#FFFFFF")
         hdr.pack(fill="x", pady=(0, 8))
         card_head(hdr, t(title_key), t(sub_key), compact=cp)
 
-        bframe = tk.Frame(hdr, bg=CARD)
+        bframe = tk.Frame(hdr, bg="#FFFFFF")
         bframe.pack(side="right")
         btn_px = 7 if cp else 10
         btn_py = 3 if cp else 5
         btn_fz = 8 if cp else 9
         tk.Button(bframe, text=t("editar"), command=self._editar_sel,
-                  bg=BLUE, fg="white", relief="flat", font=("Arial", btn_fz),
-                  padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
+                  bg=BLUE, fg="white", relief="flat", font=("Segoe UI", btn_fz, "bold"),
+                  padx=btn_px + 2, pady=btn_py, cursor="hand2", bd=0).pack(side="left", padx=3)
         tk.Button(bframe, text=t("eliminar"), command=self._eliminar_sel,
-                  bg=RED, fg="white", relief="flat", font=("Arial", btn_fz),
-                  padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
+                  bg=RED, fg="white", relief="flat", font=("Segoe UI", btn_fz, "bold"),
+                  padx=btn_px + 2, pady=btn_py, cursor="hand2", bd=0).pack(side="left", padx=3)
         # BOTÓN AGREGAR — comentado temporalmente (sin función activa)
         # Para reactivar, descomenta las siguientes líneas:
         # tk.Button(bframe, text=t("agregar"), command=self._agregar,
@@ -240,18 +240,18 @@ class GestionView(tk.Frame):
         #           padx=btn_px, pady=btn_py, cursor="hand2").pack(side="left", padx=3)
 
         # Búsqueda
-        srow = tk.Frame(c, bg=CARD)
+        srow = tk.Frame(c, bg="#FFFFFF")
         srow.pack(fill="x", pady=(0, 6))
-        tk.Label(srow, text=t("buscar_lbl"), bg=CARD, fg=T2,
+        tk.Label(srow, text=t("buscar_lbl"), bg="#FFFFFF", fg=T2,
                  font=("Arial", 8 if cp else 9)).pack(side="left")
         self._sq = tk.StringVar()
         self._sq.trace_add("write", lambda *_: self._filtrar())
         tk.Entry(srow, textvariable=self._sq,
                  width=20 if cp else 30,
-                 bg=CARD2, fg=T1, insertbackground=T1,
+                 bg="#F5F0E8", fg=T1, insertbackground=T1,
                  relief="flat", font=("Arial", 8 if cp else 9)
                  ).pack(side="left", padx=5, ipady=3)
-        self._lbl_n = tk.Label(srow, text="", bg=CARD, fg=T3,
+        self._lbl_n = tk.Label(srow, text="", bg="#FFFFFF", fg=T3,
                                 font=("Arial", 7 if cp else 8))
         self._lbl_n.pack(side="right")
 
@@ -277,7 +277,7 @@ class GestionView(tk.Frame):
                 ("fact",   t("col_ult_act"),       90, "center"),
             ]
 
-        wrap = tk.Frame(c, bg=CARD)
+        wrap = tk.Frame(c, bg="#FFFFFF")
         wrap.pack(fill="both", expand=True)
         # En compact: xscroll=True para poder deslizar y ver todas las columnas
         self.tree = make_treeview(wrap, cols, height=20 if cp else 22, xscroll=cp)

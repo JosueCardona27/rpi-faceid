@@ -26,6 +26,10 @@ T3           = "#8A8FA0"   # gris claro (hints)
 BORDER       = "#C8C2B2"   # borde beige-gris
 BORDER_SB    = "#2E4068"   # borde dentro del sidebar navy
 HDR_BG       = "#FFFFFF"   # blanco para el header (independiente del sidebar)
+NAV_PANEL    = "#22365F"   # bloque secundario para tarjetas dentro del sidebar
+NAV_HOVER    = "#2E4068"   # hover dentro del sidebar
+NAV_ACTIVE   = "#F5F0E8"   # botón activo claro
+NAV_MUTED    = "#B8C6E6"   # texto secundario sobre azul
 
 
 class Dashboard:
@@ -145,6 +149,11 @@ class Dashboard:
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
+        # Acentos superiores: mantiene el minimalismo, pero hace que la
+        # navegación se sienta diseñada y no como una barra plana.
+        tk.Frame(sb, bg=ACCENT2, height=4).pack(fill="x")
+        tk.Frame(sb, bg=AMBER,   height=2).pack(fill="x")
+
         # ── Logo institucional ────────────────────────────────────
         logo_px   = 12 if self.rpi_mode else (16 if self.compact_mode else 22)
         logo_pady = (8, 6) if self.rpi_mode else ((16, 10) if self.compact_mode else (26, 18))
@@ -199,12 +208,17 @@ class Dashboard:
                 except Exception as e_tk:
                     print(f"[LOGO tkinter] {e_tk}")
 
-        tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", padx=logo_px, pady=(12, 0))
+        tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", padx=logo_px, pady=(10, 0))
+
+        tk.Label(sb, text="SISTEMA DE GESTIÓN", bg=SIDEBAR, fg=NAV_MUTED,
+                 font=("Segoe UI", 8, "bold"), anchor="w"
+                 ).pack(fill="x", padx=logo_px, pady=(10, 0))
 
         self._build_profile(sb)
         tk.Frame(sb, bg=BORDER_SB, height=1).pack(fill="x", padx=logo_px, pady=(8, 0))
 
         self._nav_btns: Dict[str, tk.Button] = {}
+        self._nav_marks: Dict[str, tk.Frame] = {}
 
         # ── Canvas scrollable para navegación ───────────────────
         nav_container = tk.Frame(sb, bg=SIDEBAR)
@@ -258,7 +272,7 @@ class Dashboard:
             sz   =  9 if self.compact_mode else 10
             pady = (5, 1) if self.compact_mode else (12, 3)
             padx = 10 if self.compact_mode else 14
-            tk.Label(nav, text=t(key).upper(), bg=SIDEBAR, fg=SIDEBAR_TEXT,
+            tk.Label(nav, text=t(key).upper(), bg=SIDEBAR, fg=NAV_MUTED,
                      font=("Segoe UI", sz, "bold"),
                      anchor="w").pack(fill="x", padx=padx, pady=pady)
 
@@ -290,10 +304,12 @@ class Dashboard:
         logout_btn.pack(fill="x")
 
     def _build_profile(self, sb):
-        padx = 12 if self.compact_mode else 18
-        pady = 8  if self.compact_mode else 14
+        padx = 10 if self.compact_mode else 14
+        pady = 8  if self.compact_mode else 12
 
-        f = tk.Frame(sb, bg=SIDEBAR)
+        # Perfil como tarjeta dentro del sidebar. Es pequeño, pero da jerarquía
+        # visual y mantiene el estilo minimalista con los mismos tonos.
+        f = tk.Frame(sb, bg=NAV_PANEL)
         f.pack(fill="x", padx=padx, pady=pady)
 
         ini = iniciales(
@@ -302,15 +318,15 @@ class Dashboard:
         av_sz  = 11 if self.compact_mode else 14
         av_pad =  5 if self.compact_mode else  8
 
-        # Avatar: fondo blanco semitransparente simulado con ACCENT2
-        avatar_frame = tk.Frame(f, bg=SIDEBAR_TEXT)
-        avatar_frame.pack(side="left", padx=(0, 8 if self.compact_mode else 11))
-        tk.Label(avatar_frame, text=ini, bg=SIDEBAR_TEXT, fg=BLUE,
+        avatar_frame = tk.Frame(f, bg="#FFFFFF")
+        avatar_frame.pack(side="left", padx=(8, 8 if self.compact_mode else 10),
+                          pady=8)
+        tk.Label(avatar_frame, text=ini, bg="#FFFFFF", fg=BLUE,
                  font=("Segoe UI", av_sz, "bold"), width=3, height=1
                  ).pack(padx=av_pad, pady=av_pad)
 
-        info = tk.Frame(f, bg=SIDEBAR)
-        info.pack(side="left", fill="x", expand=True)
+        info = tk.Frame(f, bg=NAV_PANEL)
+        info.pack(side="left", fill="x", expand=True, pady=8)
 
         max_len = 18 if self.compact_mode else 26
         nombre_full = (
@@ -322,38 +338,53 @@ class Dashboard:
         rf = (("Segoe UI",  8) if self.compact_mode
               else ("Segoe UI", 10))
 
-        tk.Label(info, text=nombre_full, bg=SIDEBAR, fg=SIDEBAR_TEXT,
+        tk.Label(info, text=nombre_full, bg=NAV_PANEL, fg="#FFFFFF",
                  font=nf, anchor="w").pack(anchor="w")
         rol_key = {"admin": "administrador", "maestro": "maestro"}.get(
             self.rol, "alumno")
-        tk.Label(info, text=t(rol_key), bg=SIDEBAR, fg=ACCENT2,
+        tk.Label(info, text=t(rol_key), bg=NAV_PANEL, fg=ACCENT2,
                  font=rf, anchor="w").pack(anchor="w")
 
-        # Todo el bloque de perfil abre el modal al hacer clic
         for w in f.winfo_children() + [f]:
             w.bind("<Button-1>", lambda e: self._show_perfil_popup())
             w.configure(cursor="hand2")
 
     def _nav(self, view_id: str, label: str, parent):
         btn_frame = tk.Frame(parent, bg=SIDEBAR)
-        btn_frame.pack(fill="x", pady=1)
+        btn_frame.pack(fill="x", pady=3)
 
         font_sz = 11 if self.compact_mode else 12
-        padx    = 10 if self.compact_mode else 14
-        pady    =  4 if self.compact_mode else  8
+        padx    = 10 if self.compact_mode else 13
+        pady    =  7 if self.compact_mode else  9
 
-        # Hover suave: azul navy un tono más claro
-        NAV_HOVER = "#2E4068"
+        stripe = tk.Frame(btn_frame, bg=SIDEBAR, width=4)
+        stripe.pack(side="left", fill="y", padx=(0, 4))
 
         btn = tk.Button(
             btn_frame, text=f" {label}", anchor="w",
-            bg=SIDEBAR, fg=SIDEBAR_TEXT,
-            activebackground=NAV_HOVER, activeforeground=SIDEBAR_TEXT,
+            bg=SIDEBAR, fg="#EAF3FF",
+            activebackground=NAV_HOVER, activeforeground="#FFFFFF",
             font=("Segoe UI", font_sz), relief="flat", cursor="hand2",
-            padx=padx, pady=pady,
+            padx=padx, pady=pady, bd=0, highlightthickness=0,
             command=lambda v=view_id: self.navigate(v))
-        btn.pack(fill="x")
+        btn.pack(side="left", fill="x", expand=True)
+
+        def _enter(_=None):
+            if view_id != getattr(self, "_current", ""):
+                btn.configure(bg=NAV_HOVER, fg="#FFFFFF")
+                stripe.configure(bg=ACCENT2)
+
+        def _leave(_=None):
+            if view_id != getattr(self, "_current", ""):
+                btn.configure(bg=SIDEBAR, fg="#EAF3FF")
+                stripe.configure(bg=SIDEBAR)
+
+        for w in (btn_frame, stripe, btn):
+            w.bind("<Enter>", _enter)
+            w.bind("<Leave>", _leave)
+
         self._nav_btns[view_id] = btn
+        self._nav_marks[view_id] = stripe
 
     def _build_header(self, parent):
         hdr_h = 50 if self.rpi_mode else (62 if self.compact_mode else 72)
@@ -440,16 +471,20 @@ class Dashboard:
         v.on_show()
         self._current = view_id
 
-        # Resaltar botón activo (respeta tamaño de fuente del modo)
-        NAV_HOVER = "#2E4068"
+        # Resaltar botón activo con una píldora clara y acento verde.
         nav_sz = 11 if self.compact_mode else 12
         for vid, btn in self._nav_btns.items():
+            mark = getattr(self, "_nav_marks", {}).get(vid)
             if vid == view_id:
-                btn.configure(bg=NAV_HOVER, fg=SIDEBAR_TEXT,
+                btn.configure(bg=NAV_ACTIVE, fg=BLUE,
+                              activebackground="#FFFFFF", activeforeground=BLUE,
                               font=("Segoe UI", nav_sz, "bold"))
+                if mark: mark.configure(bg=ACCENT2)
             else:
-                btn.configure(bg=SIDEBAR, fg=SIDEBAR_TEXT,
+                btn.configure(bg=SIDEBAR, fg="#EAF3FF",
+                              activebackground=NAV_HOVER, activeforeground="#FFFFFF",
                               font=("Segoe UI", nav_sz, "normal"))
+                if mark: mark.configure(bg=SIDEBAR)
 
         keys = self._META_KEYS.get(view_id, ("title_resumen", "sub_resumen"))
         hardcoded = self._HDR_LABELS.get(view_id)

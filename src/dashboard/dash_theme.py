@@ -29,25 +29,29 @@ def aplicar_estilo_treeview():
     except Exception:
         pass
 
+    # Tabla blanca y limpia. Se mantiene el encabezado azul institucional,
+    # pero el cuerpo queda blanco para que la gestión de usuarios no se vea pesada.
     style.configure(
         "Dark.Treeview",
-        background=CARD,
+        background="#FFFFFF",
         foreground=T1,
-        fieldbackground=CARD,
+        fieldbackground="#FFFFFF",
         rowheight=34,
-        font=("Arial", 11),
+        font=("Segoe UI", 10),
         borderwidth=0,
+        relief="flat",
     )
     style.configure(
         "Dark.Treeview.Heading",
-        background=SIDEBAR,
-        foreground=BLUE,
-        font=("Arial", 11, "bold"),
+        background=BLUE,
+        foreground="#FFFFFF",
+        font=("Segoe UI", 10, "bold"),
         relief="flat",
+        borderwidth=0,
     )
     style.map(
         "Dark.Treeview",
-        background=[("selected", "#C5E8DC")],   # verde loro muy claro (fila seleccionada)
+        background=[("selected", "#DDF2EA")],
         foreground=[("selected", T1)],
     )
 
