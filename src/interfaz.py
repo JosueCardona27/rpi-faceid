@@ -113,11 +113,8 @@ def _imgtk(frame, max_w, max_h):
     h0, w0 = frame.shape[:2]
     r  = min(max_w / w0, max_h / h0)
     fr = cv2.resize(frame, (int(w0*r), int(h0*r)))
-    if USAR_PICAM:
-        img = Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
-    else:
-        img = Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
-    return ImageTk.PhotoImage(image=img)
+    return ImageTk.PhotoImage(
+        image=Image.fromarray(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)))
 
 
 def _draw_multiface_banner(frame):
@@ -175,6 +172,96 @@ def _draw_multiface_banner(frame):
     cv2.putText(frame, msg3, ((w_img - w3) // 2, y),
                 font, s3, (200, 200, 200), th3, cv2.LINE_AA)
 
+
+    return frame
+
+
+def _dibujar_overlay_estetico(frame, coords, color=(0, 212, 255), texto="", tipo=None):
+    """
+    Overlay visual más limpio para pantalla vertical táctil.
+    - No cambia la detección ni el vector facial.
+    - Solo reduce y estiliza el recuadro dibujado.
+    - Mantiene fondo negro translúcido detrás del texto.
+    """
+    if coords is None:
+        return frame
+    try:
+        x, y, w, h = [int(v) for v in coords[:4]]
+    except Exception:
+        return frame
+
+    h_img, w_img = frame.shape[:2]
+    # Recuadro visual más pequeño que el bbox real para que no invada media pantalla.
+    pad_x = int(w * 0.13)
+    pad_y_top = int(h * 0.12)
+    pad_y_bot = int(h * 0.08)
+    x1 = max(4, x + pad_x)
+    y1 = max(4, y + pad_y_top)
+    x2 = min(w_img - 5, x + w - pad_x)
+    y2 = min(h_img - 5, y + h - pad_y_bot)
+    if x2 <= x1 or y2 <= y1:
+        x1, y1, x2, y2 = max(4, x), max(4, y), min(w_img-5, x+w), min(h_img-5, y+h)
+
+    # Suavizar un poco el color para que se vea institucional, no tan agresivo.
+    b, g, r = [int(c) for c in color]
+    glow = (min(255, b + 20), min(255, g + 20), min(255, r + 20))
+    main = (b, g, r)
+    shadow = (5, 8, 15)
+
+    # Sombra sutil en esquinas.
+    L = max(28, min(x2 - x1, y2 - y1) // 4)
+    thick_shadow = 7
+    thick = 4
+    def corners(col, thickness, offset=0):
+        xx1, yy1, xx2, yy2 = x1+offset, y1+offset, x2+offset, y2+offset
+        cv2.line(frame, (xx1, yy1), (xx1 + L, yy1), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx1, yy1), (xx1, yy1 + L), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx2, yy1), (xx2 - L, yy1), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx2, yy1), (xx2, yy1 + L), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx1, yy2), (xx1 + L, yy2), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx1, yy2), (xx1, yy2 - L), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx2, yy2), (xx2 - L, yy2), col, thickness, cv2.LINE_AA)
+        cv2.line(frame, (xx2, yy2), (xx2, yy2 - L), col, thickness, cv2.LINE_AA)
+    corners(shadow, thick_shadow, offset=2)
+    corners(glow, thick + 2, offset=0)
+    corners(main, thick, offset=0)
+
+    # Pequeñas líneas laterales semitransparentes para guía sin cerrar todo el cuadro.
+    overlay = frame.copy()
+    mid_y = (y1 + y2) // 2
+    cv2.line(overlay, (x1, mid_y), (x1, mid_y), main, 1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+
+    font = cv2.FONT_HERSHEY_DUPLEX
+    titulo = texto.strip() if texto else "Detectado"
+    subtitulo = tipo.upper() if tipo else ""
+    titulo = titulo.split("\n")[0][:22]
+
+    # Caja superior negra translúcida, como pediste, pero menos grande.
+    scale_t = 0.78 if len(titulo) <= 14 else 0.66
+    th = 2
+    (tw, thh), _ = cv2.getTextSize(titulo, font, scale_t, th)
+    label_w = min(w_img - 16, max(tw + 34, 170))
+    label_h = 50 if subtitulo else 42
+    lx1 = max(8, min(w_img - label_w - 8, (x1 + x2 - label_w) // 2))
+    ly2 = max(50, y1 - 10)
+    ly1 = max(6, ly2 - label_h)
+
+    box = frame.copy()
+    cv2.rectangle(box, (lx1, ly1), (lx1 + label_w, ly1 + label_h), (0, 0, 0), -1)
+    cv2.addWeighted(box, 0.72, frame, 0.28, 0, frame)
+    cv2.rectangle(frame, (lx1, ly1), (lx1 + label_w, ly1 + label_h), main, 2, cv2.LINE_AA)
+
+    tx = lx1 + (label_w - tw) // 2
+    ty = ly1 + 28
+    cv2.putText(frame, titulo, (tx, ty), font, scale_t, shadow, th + 3, cv2.LINE_AA)
+    cv2.putText(frame, titulo, (tx, ty), font, scale_t, main, th, cv2.LINE_AA)
+
+    if subtitulo:
+        scale_s = 0.52
+        (sw, sh), _ = cv2.getTextSize(subtitulo, font, scale_s, 1)
+        cv2.putText(frame, subtitulo, (lx1 + (label_w - sw)//2, ly1 + label_h - 10),
+                    font, scale_s, (235, 245, 255), 1, cv2.LINE_AA)
     return frame
 
 
@@ -307,7 +394,9 @@ class App(tk.Tk):
         self._t_acceso_ok = 0 
         self._ov_lock  = threading.Lock()
 
-        self._build_main()
+        # Pantalla inicial automática: al abrir el programa entra directo a ACCESO.
+        # El menú sigue disponible desde el botón “☰ Menú” de la pantalla de acceso.
+        self.after(100, self._show_acceso)
 
         # ── Sensor ultrasónico ────────────────────────────────────────────────
         self.sensor = None
@@ -496,7 +585,14 @@ class App(tk.Tk):
             if _fe._multiple_faces and coords is None:
                 vis = _draw_multiface_banner(vis)
             elif coords:
-                if self._modo_acceso:
+                # La oclusión tiene prioridad tanto en registro como en acceso.
+                # Antes en modo acceso se ignoraba, por eso podía salir "Detectado"
+                # aunque la boca estuviera cubierta.
+                if ocluido:
+                    msg = _msgs_oc.get(razon_oclusion, "Descubre tu rostro")
+                    vis = dibujar_overlay(vis, coords, (255, 130, 0),
+                                          msg, tipo=tipo)
+                elif self._modo_acceso:
                     if ov_color:
                         c = ov_color
                     elif vector is not None and tipo == TIPO_FRONTAL:
@@ -507,10 +603,6 @@ class App(tk.Tk):
                         c = (80, 80, 80)
                     t = ov_texto if ov_texto else ""
                     vis = dibujar_overlay(vis, coords, c, t, tipo=None)
-                elif ocluido:
-                    msg = _msgs_oc.get(razon_oclusion, "Descubre tu rostro")
-                    vis = dibujar_overlay(vis, coords, (255, 130, 0),
-                                          msg, tipo=tipo)
                 else:
                     c = ov_color if ov_color else (
                         (0, 212, 255) if vector is not None else (80, 80, 80))
@@ -535,7 +627,7 @@ class App(tk.Tk):
         ultimo_id   = -1
         # Suavizado temporal: solo confirmar oclusion si se detecta
         # en N frames consecutivos. Evita falsos positivos por movimiento.
-        _FRAMES_CONFIRM = 6   # frames seguidos necesarios para confirmar
+        _FRAMES_CONFIRM = 4   # frames seguidos necesarios para confirmar
         _oc_contador    = 0   # frames consecutivos con oclusion detectada
         _oc_razon_buf   = ""  # razon del ultimo frame con oclusion
 
@@ -556,7 +648,7 @@ class App(tk.Tk):
                     tipo_esperado=self._tipo_esperado)
 
                 ocluido_raw, razon_raw = False, ""
-                if coords is not None and not self._modo_acceso:
+                if coords is not None:
                     try:
                         ocluido_raw, razon_raw = detectar_oclusion(frame, coords, tipo=tipo)
                     except Exception:
@@ -565,7 +657,7 @@ class App(tk.Tk):
                         ocluido_raw, razon_raw = False, ""
 
                 # Suavizado temporal estable: +1 detecta / -1 no detecta
-                # Requiere 6 frames consecutivos para confirmar (-> 0.24s a 25fps)
+                # Requiere 4 frames consecutivos para confirmar (respuesta rapida)
                 # Esto filtra falsos positivos por movimiento o ruido
                 if ocluido_raw:
                     _oc_contador  = min(_oc_contador + 1, _FRAMES_CONFIRM)
@@ -608,6 +700,10 @@ class App(tk.Tk):
 
         cv = tk.Canvas(self, width=W, height=H, bg=BG, highlightthickness=0)
         cv.place(x=0, y=0)
+        # Fondo suave institucional para que la pantalla no se vea plana
+        cv.create_oval(-130, 100, 220, 450, fill="#E1F1EA", outline="")
+        cv.create_oval(W-180, 420, W+160, 780, fill="#E5E0D4", outline="")
+        cv.create_polygon(0, H-190, W, H-320, W, H, 0, H, fill="#EDE7DA", outline="")
 
         # ── Barra superior blanca (logo UdeC + título + cerrar) ───────────────
         TOP_H = 64
@@ -939,12 +1035,171 @@ class App(tk.Tk):
         r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
         return f"#{min(255,r+40):02x}{min(255,g+40):02x}{min(255,b+40):02x}"
 
+    def _crear_fondo_camara(self, x, y, w, h, titulo="Cámara activa", subtitulo="Coloca tu rostro dentro del recuadro"):
+        """Fondo visual para las pantallas con cámara. Da contexto si la cámara tarda en pintar."""
+        cv = tk.Canvas(self, width=w, height=h, bg="#0B1120", highlightthickness=0)
+        cv.place(x=x, y=y)
+        # Fondo tipo panel con líneas suaves, sin depender de imágenes externas
+        cv.create_rectangle(0, 0, w, h, fill="#07101F", outline="")
+        cv.create_oval(-110, -90, 230, 215, fill="#102B3E", outline="")
+        cv.create_oval(w-210, h-190, w+130, h+145, fill="#12351F", outline="")
+        cv.create_oval(w//2-260, h//2-210, w//2+260, h//2+230, fill="#0B1A2D", outline="")
+        cv.create_rectangle(0, 0, w, 5, fill=TEAL_LN, outline="")
+        # Marco de cámara
+        m = 8
+        _round_rect(cv, m, m, w-m, h-m, r=20, fill="#0E1A2B", outline="#1E3A5F", width=2)
+        # Guía central punteada
+        cx, cy = w // 2, h // 2
+        size = min(w, h) // 3
+        cv.create_line(cx-size, cy-size, cx-size+45, cy-size, fill="#355F88", width=2)
+        cv.create_line(cx-size, cy-size, cx-size, cy-size+45, fill="#355F88", width=2)
+        cv.create_line(cx+size, cy-size, cx+size-45, cy-size, fill="#355F88", width=2)
+        cv.create_line(cx+size, cy-size, cx+size, cy-size+45, fill="#355F88", width=2)
+        cv.create_line(cx-size, cy+size, cx-size+45, cy+size, fill="#355F88", width=2)
+        cv.create_line(cx-size, cy+size, cx-size, cy+size-45, fill="#355F88", width=2)
+        cv.create_line(cx+size, cy+size, cx+size-45, cy+size, fill="#355F88", width=2)
+        cv.create_line(cx+size, cy+size, cx+size, cy+size-45, fill="#355F88", width=2)
+        cv.create_text(cx, cy-10, text=titulo, font=("Segoe UI", 12, "bold"), fill="#DCEBFF")
+        cv.create_text(cx, cy+16, text=subtitulo, font=("Segoe UI", 8), fill="#8FA7C8")
+        return cv
+
+    def _crear_teclado_virtual(self, parent, x, y, w, h, FONT="Segoe UI"):
+        """Teclado táctil simple para pantallas sin teclado físico."""
+        self._vk_shift = False
+        if not hasattr(self, "_vk_target"):
+            self._vk_target = None
+
+        kb = tk.Frame(parent, bg="#EAF0F7", width=w, height=h)
+        kb.place(x=x, y=y)
+        kb.pack_propagate(False)
+
+        header = tk.Frame(kb, bg="#EAF0F7", height=28)
+        header.pack(fill="x")
+        tk.Label(header, text="⌨  Teclado táctil", font=(FONT, 8, "bold"),
+                 fg=NAVY_LN, bg="#EAF0F7", anchor="w").pack(side="left", padx=10)
+        tk.Label(header, text="Toca un campo y escribe aquí", font=(FONT, 7),
+                 fg=SUBTEXT, bg="#EAF0F7", anchor="e").pack(side="right", padx=10)
+
+        rows_holder = tk.Frame(kb, bg="#EAF0F7")
+        rows_holder.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+
+        def _target():
+            ent = getattr(self, "_vk_target", None)
+            try:
+                if ent is not None and ent.winfo_exists():
+                    ent.focus_set()
+                    return ent
+            except Exception:
+                pass
+            return None
+
+        def _insert(txt):
+            ent = _target()
+            if ent is None:
+                return
+            try:
+                pos = ent.index(tk.INSERT)
+                ent.insert(pos, txt)
+            except Exception:
+                pass
+
+        def _backspace():
+            ent = _target()
+            if ent is None:
+                return
+            try:
+                pos = ent.index(tk.INSERT)
+                if pos > 0:
+                    ent.delete(pos-1, pos)
+            except Exception:
+                pass
+
+        def _clear():
+            ent = _target()
+            if ent is None:
+                return
+            try:
+                ent.delete(0, tk.END)
+            except Exception:
+                pass
+
+        def _toggle_shift():
+            self._vk_shift = not getattr(self, "_vk_shift", False)
+            _draw_keys()
+
+        def _press(key):
+            if key == "⌫":
+                _backspace()
+            elif key == "Limpiar":
+                _clear()
+            elif key == "Espacio":
+                _insert(" ")
+            elif key == "⇧":
+                _toggle_shift()
+            elif key == ".com":
+                _insert(".com")
+            else:
+                if len(key) == 1 and key.isalpha():
+                    _insert(key.upper() if getattr(self, "_vk_shift", False) else key.lower())
+                else:
+                    _insert(key)
+
+        def _mk_button(row, text, weight=1, bg="#FFFFFF", fg=TEXT):
+            b = tk.Button(row, text=text, font=(FONT, 9, "bold"), fg=fg, bg=bg,
+                          activebackground="#DCEFE7", activeforeground=TEXT,
+                          relief="flat", bd=0, highlightthickness=1,
+                          highlightbackground="#CFD8E6", cursor="hand2",
+                          command=lambda k=text: _press(k))
+            b.pack(side="left", fill="both", expand=True, padx=3, pady=3)
+            return b
+
+        def _draw_keys():
+            for child in rows_holder.winfo_children():
+                child.destroy()
+            layouts = [
+                list("1234567890"),
+                list("qwertyuiop"),
+                list("asdfghjklñ"),
+                ["⇧"] + list("zxcvbnm") + ["⌫"],
+                ["@", "_", "-", ".", "/", "Espacio", ".com", "Limpiar"],
+            ]
+            for layout in layouts:
+                row = tk.Frame(rows_holder, bg="#EAF0F7")
+                row.pack(fill="x", expand=True)
+                for key in layout:
+                    show = key
+                    if len(key) == 1 and key.isalpha():
+                        show = key.upper() if getattr(self, "_vk_shift", False) else key.lower()
+                    if key == "⇧":
+                        _mk_button(row, show, bg=ACCENT if getattr(self, "_vk_shift", False) else "#FFFFFF",
+                                   fg="#FFFFFF" if getattr(self, "_vk_shift", False) else TEXT)
+                    elif key in ("⌫", "Limpiar"):
+                        _mk_button(row, show, bg="#FFECEC", fg=DANGER)
+                    elif key in ("Espacio", ".com"):
+                        _mk_button(row, show, bg="#EAF7F0", fg=ACCENT)
+                    else:
+                        _mk_button(row, show)
+        _draw_keys()
+        return kb
+
     # ══════════════════════════════════════════════════════════════════════════
     #  PANTALLA REGISTRO
     # ══════════════════════════════════════════════════════════════════════════
     def _show_registro(self):
         # Asegurar que cualquier cámara previa esté liberada antes de reiniciar
         self._stop_cam()
+        # ── CRITICO: resetear estado de acceso al entrar al registro ──────────
+        # Si veniamos de la pantalla de Acceso, _modo_acceso seguia True.
+        # Eso causaba dos bugs:
+        #   1. El _loop_camara dibujaba el bbox con la rama de acceso
+        #      (sin fallback de texto, sin label de pose) → el cuadrito
+        #      y el texto "FRENTE/IZQUIERDA/..." desaparecian.
+        #   2. Si Acceso habia programado _lanzar_verificacion via after(),
+        #      el callback se disparaba aunque ya estuvieras en Registro,
+        #      llamando reconocer_persona y "reconociendo" a la persona
+        #      que se estaba registrando.
+        self._modo_acceso = False
+        self.verificando  = False
         self._clear()
         SCREEN_H = self.winfo_screenheight()
         WIN_H    = min(H, SCREEN_H)
@@ -1008,9 +1263,12 @@ class App(tk.Tk):
             bg=ACCENT2, wraplength=PILL_W - 16)
         self._pill_reg_lbl.place(relx=.5, rely=.5, anchor="center")
 
-        # ── Zona cámara ────────────────────────────────────────────────────────
-        self.cam_label = tk.Label(self, bg="#1A1A1A")
-        self.cam_label.place(x=0, y=CAM_Y, width=W, height=CAM_H)
+        # ── Zona cámara con fondo visual institucional ─────────────────────────
+        self._crear_fondo_camara(0, CAM_Y, W, CAM_H,
+                                 "Escaneo facial",
+                                 "Llena tus datos y mantén el rostro visible")
+        self.cam_label = tk.Label(self, bg="#0B1120", bd=0, highlightthickness=0)
+        self.cam_label.place(x=8, y=CAM_Y + 8, width=W - 16, height=CAM_H - 16)
 
         # ── Botón INICIAR ESCANEO (sobre la cámara, parte baja) ───────────────
         self._form_listo = False
@@ -1140,31 +1398,46 @@ class App(tk.Tk):
             lbl = tk.Label(scan_bot, text="0", font=("Segoe UI", 7), fg=SUBTEXT, bg=NAVY_LN)
             self._barra_pasos.append((bar, lbl, 60))
 
-        # ── Botón circular "Datos del usuario" justo arriba del escaneo ─────────
-        BTN_R = 28
-        FAB_H = BTN_R * 2
-        FAB_X = W - FAB_H - 16   # pegado a la derecha
+        # ── Botón grande "Datos del usuario" ─────────────────────────────────
+        # En pantalla táctil debe verse como una acción clara, no como icono pequeño.
+        FAB_W, FAB_H = 226, 50
+        FAB_X = W - FAB_W - 16
         FAB_Y = BTN_Y_b - FAB_H - 10
 
-        fab_cv = tk.Canvas(self, width=FAB_H, height=FAB_H,
-                           bg="#1A1A1A", highlightthickness=0)
+        fab_cv = tk.Canvas(self, width=FAB_W, height=FAB_H,
+                           bg="#0B1120", highlightthickness=0)
         fab_cv.place(x=FAB_X, y=FAB_Y)
         self._fab_cv = fab_cv
 
-        def _draw_fab(color):
+        def _draw_fab(color=NAVY_LN):
             fab_cv.delete("all")
-            fab_cv.create_oval(0, 0, FAB_H, FAB_H, fill=color, outline="")
-            cx, cy = BTN_R, BTN_R
-            # Cuerpo del clipboard
-            fab_cv.create_rectangle(cx-10, cy-12, cx+10, cy+13,
+            r = FAB_H // 2
+            # sombra / resplandor
+            fab_cv.create_arc(3, 5, 3+2*r, FAB_H+5, start=90, extent=180,
+                              fill="#000000", outline="#000000")
+            fab_cv.create_arc(FAB_W-2*r+3, 5, FAB_W+3, FAB_H+5, start=270, extent=180,
+                              fill="#000000", outline="#000000")
+            fab_cv.create_rectangle(r+3, 5, FAB_W-r+3, FAB_H+5,
+                                    fill="#000000", outline="")
+            # cuerpo
+            fab_cv.create_arc(0, 0, 2*r, FAB_H, start=90, extent=180,
+                              fill=color, outline=color)
+            fab_cv.create_arc(FAB_W-2*r, 0, FAB_W, FAB_H, start=270, extent=180,
+                              fill=color, outline=color)
+            fab_cv.create_rectangle(r, 0, FAB_W-r, FAB_H, fill=color, outline="")
+            # icono clipboard
+            cx, cy = 26, FAB_H // 2
+            fab_cv.create_rectangle(cx-9, cy-13, cx+9, cy+13,
                                     fill="#FFFFFF", outline="")
-            # Lengüeta superior
-            fab_cv.create_arc(cx-5, cy-15, cx+5, cy-9,
-                              start=0, extent=180, fill=color, outline="")
-            # Líneas de texto
-            for dy in (-4, 2, 8):
-                fab_cv.create_line(cx-7, cy+dy, cx+7, cy+dy,
+            fab_cv.create_rectangle(cx-5, cy-17, cx+5, cy-11,
+                                    fill="#FFFFFF", outline="")
+            for dy in (-5, 1, 7):
+                fab_cv.create_line(cx-6, cy+dy, cx+6, cy+dy,
                                    fill=color, width=2)
+            fab_cv.create_text(48, 16, text="DATOS DEL USUARIO",
+                               font=(FONT, 9, "bold"), fill="#FFFFFF", anchor="w")
+            fab_cv.create_text(48, 33, text="Toca aquí para abrir formulario",
+                               font=(FONT, 7), fill="#D8E8FF", anchor="w")
 
         _draw_fab(NAVY_LN)
         self._draw_fab = _draw_fab
@@ -1181,7 +1454,7 @@ class App(tk.Tk):
         self._start_cam()
         self.cam_running = True
         threading.Thread(target=self._loop_camara,
-                         kwargs={"max_w": W, "max_h": CAM_H},
+                         kwargs={"max_w": W - 16, "max_h": CAM_H - 16},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
 
@@ -1212,15 +1485,15 @@ class App(tk.Tk):
         rol = self.rol_var.get()
         FW2 = (W - 36) // 2 - 4
         if rol in ("admin", "maestro"):
-            self._lbl_correo.place(x=0,        y=5)
-            self._ent_correo.place(x=0,        y=22, width=FW2, height=24)
-            self._lbl_pwd.place(  x=FW2 + 8,  y=5)
-            self._ent_pwd.place(  x=FW2 + 8,  y=22, width=FW2, height=24)
+            self._lbl_correo.place(x=0,        y=2)
+            self._ent_correo.place(x=0,        y=28, width=FW2, height=32)
+            self._lbl_pwd.place(  x=FW2 + 8,  y=2)
+            self._ent_pwd.place(  x=FW2 + 8,  y=28, width=FW2, height=32)
         else:  # estudiante
-            self._lbl_grado.place(x=0,   y=5)
-            self._om_grado.place( x=0,   y=22, width=90, height=24)
-            self._lbl_grupo.place(x=110, y=5)
-            self._om_grupo.place( x=110, y=22, width=90, height=24)
+            self._lbl_grado.place(x=0,   y=2)
+            self._om_grado.place( x=0,   y=28, width=100, height=32)
+            self._lbl_grupo.place(x=118, y=2)
+            self._om_grupo.place( x=118, y=28, width=100, height=32)
 
     def _field(self, parent, label, var, y, show=None):
         tk.Label(parent, text=label, font=self.f_label,
@@ -1332,7 +1605,9 @@ class App(tk.Tk):
 
     def _show_form_sheet(self, WIN_H, FONT):
         """Bottom sheet con el formulario de registro."""
-        SHEET_H = int(WIN_H * 0.76)
+        # En pantalla vertical táctil damos más alto al sheet para que quepa
+        # el formulario + teclado virtual sin tapar el botón de guardado.
+        SHEET_H = min(WIN_H - 10, int(WIN_H * 0.95))
 
         # Overlay semitransparente
         overlay = tk.Frame(self, bg="#000000")
@@ -1343,14 +1618,14 @@ class App(tk.Tk):
         overlay_cv.create_rectangle(0, 0, W, WIN_H, fill="#000000", stipple="gray50")
 
         # Sheet frame
-        sheet = tk.Frame(self, bg=PANEL, width=W, height=SHEET_H)
+        sheet = tk.Frame(self, bg="#F8FAFC", width=W, height=SHEET_H)
         sheet.place(x=0, y=WIN_H)
         sheet.pack_propagate(False)
 
         # Título + botón cerrar
         tk.Label(sheet, text="📋  Datos del usuario",
-                 font=(FONT, 11, "bold"), fg=TEXT, bg=PANEL,
-                 anchor="w").place(x=18, y=24)
+                 font=(FONT, 13, "bold"), fg=TEXT, bg="#F8FAFC",
+                 anchor="w").place(x=22, y=18)
 
         def _close_sheet():
             def _slide_down(y):
@@ -1367,56 +1642,84 @@ class App(tk.Tk):
             _slide_down(sheet.winfo_y())
 
         close_btn = tk.Button(sheet, text="✕",
-                              font=(FONT, 11, "bold"), fg=SUBTEXT, bg=PANEL,
+                              font=(FONT, 11, "bold"), fg=SUBTEXT, bg="#F8FAFC",
                               relief="flat", bd=0, highlightthickness=0,
                               cursor="hand2", command=_close_sheet)
-        close_btn.place(x=W - 40, y=20, width=28, height=28)
+        close_btn.place(x=W - 46, y=16, width=34, height=34)
 
         PAD  = 18
         COL2 = W // 2 + 4
         FW   = (W - 48) // 2 - 4
+        touch_entries = []
 
         def campo(label_txt, var, x, y, show=None, w=FW):
-            tk.Label(sheet, text=label_txt, font=(FONT, 8),
-                     fg=SUBTEXT, bg=PANEL).place(x=x, y=y)
-            kw = dict(font=(FONT, 9), fg=TEXT, bg=CARD,
-                      insertbackground=ACCENT, relief="flat",
-                      highlightthickness=1, highlightcolor=ACCENT,
-                      highlightbackground=BORDER)
+            """Campo táctil redondeado con foco visual + teclado virtual."""
+            tk.Label(sheet, text=label_txt, font=(FONT, 9, "bold"),
+                     fg="#344054", bg="#F8FAFC").place(x=x, y=y)
+
+            holder = tk.Frame(sheet, bg="#F8FAFC", width=w, height=40)
+            holder.place(x=x, y=y + 24)
+            holder.pack_propagate(False)
+            bgcv = tk.Canvas(holder, width=w, height=40, bg="#F8FAFC", highlightthickness=0)
+            bgcv.place(x=0, y=0)
+
+            def _draw(border=BORDER, fill=CARD):
+                bgcv.delete("all")
+                _round_rect(bgcv, 1, 1, w-1, 39, r=16, fill=fill, outline=border, width=1)
+
+            _draw()
+            e = tk.Entry(holder, textvariable=var, font=(FONT, 11), fg=TEXT, bg=CARD,
+                         insertbackground=ACCENT, relief="flat", bd=0,
+                         highlightthickness=0)
             if show:
-                kw["show"] = show
-            e = tk.Entry(sheet, textvariable=var, **kw)
-            e.place(x=x, y=y + 16, width=w, height=28)
+                e.config(show=show)
+            e.place(x=14, y=8, width=w-28, height=24)
+
+            def _set_target(_ev=None):
+                self._vk_target = e
+                try: e.focus_set()
+                except Exception: pass
+                _draw(ACCENT, "#F5FFF9")
+
+            def _blur(_ev=None):
+                _draw(BORDER, CARD)
+
+            e.bind("<FocusIn>", _set_target)
+            e.bind("<Button-1>", _set_target)
+            e.bind("<FocusOut>", _blur)
+            holder.bind("<Button-1>", _set_target)
+            bgcv.bind("<Button-1>", _set_target)
+            touch_entries.append(e)
             return e
 
         # Sección Identidad
-        tk.Label(sheet, text="Identidad", font=(FONT, 8, "bold"),
-                 fg=NAVY_LN, bg=PANEL).place(x=PAD, y=64)
+        tk.Label(sheet, text="Identidad", font=(FONT, 9, "bold"),
+                 fg=NAVY_LN, bg="#F8FAFC").place(x=PAD, y=56)
 
-        campo("Nombre(s)",   self.nombre_var, PAD,  84, w=W - 36)
-        campo("Ap. paterno", self.ap_pat_var, PAD,  132)
-        campo("Ap. materno", self.ap_mat_var, COL2, 132)
-        campo("Número de cuenta (8 dígitos)", self.cuenta_var, PAD, 180, w=W - 36)
+        campo("Nombre(s)",   self.nombre_var, PAD,  82, w=W - 36)
+        campo("Ap. paterno", self.ap_pat_var, PAD,  150)
+        campo("Ap. materno", self.ap_mat_var, COL2, 150)
+        campo("Número de cuenta (8 dígitos)", self.cuenta_var, PAD, 218, w=W - 36)
 
         # Sección Rol
-        tk.Label(sheet, text="Rol", font=(FONT, 8, "bold"),
-                 fg=NAVY_LN, bg=PANEL).place(x=PAD, y=228)
+        tk.Label(sheet, text="Rol", font=(FONT, 9, "bold"),
+                 fg=NAVY_LN, bg="#F8FAFC").place(x=PAD, y=296)
 
-        rol_frame = tk.Frame(sheet, bg=CARD, width=W - 36, height=34)
-        rol_frame.place(x=PAD, y=244)
+        rol_frame = tk.Frame(sheet, bg="#E9EEF6", width=W - 36, height=42)
+        rol_frame.place(x=PAD, y=316)
         rol_frame.pack_propagate(False)
 
         # Estado en tiempo real
         estado_lbl = tk.Label(sheet, text="Estado: Formulario incompleto",
-                              font=(FONT, 8), fg=SUBTEXT, bg=PANEL, anchor="w")
-        estado_lbl.place(x=PAD, y=346)
+                              font=(FONT, 9, "bold"), fg=SUBTEXT, bg="#F8FAFC", anchor="w")
+        estado_lbl.place(x=PAD, y=446, width=W - 2*PAD)
 
         # ── Botón GUARDAR (esquina inferior derecha) ─────────────────────────
         # Solo se habilita cuando el formulario es valido.
         # Al presionarlo cierra el sheet Y asegura que _form_listo este sincronizado.
-        BTN_G_W, BTN_G_H = 130, 38
+        BTN_G_W, BTN_G_H = 178, 44
         guardar_cv = tk.Canvas(sheet, width=BTN_G_W, height=BTN_G_H,
-                               bg=PANEL, highlightthickness=0)
+                               bg="#F8FAFC", highlightthickness=0)
         guardar_cv.place(x=W - BTN_G_W - PAD,
                          y=SHEET_H - BTN_G_H - 14)
 
@@ -1432,7 +1735,7 @@ class App(tk.Tk):
             guardar_cv.create_rectangle(r, 0, BTN_G_W - r, BTN_G_H,
                                         fill=col, outline="")
             guardar_cv.create_text(BTN_G_W // 2, BTN_G_H // 2,
-                                   text="✓  GUARDAR" if activo else "GUARDAR",
+                                   text="✓  GUARDAR DATOS" if activo else "GUARDAR DATOS",
                                    font=(FONT, 10, "bold"), fill=tc)
 
         _draw_guardar(False)
@@ -1523,47 +1826,64 @@ class App(tk.Tk):
             c = COLOR_ROL.get(rol, ACCENT)
             tk.Radiobutton(rol_frame, text=rol.capitalize(),
                            variable=self.rol_var, value=rol,
-                           font=(FONT, 9), fg=c, bg=CARD,
-                           selectcolor=BORDER, activebackground=CARD,
+                           font=(FONT, 9, "bold"), fg=c, bg="#E9EEF6",
+                           selectcolor="#D7F5E7", activebackground="#E9EEF6",
                            activeforeground=c, cursor="hand2",
                            command=lambda: (self._actualizar_campos_rol(),
                                             _guardar_datos())
-                           ).place(x=12 + i * 120, y=7)
+                           ).place(x=16 + i * 122, y=10)
 
         # Zona condicional
-        self._frame_cond = tk.Frame(sheet, bg=PANEL, width=W - 36, height=56)
-        self._frame_cond.place(x=PAD, y=284)
+        self._frame_cond = tk.Frame(sheet, bg="#F8FAFC", width=W - 36, height=66)
+        self._frame_cond.place(x=PAD, y=370)
         self._frame_cond.pack_propagate(False)
 
         self._lbl_correo = tk.Label(self._frame_cond, text="Correo",
-                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 9, "bold"), fg="#344054", bg="#F8FAFC")
         self._ent_correo = tk.Entry(self._frame_cond, textvariable=self.correo_var,
-                                    font=(FONT, 9), fg=TEXT, bg=CARD,
+                                    font=(FONT, 10), fg=TEXT, bg=CARD,
                                     insertbackground=ACCENT, relief="flat",
                                     highlightthickness=1, highlightcolor=ACCENT,
                                     highlightbackground=BORDER)
         self._lbl_pwd = tk.Label(self._frame_cond, text="Contraseña",
-                                  font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
+                                  font=(FONT, 9, "bold"), fg="#344054", bg="#F8FAFC")
         self._ent_pwd = tk.Entry(self._frame_cond, textvariable=self.pwd_var,
-                                  show="●", font=(FONT, 9), fg=TEXT, bg=CARD,
+                                  show="●", font=(FONT, 10), fg=TEXT, bg=CARD,
                                   insertbackground=ACCENT, relief="flat",
                                   highlightthickness=1, highlightcolor=ACCENT,
                                   highlightbackground=BORDER)
         self._lbl_grado = tk.Label(self._frame_cond, text="Grado",
-                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 9, "bold"), fg="#344054", bg="#F8FAFC")
         self._om_grado  = tk.OptionMenu(self._frame_cond, self.grado_var, *GRADOS)
         self._om_grado.config(font=(FONT, 9), fg=TEXT, bg=CARD,
                                activebackground=CARD, activeforeground=ACCENT,
                                highlightthickness=0, relief="flat", bd=0)
         self._om_grado["menu"].config(bg=CARD, fg=TEXT, font=(FONT, 9))
         self._lbl_grupo = tk.Label(self._frame_cond, text="Grupo",
-                                    font=(FONT, 8), fg=SUBTEXT, bg=PANEL)
+                                    font=(FONT, 9, "bold"), fg="#344054", bg="#F8FAFC")
         self._om_grupo  = tk.OptionMenu(self._frame_cond, self.grupo_var, *GRUPOS)
         self._om_grupo.config(font=(FONT, 9), fg=TEXT, bg=CARD,
                                activebackground=CARD, activeforeground=ACCENT,
                                highlightthickness=0, relief="flat", bd=0)
         self._om_grupo["menu"].config(bg=CARD, fg=TEXT, font=(FONT, 9))
+
+        # También entran al teclado virtual los campos condicionales.
+        touch_entries.extend([self._ent_correo, self._ent_pwd])
+        for ent in touch_entries:
+            ent.bind("<FocusIn>", lambda e, ee=ent: setattr(self, "_vk_target", ee), add="+")
+            ent.bind("<Button-1>", lambda e, ee=ent: (setattr(self, "_vk_target", ee), ee.focus_set()), add="+")
+
         self._actualizar_campos_rol()
+
+        # Teclado virtual integrado al formulario.
+        KEY_Y = min(486, max(455, SHEET_H - 470))
+        KEY_H = max(210, min(330, SHEET_H - KEY_Y - 92))
+        self._crear_teclado_virtual(sheet, PAD, KEY_Y, W - 2*PAD, KEY_H, FONT)
+        try:
+            self._vk_target = touch_entries[0]
+            touch_entries[0].focus_set()
+        except Exception:
+            pass
 
         # Disparar validación inicial con los datos que ya tenga
         _validar_y_actualizar()
@@ -1899,8 +2219,11 @@ class App(tk.Tk):
                 lambda: self.grado_var.set("1")))
             self.after(0, lambda: self._safe(
                 lambda: self.grupo_var.set("A")))
-            self.after(3500, lambda: self._safe(
-                lambda: None))  # cap_btn removed
+
+            # Registro terminado: preguntar si se continuará registrando
+            # o si se regresa a la pantalla principal de ACCESO.
+            self.after(1200, lambda nv=nombre_completo, nt=total_muestras:
+                       self._mostrar_dialogo_post_registro(nv, nt))
         else:
             try: eliminar_persona(uid)
             except: pass
@@ -1918,6 +2241,128 @@ class App(tk.Tk):
             self.after(0, lambda: self._safe(
                 lambda: None))  # cap_btn removed in new design
             self.after(0, self._resetear_pasos_ui)
+
+    def _mostrar_dialogo_post_registro(self, nombre="", total_muestras=0):
+        """
+        Pantalla de decisión al terminar un registro exitoso.
+        Sí  → vuelve a Registro para capturar otro usuario.
+        No  → regresa automáticamente a Acceso.
+        """
+        try:
+            self._stop_cam()
+        except Exception:
+            pass
+
+        FONT = "Segoe UI"
+        win_h = self.winfo_height() or H
+
+        overlay = tk.Frame(self, bg="#0A0E1A")
+        overlay.place(x=0, y=0, width=W, height=win_h)
+        overlay.lift()
+
+        cv = tk.Canvas(overlay, width=W, height=win_h,
+                       bg="#0A0E1A", highlightthickness=0)
+        cv.place(x=0, y=0)
+
+        # Fondo con acentos institucionales, ligero para no cargar el código.
+        cv.create_rectangle(0, 0, W, win_h, fill="#0A0E1A", outline="")
+        cv.create_oval(-90, -80, 220, 220, fill="#102B3E", outline="")
+        cv.create_oval(W - 170, win_h - 180, W + 120, win_h + 130,
+                       fill="#12351F", outline="")
+        cv.create_rectangle(0, 0, W, 5, fill=TEAL_LN, outline="")
+        cv.create_rectangle(0, 5, W, 8, fill=GOLD_LN, outline="")
+
+        card_w = min(W - 44, 420)
+        card_h = 390
+        card_x = (W - card_w) // 2
+        card_y = max(42, (win_h - card_h) // 2)
+
+        # Sombra + tarjeta.
+        _round_rect(cv, card_x + 5, card_y + 7,
+                    card_x + card_w + 5, card_y + card_h + 7,
+                    r=24, fill="#000000", outline="#000000", width=0)
+        _round_rect(cv, card_x, card_y, card_x + card_w, card_y + card_h,
+                    r=24, fill="#FFFFFF", outline=BORDER, width=2)
+
+        # Banda superior.
+        _round_rect(cv, card_x, card_y, card_x + card_w, card_y + 72,
+                    r=24, fill=NAVY_LN, outline=NAVY_LN, width=0)
+        cv.create_rectangle(card_x, card_y + 48, card_x + card_w,
+                            card_y + 72, fill=NAVY_LN, outline="")
+        cv.create_polygon(card_x, card_y + 72,
+                          card_x + 150, card_y + 72,
+                          card_x + 132, card_y + 92,
+                          card_x, card_y + 92,
+                          fill=TEAL_LN, outline="")
+        cv.create_rectangle(card_x, card_y + 92, card_x + card_w,
+                            card_y + 96, fill=GOLD_LN, outline="")
+        cv.create_text(card_x + card_w // 2, card_y + 35,
+                       text="REGISTRO COMPLETADO",
+                       font=(FONT, 15, "bold"), fill="#FFFFFF")
+
+        # Icono de éxito.
+        icx = card_x + card_w // 2
+        icy = card_y + 138
+        cv.create_oval(icx - 38, icy - 38, icx + 38, icy + 38,
+                       fill="#E6F6EE", outline=ACCENT, width=2)
+        cv.create_line(icx - 17, icy + 2, icx - 5, icy + 16,
+                       fill=ACCENT, width=5)
+        cv.create_line(icx - 5, icy + 16, icx + 22, icy - 19,
+                       fill=ACCENT, width=5)
+
+        nombre = (nombre or "Usuario").strip()
+        nombre_mostrar = nombre if len(nombre) <= 34 else nombre[:31] + "..."
+        cv.create_text(card_x + card_w // 2, card_y + 196,
+                       text=nombre_mostrar,
+                       font=(FONT, 13, "bold"), fill=TEXT)
+        cv.create_text(card_x + card_w // 2, card_y + 222,
+                       text=f"Se guardaron {total_muestras} muestras biométricas.",
+                       font=(FONT, 9), fill=SUBTEXT)
+        cv.create_text(card_x + card_w // 2, card_y + 258,
+                       text="¿Deseas registrar otro usuario?",
+                       font=(FONT, 12, "bold"), fill=NAVY_LN)
+
+        def _continuar():
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+            self._show_registro()
+
+        def _ir_acceso():
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+            self._show_acceso()
+
+        btn_w = card_w - 58
+        btn_h = 44
+        bx = card_x + 29
+        by1 = card_y + 286
+        by2 = by1 + 54
+
+        btn_si = tk.Button(
+            overlay, text="Sí, registrar otro usuario",
+            font=(FONT, 10, "bold"), fg="#FFFFFF", bg=ACCENT,
+            activebackground=ACCENT2, activeforeground="#FFFFFF",
+            relief="flat", bd=0, cursor="hand2",
+            command=_continuar)
+        btn_si.place(x=bx, y=by1, width=btn_w, height=btn_h)
+
+        btn_no = tk.Button(
+            overlay, text="No, volver a Acceso",
+            font=(FONT, 10, "bold"), fg=NAVY_LN, bg="#EEF2F7",
+            activebackground="#DDE7F0", activeforeground=NAVY_LN,
+            relief="flat", bd=0, cursor="hand2",
+            command=_ir_acceso)
+        btn_no.place(x=bx, y=by2, width=btn_w, height=btn_h)
+
+        # Enter = continuar; Escape = volver a Acceso.
+        overlay.bind("<Return>", lambda e: _continuar())
+        overlay.bind("<Escape>", lambda e: _ir_acceso())
+        btn_si.focus_set()
+
 
     # ══════════════════════════════════════════════════════════════════════════
     #  DIÁLOGO DE AUTENTICACIÓN PARA MENÚ
@@ -2170,9 +2615,12 @@ class App(tk.Tk):
             bg=ACCENT2, wraplength=PILL_W - 16)
         self.posicion_label.place(relx=.5, rely=.5, anchor="center")
 
-        # ── Zona cámara (borde a borde, fondo negro) ──────────────────────────
-        self.cam_label = tk.Label(self, bg="#1A1A1A")
-        self.cam_label.place(x=0, y=CAM_Y, width=W, height=CAM_H)
+        # ── Zona cámara con fondo visual institucional ─────────────────────────
+        self._crear_fondo_camara(0, CAM_Y, W, CAM_H,
+                                 "Verificación de acceso",
+                                 "Mira directo a la cámara para identificarte")
+        self.cam_label = tk.Label(self, bg="#0B1120", bd=0, highlightthickness=0)
+        self.cam_label.place(x=8, y=CAM_Y + 8, width=W - 16, height=CAM_H - 16)
 
         # ── Panel inferior oscuro ─────────────────────────────────────────────
         bot = tk.Frame(self, bg=NAVY_LN, width=W, height=BOT_H)
@@ -2255,7 +2703,7 @@ class App(tk.Tk):
         self.cam_running = True
         self._ultima_cara_t = time.time()
         threading.Thread(target=self._loop_camara,
-                         kwargs={"max_w": W, "max_h": CAM_H},
+                         kwargs={"max_w": W - 16, "max_h": CAM_H - 16},
                          daemon=True).start()
         threading.Thread(target=self._loop_analisis, daemon=True).start()
         threading.Thread(target=self._monitor_cara,   daemon=True).start()
@@ -2301,6 +2749,11 @@ class App(tk.Tk):
 
     def _lanzar_verificacion(self):
         if not self.cam_running: return
+        # ── Defensa: solo verificar si REALMENTE estamos en modo acceso ──
+        # Un after() programado en acceso podia dispararse despues de que
+        # el usuario navego a registro/otro modo. Bloqueamos eso aqui.
+        if not getattr(self, "_modo_acceso", False):
+            return
         if self.verificando:
             self.after(300, self._lanzar_verificacion); return
         self.verificando = True
@@ -2313,16 +2766,23 @@ class App(tk.Tk):
 
     def _verificar(self):
         vectores = []; intentos = 0; ultimo = -1; hay_cara = False
+        hay_oclusion = False; razon_oclusion = ""
         while len(vectores) < 8 and intentos < 120 and self.cam_running:
             intentos += 1
             with self._analisis_lock:
                 frame_id = self._analisis["frame_id"]
                 v        = self._analisis["vector"]
                 tipo     = self._analisis["tipo"]
+                ocluido  = self._analisis.get("ocluido", False)
+                razon_tmp = self._analisis.get("razon_oclusion", "")
             if frame_id == ultimo:
                 time.sleep(0.04); continue
             ultimo = frame_id
-            if v is not None:
+            if ocluido:
+                hay_cara = True
+                hay_oclusion = True
+                razon_oclusion = razon_tmp or razon_oclusion
+            elif v is not None:
                 hay_cara = True
                 if tipo == TIPO_FRONTAL:
                     vectores.append(v)
@@ -2333,6 +2793,14 @@ class App(tk.Tk):
         if not self.cam_running: return
 
         if not vectores:
+            if hay_oclusion:
+                self.after(0, lambda: self.resultado_var.set("ROSTRO CUBIERTO"))
+                self.after(0, lambda: self.posicion_var.set("Descubre tu rostro."))
+                self.after(0, lambda: self._draw_pill(WARNING))
+                self.after(0, lambda: self._set_sim_bar(0, BORDER))
+                self._set_overlay((255, 130, 0), "Descubre tu rostro")
+                self.after(2500, self._lanzar_verificacion); return
+
             self.after(0, lambda: self.resultado_var.set(
                 "Gira al frente" if hay_cara else "Sin rostro"))
             self.after(0, lambda: self.posicion_var.set(

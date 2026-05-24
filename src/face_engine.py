@@ -12,13 +12,28 @@ CAMBIOS vs version LBP:
     YuNet ONNX + Haar fallback
     Clasificacion por asimetria de landmarks
 
+  CAPAS DE OCLUSION (ESTA REVISION):
+    REGLA: solo se detecta obstruccion en 4 zonas — mejillas, boca,
+    nariz y ojos. La frente NO se chequea (cabello/fleco/pelo largo
+    no debe disparar nada). La barba TAMPOCO debe disparar (el bigote
+    y la barba tienen textura natural distinguible de tela uniforme).
+
+    Capas activas:
+      Capa 0 — Anti-spoofing ML (con auto-desactivacion)
+      Capa 1 — HandLandmarker (manos)
+      Capa 2 — IoU entre MP y YuNet (MP no encuentra cara coherente)
+      Capa 3 — Boca sin piel (objeto cubriendo, threshold 0.08)
+      Capa 4 — Lentes opacos (ambos ojos uniformes std<9)
+      Capa 7 — POSICION + CONTENIDO de las 4 zonas (rediseñada)
+      Capa 8 — Lower face skin/dark (red de seguridad extrema)
+
+    Capas ELIMINADAS (causaban falsos positivos con TU cara):
+      Capa 5 — Frente/gorra: TU PELO cae sobre frente → falso positivo constante
+      Capa 6 — Boca std<10: TU BARBA da std 8-9 → falso positivo de "mascarilla"
+
 MODELO REQUERIDO:
   Archivo: models/w600k_mbf.onnx
   Se descarga automaticamente al primer arranque (~16 MB).
-  Si falla la descarga automatica:
-    1. Descarga buffalo_sc.zip desde:
-       https://github.com/deepinsight/insightface/releases/tag/v0.7
-    2. Extrae w600k_mbf.onnx y colócalo en la carpeta models/
 
 INSTALACION:
   pip install onnxruntime
@@ -44,8 +59,18 @@ _MODELS   = os.path.join(_BASE_DIR, "..", "models")
 VECTOR_DIM = 512   # MobileFaceNet w600k_mbf.onnx -> 512 dims
 
 # -- Filtros de calidad de deteccion (usados en diagnostico.py) ---------------
-_SCORE_MINIMO_CARA = 0.45   # score YuNet minimo para considerar cara real
-_LAPLACIAN_MIN     = 25.0   # varianza Laplaciano minima (fondo IR ~ 3-20, cara ~ 25-150)
+_SCORE_MINIMO_CARA = 0.45
+_LAPLACIAN_MIN     = 25.0
+
+# -- Oclusion ---------------------------------------------------------------
+# En pruebas reales la capa de posicion confundia barba, fleco y perfiles
+# con "objeto en el rostro".  Estas constantes vuelven la oclusion
+# conservadora: manos y objetos claros se bloquean, pero barba/fleco/perfil no.
+_OCLUSION_DEBUG = False
+_OCLUSION_SKIP_POS_EN_PERFIL = True
+# Si es True, bloquea tapados claros/ropa en boca aunque MediaPipe siga
+# encontrando landmarks aproximados sobre el objeto.
+_OCLUSION_STRICT_MOUTH = True
 
 # -- Template de alineacion facial (5 puntos -> 112x112) ----------------------
 _TEMPLATE_112 = np.array([
@@ -64,30 +89,14 @@ class _BboxSmoother:
     """
     Suaviza las coordenadas del bounding box cuadro a cuadro mediante
     una Media Movil Exponencial (EMA) para eliminar el temblor visible.
-
-    alpha : fraccion del frame NUEVO que se mezcla con el historico.
-            0.0 -> recuadro completamente fijo (no sigue al rostro)
-            1.0 -> sin suavizado (comportamiento original, tiembla)
-            0.35 -> buen equilibrio: suave pero sigue movimientos normales
-
-    Uso interno — se instancia una vez como _bbox_smoother y se aplica
-    automaticamente dentro de extraer_caracteristicas().
     """
 
     def __init__(self, alpha: float = 0.35, jump_ratio: float = 0.70):
         self.alpha      = alpha
         self.jump_ratio = jump_ratio
-        self._prev      = None   # (x, y, w, h) en flotante
+        self._prev      = None
 
     def update(self, bbox):
-        """
-        Recibe bbox crudo (x, y, w, h) o None si no hay cara.
-        Devuelve bbox suavizado como tupla de enteros, o None.
-
-        Si la nueva cara esta muy lejos de la actual (salto mayor al
-        70% del tamaño de la cara), se resetea instantaneamente en
-        lugar de interpolar — evita el efecto loco con varias personas.
-        """
         if bbox is None:
             self._prev = None
             return None
@@ -98,7 +107,6 @@ class _BboxSmoother:
             self._prev = new
             return bbox
 
-        # Detectar salto grande (probable cambio de persona)
         prev_cx = self._prev[0] + self._prev[2] / 2.0
         prev_cy = self._prev[1] + self._prev[3] / 2.0
         new_cx  = new[0] + new[2] / 2.0
@@ -107,11 +115,9 @@ class _BboxSmoother:
         avg_face = (self._prev[2] + self._prev[3] + new[2] + new[3]) / 4.0
 
         if dist > avg_face * self.jump_ratio:
-            # Salto = otra persona mas cercana; resetear sin interpolar
             self._prev = new
             return bbox
 
-        # Suavizado EMA normal
         a  = self.alpha
         sx = a * new[0] + (1 - a) * self._prev[0]
         sy = a * new[1] + (1 - a) * self._prev[1]
@@ -125,14 +131,11 @@ class _BboxSmoother:
     def reset(self):
         self._prev = None
 
-# Instancia global
 _bbox_smoother = _BboxSmoother(alpha=0.35)
-
-# Señal para interfaz.py: True cuando hay varias caras de tamaño similar
 _multiple_faces = False
 
 # =============================================================================
-#  DETECTOR YuNet + Haar  (identico a version anterior)
+#  DETECTOR YuNet + Haar
 # =============================================================================
 
 _yunet        = None
@@ -154,9 +157,6 @@ def _init_detectores():
             try:
                 _yunet = cv2.FaceDetectorYN.create(
                     yunet_path, "", (640, 480),
-                    # score_threshold subido de 0.30 -> 0.55:
-                    # 0.30 dejaba pasar reflejos, esquinas oscuras, patrones de tela
-                    # 0.55 sigue siendo permisivo para caras reales pero filtra ruido.
                     score_threshold=0.55,
                     nms_threshold=0.3,
                     top_k=5000
@@ -198,7 +198,6 @@ def _init_detectores():
                 print(f"[DET] Haar perfil (fallback): {ruta}")
                 break
 
-    # Haar eye cascade (para deteccion de oclusion)
     global _haar_eye
     _haar_eye = None
     rutas_e = []
@@ -233,13 +232,6 @@ def _detectar_caras_yunet(frame):
     if faces is None or len(faces) == 0:
         return []
 
-    # ── Filtro de tamano minimo absoluto ─────────────────────────────────────
-    # Una cara real para escaneo necesita ocupar al menos ~12% del lado mas
-    # corto del frame. Caras de 15x15 px son SIEMPRE falsos positivos
-    # (reflejos, patrones de tela, esquinas de objetos).
-    #
-    # En 640x480 -> minimo 58x58 px aproximadamente.
-    # En 800x600 -> minimo 72x72 px.
     min_face_side = max(60, min(w_img, h_img) // 8)
 
     detecciones = []
@@ -249,11 +241,8 @@ def _detectar_caras_yunet(frame):
         score = float(face[14])
         x = max(0, x);  y = max(0, y)
         w = min(w, w_img - x);  h = min(h, h_img - y)
-        # Filtro 1: tamano absoluto razonable (no detecciones diminutas)
         if w < min_face_side or h < min_face_side:
             continue
-        # Filtro 2: proporciones razonables de cara (no objetos alargados)
-        # Caras humanas: ratio w/h tipicamente entre 0.55 y 1.20.
         aspect = w / float(h)
         if aspect < 0.55 or aspect > 1.20:
             continue
@@ -312,7 +301,7 @@ def _detectar_caras(frame, tipo_esperado=None):
     return _detectar_caras_haar(frame, tipo_esperado)
 
 # =============================================================================
-#  CLASIFICACION DE ANGULO  (identica a version anterior)
+#  CLASIFICACION DE ANGULO
 # =============================================================================
 
 _buf_yaw   = []
@@ -490,9 +479,9 @@ def _extraer_embedding(cara_112):
 
     img = cv2.cvtColor(cara_112, cv2.COLOR_BGR2RGB).astype(np.float32)
     img = (img - 127.5) / 127.5
-    img = img.transpose(2, 0, 1)[np.newaxis]   # (1, 3, 112, 112)
+    img = img.transpose(2, 0, 1)[np.newaxis]
 
-    out  = _ort_session.run(None, {_ort_input: img})[0][0]   # (512,)
+    out  = _ort_session.run(None, {_ort_input: img})[0][0]
     norm = np.linalg.norm(out)
     return (out / norm).astype(np.float32) if norm > 0 else out.astype(np.float32)
 
@@ -501,11 +490,6 @@ def _extraer_embedding(cara_112):
 # =============================================================================
 
 def _varianza_laplaciano(frame, x, y, w, h):
-    """
-    Calcula la varianza del Laplaciano del recorte de cara.
-    Valor alto = textura real (cara). Valor bajo = fondo liso (pared IR).
-    Usado por diagnostico.py para calibrar el filtro de deteccion.
-    """
     recorte = frame[y:y+h, x:x+w]
     if recorte.size == 0:
         return 0.0
@@ -531,24 +515,14 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
         _multiple_faces = False
         return None, None, None
 
-    # ── Deteccion de multiples personas (logica robusta) ─────────────────────
-    # Una "segunda cara" valida debe cumplir TRES condiciones simultaneamente:
-    #   1. Tamano similar a la principal (>= 60% del area)
-    #   2. Score de confianza alto (>= 0.70) — descarta detecciones marginales
-    #      en el fondo (TVs, micros, patrones de tela)
-    #   3. Separacion fisica razonable (centros separados al menos por la mitad
-    #      del ancho de la cara) — descarta double-detection sobre el mismo rostro
-    #
-    # Si las tres se cumplen → realmente hay dos personas y mostramos el banner.
     _multiple_faces = False
     if len(caras) > 1:
-        c1 = caras[0]   # (x, y, w, h, score)
+        c1 = caras[0]
         c2 = caras[1]
         area_1 = c1[2] * c1[3]
         area_2 = c2[2] * c2[3]
         score_2 = c2[4]
 
-        # Centros de cada cara
         cx1 = c1[0] + c1[2] / 2.0
         cy1 = c1[1] + c1[3] / 2.0
         cx2 = c2[0] + c2[2] / 2.0
@@ -572,14 +546,11 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
     x1 = max(0, x);          y1 = max(0, y)
     x2 = min(w_img, x + w);  y2 = min(h_img, y + h)
     bbox_raw  = (x1, y1, x2 - x1, y2 - y1)
-    bbox      = _bbox_smoother.update(bbox_raw)   # <-- suavizado EMA
+    bbox      = _bbox_smoother.update(bbox_raw)
 
     tipo = _clasificar_angulo(frame, bbox, frame.shape, tipo_esperado=None)
 
     if _multiple_faces:
-        # Varias personas de tamaño similar: ocultar todo, solo mostrar mensaje.
-        # NO devolvemos bbox para que NO se dibuje ningun recuadro y se evite
-        # cualquier oscilacion visual entre los rostros detectados.
         _bbox_smoother.update(None)
         return None, None, None
 
@@ -590,7 +561,6 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
             embedding = _extraer_embedding(cara_alineada)
 
     if embedding is None:
-        # Usar coordenadas crudas para el crop de reconocimiento
         rx1, ry1, rx2, ry2 = x1, y1, x2, y2
         recorte = frame[ry1:ry2, rx1:rx2]
         if recorte.size > 0:
@@ -602,8 +572,6 @@ def extraer_caracteristicas(frame, haar_path=None, modo="auto", tipo_esperado=No
 #  DETECCION DE OCLUSION FACIAL
 # =============================================================================
 
-# ── MediaPipe Face Mesh (singleton, carga una sola vez) ───────────────────────
-# ── MediaPipe FaceLandmarker (deteccion de cara con malla densa) ─────────────
 _mp_landmarker    = None
 _mp_landmarker_ok = False
 _MP_FACE_MODEL    = "face_landmarker.task"
@@ -638,7 +606,6 @@ def _descargar_mp_model(dest, modelo="face"):
 
 
 def _get_mp_landmarker():
-    """Inicializa MediaPipe FaceLandmarker la primera vez."""
     global _mp_landmarker, _mp_landmarker_ok
     if _mp_landmarker_ok:
         return _mp_landmarker
@@ -661,7 +628,7 @@ def _get_mp_landmarker():
             min_face_detection_confidence=0.4,
             min_face_presence_confidence=0.4,
             output_face_blendshapes=False,
-            output_facial_transformation_matrixes=True,  # para detectar yaw 3D
+            output_facial_transformation_matrixes=True,
         )
         _mp_landmarker = _mp_vision.FaceLandmarker.create_from_options(opts)
         print("[MP] FaceLandmarker listo (con matriz 3D)")
@@ -671,14 +638,12 @@ def _get_mp_landmarker():
     return _mp_landmarker
 
 
-# ── MediaPipe HandLandmarker (deteccion directa de manos) ────────────────────
 _mp_hand_landmarker    = None
 _mp_hand_landmarker_ok = False
 _MP_HAND_MODEL         = "hand_landmarker.task"
 
 
 def _get_mp_hand_landmarker():
-    """Inicializa MediaPipe HandLandmarker la primera vez."""
     global _mp_hand_landmarker, _mp_hand_landmarker_ok
     if _mp_hand_landmarker_ok:
         return _mp_hand_landmarker
@@ -698,10 +663,6 @@ def _get_mp_hand_landmarker():
             base_options=base_opts,
             running_mode=_mp_vision.RunningMode.IMAGE,
             num_hands=2,
-            # Subido de 0.15 -> 0.50:
-            # 0.15 disparaba con objetos del fondo (microfono, cables, sabanas,
-            # esquinas oscuras de TVs). 0.50 sigue detectando manos reales
-            # (incluso en poses dificiles) pero filtra fantasmas.
             min_hand_detection_confidence=0.50,
             min_hand_presence_confidence=0.50,
         )
@@ -716,73 +677,37 @@ def _get_mp_hand_landmarker():
 # ═════════════════════════════════════════════════════════════════════════════
 # ANTI-SPOOFING ML (Silent-Face MiniFASNet)
 # ═════════════════════════════════════════════════════════════════════════════
-# Modelo open-source que clasifica si un rostro es REAL (persona en vivo) o
-# SPOOF (foto, pantalla, mascara, objeto cubriendo el rostro).
-#
-# Para activar:
-#   1. Descarga un modelo Silent-Face en formato ONNX (~2-5 MB).
-#      Opcion A: https://huggingface.co/datasets/Wuvin/Unique3D/blob/main/
-#                ckpt/onnx_face_anti_spoofing/2.7_80x80_MiniFASNetV2.onnx
-#      Opcion B: https://github.com/hairymax/Face-AntiSpoofing
-#                (carpeta saved_models)
-#   2. Renombra el archivo a 'anti_spoof.onnx'.
-#   3. Colocalo en la carpeta models/ del proyecto.
-#
-# Si el archivo no esta presente, el sistema cae en heuristicas (8 capas).
-
 class _AntiSpoofDetector:
-    """
-    Detector anti-spoofing usando un modelo ONNX (MiniFASNet o similar).
-
-    Carga perezosa: el modelo se carga la primera vez que se llama predict_real.
-    Si el archivo models/anti_spoof.onnx no existe, is_available() devuelve
-    False y el sistema usa heuristicas como respaldo.
-    """
-
     DEFAULT_INPUT_SIZE = (80, 80)
 
     def __init__(self):
         self.session     = None
         self.input_name  = None
         self.input_size  = self.DEFAULT_INPUT_SIZE
-        self.output_dims = None      # cantidad de clases del modelo
-        self._tried      = False     # solo intentar cargar una vez
+        self.output_dims = None
+        self._tried      = False
 
-        # Calibracion automatica con DOS criterios de auto-desactivacion:
-        #   A. Mediana baja: si el modelo no logra dar probabilidad alta de forma
-        #      consistente para rostros reales, esta sesgado.
-        #   B. Alta varianza: si el modelo da 0.91 en un frame y 0.19 en el
-        #      siguiente para la MISMA cara, es ruido, no senal.
-        # En cualquier caso → se desactiva y se usa Capa 8 + heuristicas.
         self._calib_samples       = []
-        self._CALIB_N             = 30       # frames para decidir
-        self._CALIB_MIN_MEDIAN    = 0.65     # mediana minima aceptable
-        self._CALIB_MAX_STD       = 0.20     # desviacion maxima (estabilidad)
+        self._CALIB_N             = 30
+        self._CALIB_MIN_MEDIAN    = 0.65
+        self._CALIB_MAX_STD       = 0.20
         self._auto_disabled       = False
-        self._debug_first_n       = 5        # imprimir detalle de N primeros
+        self._debug_first_n       = 5
 
     def _load(self):
         if self._tried:
             return
         self._tried = True
 
-        # ── Escape manual: archivo "disable_anti_spoof.flag" en models/ ──
-        # Si el archivo existe, el modelo no se carga ni siquiera. El sistema
-        # corre directamente con heuristicas. Util cuando se sabe que el
-        # modelo es poco fiable para esta camara/usuario.
         disable_flag = os.path.join(_MODELS, "disable_anti_spoof.flag")
         if os.path.exists(disable_flag):
             print("[AntiSpoof] DESACTIVADO MANUALMENTE (flag file presente):", disable_flag)
             print("[AntiSpoof] Borra ese archivo para reactivar.")
-            print("[AntiSpoof] Sistema usara heuristicas (Capas 2-8) tuneadas.")
             return
 
         model_path = os.path.join(_MODELS, "anti_spoof.onnx")
         if not os.path.exists(model_path):
             print("[AntiSpoof] modelo no encontrado en", model_path)
-            print("[AntiSpoof] sistema usara heuristicas como respaldo")
-            print("[AntiSpoof] para activar, descarga un modelo MiniFASNet ONNX")
-            print("[AntiSpoof] y colocalo en:", model_path)
             return
 
         try:
@@ -793,14 +718,11 @@ class _AntiSpoofDetector:
             inp = self.session.get_inputs()[0]
             self.input_name = inp.name
 
-            # Auto-detectar tamaño de entrada del modelo (HxW)
             shape = inp.shape
             if len(shape) == 4:
-                # Formato NCHW: [N, C, H, W]
                 if isinstance(shape[2], int) and isinstance(shape[3], int):
-                    self.input_size = (shape[3], shape[2])  # (W, H) para cv2.resize
+                    self.input_size = (shape[3], shape[2])
 
-            # Auto-detectar cantidad de clases de salida
             out_shape = self.session.get_outputs()[0].shape
             self.output_dims = out_shape[-1] if len(out_shape) >= 2 else 1
 
@@ -812,18 +734,9 @@ class _AntiSpoofDetector:
 
     def is_available(self):
         self._load()
-        # Si la calibracion automatica desactivo el modelo, ya no esta disponible.
         return self.session is not None and not self._auto_disabled
 
     def predict_real(self, face_bgr):
-        """
-        Devuelve probabilidad [0, 1] de que el rostro sea REAL.
-        None si el modelo no esta disponible o falla la inferencia.
-
-        Calibracion automatica:
-          Si los primeros 30 frames con rostro consistentemente dan prob < 0.40,
-          el modelo se desactiva automaticamente (sesgo del modelo).
-        """
         self._load()
         if self.session is None or self._auto_disabled:
             return None
@@ -831,53 +744,32 @@ class _AntiSpoofDetector:
             return None
 
         try:
-            # Preprocesamiento: BGR -> RGB, resize, normalizar a [0,1]
             rgb       = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
             resized   = cv2.resize(rgb, self.input_size)
             tensor    = resized.astype(np.float32) / 255.0
-            tensor    = tensor.transpose(2, 0, 1)[np.newaxis, ...]  # HWC->CHW + batch
+            tensor    = tensor.transpose(2, 0, 1)[np.newaxis, ...]
 
             outputs   = self.session.run(None, {self.input_name: tensor})
             logits    = np.array(outputs[0][0]).flatten()
 
-            # Manejar salidas: 1 valor (sigmoid), 2 clases (binario), 3 clases (Silent-Face)
             if logits.size == 1:
-                # Sigmoid: salida directa es probabilidad de real
                 prob = float(1.0 / (1.0 + np.exp(-logits[0])))
             else:
-                # Softmax para multiclase
                 exp_l = np.exp(logits - np.max(logits))
                 probs = exp_l / np.sum(exp_l)
 
                 if probs.size == 3:
-                    # Silent-Face estandar: [spoof_2d, real, spoof_3d]
                     prob = float(probs[1])
                 elif probs.size == 2:
-                    # AntiSpoofing_bin_1.5_128 (hairymax):
-                    # Verificacion empirica con TU usuario muestra que la clase
-                    # de mayor probabilidad para rostros reales es la clase 1,
-                    # no la 0 como originalmente se asumio. Por eso usamos probs[1].
-                    #
-                    # En este modelo binario:
-                    #   probs[0] = probabilidad de SPOOF
-                    #   probs[1] = probabilidad de REAL  ← devolvemos esta
                     prob = float(probs[1])
-
-                    # Log detallado de los primeros frames para confirmacion visual
                     if self._debug_first_n > 0:
                         print(f"[AntiSpoof] frame inicial: "
                               f"probs[0]={probs[0]:.3f} probs[1]={probs[1]:.3f} "
                               f"-> usado={prob:.3f}")
                         self._debug_first_n -= 1
                 else:
-                    # Asumir que la clase "real" es la de mayor indice
                     prob = float(probs[-1])
 
-            # ── Calibracion automatica de sesgo del modelo ────────────────
-            # DOS criterios de fallo (cualquiera dispara desactivacion):
-            #   A. Mediana < 0.65 → modelo da poca probabilidad a rostros reales
-            #   B. Desviacion std > 0.20 → modelo inestable, frame a frame da
-            #      respuestas contradictorias (0.91 luego 0.19 luego 0.60).
             if len(self._calib_samples) < self._CALIB_N:
                 self._calib_samples.append(prob)
                 if len(self._calib_samples) == self._CALIB_N:
@@ -901,10 +793,7 @@ class _AntiSpoofDetector:
                         print("[AntiSpoof] AUTO-DESACTIVADO. Razon:", ", ".join(razon))
                         print(f"           Muestras: min={min_prob:.2f} max={max_prob:.2f} "
                               f"median={median_prob:.2f} std={std_prob:.2f}")
-                        print("           El modelo es poco fiable para esta "
-                              "camara/iluminacion/usuario.")
-                        print("           Sistema usara heuristicas (Capas 2-8) tuneadas")
-                        print("           para tolerar barba, fleco, piel oscura.")
+                        print("           Sistema usara heuristicas (Capas 1-8).")
                         print("=" * 70)
                         return None
                     else:
@@ -917,9 +806,7 @@ class _AntiSpoofDetector:
             return None
 
 
-# Instancia global, carga perezosa
 _anti_spoof_detector = None
-
 
 def _get_anti_spoof():
     global _anti_spoof_detector
@@ -930,35 +817,29 @@ def _get_anti_spoof():
 
 def detectar_oclusion(frame, bbox, tipo=None):
     """
-    Detecta si el rostro esta obstruido durante el registro/verificacion.
+    Detecta si el rostro esta obstruido — SOLO en 4 zonas:
+        boca, nariz, ojos, mejillas.
+    La FRENTE no se chequea (pelo/fleco no debe disparar).
+    La BARBA no debe disparar (textura natural distinguible).
 
-    ESTRUCTURA (corto-circuito):
+    Capas:
+      Capa 0 — Anti-spoof ML (si disponible)
+      Capa 1 — HandLandmarker (manos)
+      Capa 8 — Lower face skin/dark (red seguridad)
+      Capa 2 — IoU MP vs YuNet
+      Capa 3 — Boca sin piel (objeto solido)
+      Capa 4 — Lentes opacos
+      Capa 7 — POSICION + CONTENIDO de las 4 zonas
 
-    Siempre activas (tolerantes a barba, lentes transparentes, cabello, piel oscura):
-      Capa 0  Anti-spoofing ML         [si modelo disponible]
-      Capa 1  HandLandmarker (manos)
-      Capa 8  Skin/dark ratio cara inf. — red de seguridad robusta
-
-    Solo si NO hay anti-spoof (modo heuristico):
-      Capa 2  IoU MP vs YuNet
-      Capa 3  Skin ratio en boca
-      Capa 4  Contraste en ojos (solo lentes MUY oscuros, std<9)
-      Capa 5  Skin ratio en frente (umbral bajo para cabello/fleco)
-      Capa 6  Varianza en boca (umbral bajo para barba)
-      Capa 7  Verificacion holistica de rasgos por pose
-
-    Tolerancias ajustadas para condiciones reales:
-      - Barba: umbrales de std y ratio de piel mas bajos
-      - Lentes transparentes: threshold std ojos 12 -> 9 (solo lentes muy oscuros)
-      - Cabello/fleco en frente: threshold forehead 0.25 -> 0.12
-      - Piel morena: rango HSV ampliado para incluir tonos oscuros
-      - Iluminacion directa: rango V de 50 bajado a 30
+    Capas ELIMINADAS:
+      Capa 5 — frente/gorra (causaba falsos positivos con pelo largo)
+      Capa 6 — boca std<10 (causaba falsos positivos con barba)
     """
-    # ─── Validaciones iniciales ─────────────────────────────────────────────
     if bbox is None or frame is None:
         return False, ""
 
     h_img, w_img = frame.shape[:2]
+    es_perfil = tipo in (TIPO_PERFIL_D, TIPO_PERFIL_I)
 
     if _ultimo_face_yunet is not None:
         fr = _ultimo_face_yunet
@@ -975,25 +856,145 @@ def detectar_oclusion(frame, bbox, tipo=None):
 
     yunet_area = float(fw * fh)
 
-    # ── Helper de deteccion de piel multi-tono ───────────────────────────────
-    # Cubre piel clara, media, morena y oscura con iluminacion variable.
-    # Incluye tres rangos HSV:
-    #   m1: piel clara/media (H=0-30, V>=30)
-    #   m2: reflejos rosados/rojos (H=140-179)
-    #   m3: piel oscura/morena con baja luminosidad (V=20-90, S moderada)
+    # ── Helpers de contenido visual ─────────────────────────────────────────
     def _mask_piel(patch_bgr):
-        hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
-        m1  = cv2.inRange(hsv, np.array([0,    8, 25]),  np.array([30,  255, 255]))
-        m2  = cv2.inRange(hsv, np.array([140,  8, 25]),  np.array([179, 255, 255]))
-        m3  = cv2.inRange(hsv, np.array([5,   20, 15]),  np.array([25,  200, 90]))
-        return cv2.bitwise_or(cv2.bitwise_or(m1, m2), m3)
+        """
+        Máscara de piel más estricta que la versión anterior.
+        La anterior podía contar tela blanca/gris como piel por saturación baja.
+        Esta combina HSV + YCrCb y evita blancos/neutros brillantes.
+        """
+        if patch_bgr is None or patch_bgr.size == 0:
+            return np.zeros((1, 1), dtype=np.uint8)
+
+        hsv   = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
+        ycrcb = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2YCrCb)
+
+        h = hsv[:, :, 0]
+        s = hsv[:, :, 1]
+        v = hsv[:, :, 2]
+        y = ycrcb[:, :, 0]
+        cr = ycrcb[:, :, 1]
+        cb = ycrcb[:, :, 2]
+
+        # HSV: piel clara/morena suele tener tono rojo/naranja y saturación real.
+        hsv_skin = (((h <= 28) | (h >= 160)) &
+                    (s >= 16) & (s <= 230) &
+                    (v >= 35))
+
+        # YCrCb: ayuda con piel morena y cambios de luz.
+        ycc_skin = ((cr >= 133) & (cr <= 183) &
+                    (cb >= 72)  & (cb <= 138) &
+                    (y  >= 28))
+
+        # Evitar que papel/camisa blanca se cuente como piel.
+        blanco_neutro = (s < 18) & (v > 145)
+
+        mask = (hsv_skin | ycc_skin) & (~blanco_neutro)
+        return (mask.astype(np.uint8) * 255)
 
     def _ratio_piel_mt(patch_bgr):
-        """Ratio de piel multi-tono sobre el total de pixeles del parche."""
         if patch_bgr is None or patch_bgr.size == 0:
             return 0.0
         mask = _mask_piel(patch_bgr)
         return float(np.count_nonzero(mask)) / mask.size
+
+    def _clip_roi(rx1, ry1, rx2, ry2):
+        """ROI relativa al bbox YuNet/raw, con límites seguros."""
+        x1p = max(0, int(fx1 + fw * rx1))
+        y1p = max(0, int(fy1 + fh * ry1))
+        x2p = min(w_img, int(fx1 + fw * rx2))
+        y2p = min(h_img, int(fy1 + fh * ry2))
+        if x2p <= x1p + 8 or y2p <= y1p + 8:
+            return None
+        patch = frame[y1p:y2p, x1p:x2p]
+        return patch if patch.size > 120 else None
+
+    def _metricas_roi(patch_bgr):
+        """Métricas para diferenciar barba/sombra vs tela/papel/cubrebocas."""
+        if patch_bgr is None or patch_bgr.size == 0:
+            return {
+                "skin": 0.0, "white": 0.0, "dark": 0.0,
+                "sat_mean": 0.0, "val_mean": 0.0,
+                "gray_std": 0.0, "lap": 0.0, "edge": 0.0,
+            }
+        hsv  = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
+        sat  = hsv[:, :, 1]
+        val  = hsv[:, :, 2]
+        size = max(1, sat.size)
+
+        white_ratio = float(np.count_nonzero((sat < 55) & (val > 145))) / size
+        dark_ratio  = float(np.count_nonzero(val < 60)) / size
+        edges       = cv2.Canny(gray, 45, 120)
+        edge_ratio  = float(np.count_nonzero(edges)) / size
+        lap_var     = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        return {
+            "skin":     _ratio_piel_mt(patch_bgr),
+            "white":    white_ratio,
+            "dark":     dark_ratio,
+            "sat_mean": float(np.mean(sat)),
+            "val_mean": float(np.mean(val)),
+            "gray_std": float(np.std(gray)),
+            "lap":      lap_var,
+            "edge":     edge_ratio,
+        }
+
+    def _bloqueo_boca_por_roi():
+        """
+        Bloqueo frontal de boca/nariz baja tapada.
+        Usa ROIs fijos del bbox, no solo landmarks, porque MediaPipe puede
+        inventar puntos de boca sobre una camisa/papel.
+        """
+        if es_perfil or not _OCLUSION_STRICT_MOUTH:
+            return False, ""
+
+        # Centro inferior: boca + bigote + parte alta del mentón.
+        boca_roi = _clip_roi(0.22, 0.56, 0.78, 0.86)
+        if boca_roi is None:
+            return False, ""
+
+        mb = _metricas_roi(boca_roi)
+
+        # ROI de nariz/centro superior para comparar contra zona normalmente visible.
+        nariz_roi = _clip_roi(0.30, 0.36, 0.70, 0.58)
+        mn = _metricas_roi(nariz_roi) if nariz_roi is not None else None
+
+        # Tela/papel blanco: mucha zona brillante con baja saturación y poca piel.
+        blanco_tapando = (mb["white"] > 0.32 and
+                          mb["skin"]  < 0.20 and
+                          mb["val_mean"] > 115)
+
+        # Cubrebocas/ropa oscura uniforme. La barba se salva porque suele tener
+        # más bordes/textura; una tela oscura uniforme tiene menos edge/laplaciano.
+        oscuro_uniforme = (mb["dark"] > 0.78 and
+                           mb["skin"] < 0.12 and
+                           mb["edge"] < 0.045 and
+                           mb["lap"]  < 75.0)
+
+        # Zona inferior casi sin piel comparada con nariz visible.
+        contraste_con_nariz = False
+        if mn is not None:
+            contraste_con_nariz = (mn["skin"] > 0.12 and
+                                   mb["skin"] < max(0.06, mn["skin"] * 0.38) and
+                                   (mb["white"] > 0.22 or oscuro_uniforme))
+
+        # Objeto claro/gris de baja saturación aunque no sea blanco puro.
+        neutro_extenso = (mb["sat_mean"] < 48 and
+                          mb["skin"] < 0.14 and
+                          (mb["white"] > 0.24 or mb["gray_std"] < 38.0) and
+                          mb["val_mean"] > 95)
+
+        if blanco_tapando or oscuro_uniforme or contraste_con_nariz or neutro_extenso:
+            if _OCLUSION_DEBUG:
+                print("[OCL] Boca ROI: "
+                      f"skin={mb['skin']:.2f} white={mb['white']:.2f} "
+                      f"dark={mb['dark']:.2f} sat={mb['sat_mean']:.0f} "
+                      f"val={mb['val_mean']:.0f} edge={mb['edge']:.3f} "
+                      f"lap={mb['lap']:.1f}")
+            return True, "mascara"
+
+        return False, ""
 
     # ════════════════════════════════════════════════════════════════════════
     # CAPA 0: Anti-spoofing ML
@@ -1007,22 +1008,12 @@ def detectar_oclusion(frame, bbox, tipo=None):
         face_crop = frame[as_y1:as_y2, as_x1:as_x2]
         if face_crop.size > 200:
             real_prob = anti_spoof.predict_real(face_crop)
-            # Threshold permisivo (0.30) para tolerar variabilidad por:
-            # - vello facial denso (barba, bigote)
-            # - iluminacion directa o lateral
-            # - tonos de piel oscura (el modelo se entreno con dataset sesgado)
-            # - lentes con reflejos
-            # Solo dispara cuando el modelo esta MUY seguro que NO es real.
             if real_prob is not None and real_prob < 0.30:
                 print(f"[OCL] Capa 0: anti-spoof real_prob={real_prob:.3f} < 0.30")
                 return True, "obstruccion"
 
     # ════════════════════════════════════════════════════════════════════════
     # CAPA 1: HandLandmarker
-    # Condiciones estrictas para considerar que una mano OCLUYE el rostro:
-    #   - Padding moderado (mano debe estar SOBRE la cara, no debajo)
-    #   - Minimo 5 landmarks dentro del area (no 2) — landmarks aislados
-    #     suelen ser artefactos. Una mano real tiene los 21 landmarks juntos.
     # ════════════════════════════════════════════════════════════════════════
     hand_lmk = _get_mp_hand_landmarker()
     frame_rgb = None
@@ -1033,14 +1024,9 @@ def detectar_oclusion(frame, bbox, tipo=None):
             mp_img    = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=frame_rgb)
             result    = hand_lmk.detect(mp_img)
             if result.hand_landmarks and len(result.hand_landmarks) > 0:
-                # Padding ajustado:
-                # - pad_top: la mano puede entrar por arriba (frente)
-                # - pad_bot reducido de fh//3 a fh//8: no extender hasta el cuello/pecho
-                #   donde el microfono u objetos generaban "manos" fantasma
-                # - pad_side: similar
                 pad_top  = max(10, fh // 8)
-                pad_bot  = max(10, fh // 8)   # reducido de fh//3
-                pad_side = max(10, fw // 6)   # reducido de fw//5
+                pad_bot  = max(10, fh // 8)
+                pad_side = max(10, fw // 6)
                 hcx1 = fx1 - pad_side; hcy1 = fy1 - pad_top
                 hcx2 = fx2 + pad_side; hcy2 = fy2 + pad_bot
 
@@ -1051,10 +1037,6 @@ def detectar_oclusion(frame, bbox, tipo=None):
                         hy = lm.y * h_img
                         if hcx1 <= hx <= hcx2 and hcy1 <= hy <= hcy2:
                             dentro += 1
-                    # Subido de 2 -> 5 landmarks:
-                    # Una mano real ocluyendo la cara mete al menos 5 landmarks
-                    # (yemas + nudillos) dentro del bbox. 2 landmarks son
-                    # tipicamente ruido o un dedo lejano sin tapar la cara.
                     if dentro >= 5:
                         print(f"[OCL] Capa 1: mano confirmada ({dentro}/21 landmarks dentro)")
                         return True, "mano"
@@ -1062,52 +1044,48 @@ def detectar_oclusion(frame, bbox, tipo=None):
             pass
 
     # ════════════════════════════════════════════════════════════════════════
-    # CAPA 8: Red de seguridad robusta (siempre activa)
-    # Solo dispara en casos EXTREMOS — confianza principal va al anti-spoof.
-    # Tolerante con: barba, bigote, piel oscura, iluminacion directa, sombras.
-    #
-    # Region INTERIOR del rostro (no incluye cuello ni borde):
-    #   Vertical:   45% -> 80% del bbox YuNet (antes 45%-95%)
-    #               Excluye el cuello/menton bajo donde caian sombras.
-    #   Horizontal: 22% -> 78% del bbox YuNet (antes 15%-85%)
-    #               Mas estrecho para no incluir cabello lateral / borde.
+    # CAPA 3A: Boca/nariz baja tapada por tela, papel o cubrebocas
+    # ════════════════════════════════════════════════════════════════════════
+    bloquea_boca, razon_boca = _bloqueo_boca_por_roi()
+    if bloquea_boca:
+        return True, razon_boca
+
+    # ════════════════════════════════════════════════════════════════════════
+    # CAPA 8: Red de seguridad — solo casos EXTREMOS
+    # Mira SOLO la mitad inferior interior de la cara (no incluye frente).
     # ════════════════════════════════════════════════════════════════════════
     lf_y1 = fy1 + int(fh * 0.45)
-    lf_y2 = fy1 + int(fh * 0.80)   # reducido de 0.95 -> 0.80 (no cuello)
-    lf_x1 = fx1 + int(fw * 0.22)   # subido de 0.15 -> 0.22 (no borde)
+    lf_y2 = fy1 + int(fh * 0.80)
+    lf_x1 = fx1 + int(fw * 0.22)
     lf_x2 = fx2 - int(fw * 0.22)
 
     if lf_x2 > lf_x1 + 20 and lf_y2 > lf_y1 + 20:
         lower_face = frame[lf_y1:lf_y2, lf_x1:lf_x2]
         if lower_face.size > 300:
-            ratio_lf = _ratio_piel_mt(lower_face)
-            # Cara normal con barba/piel oscura: 30-90% piel
-            # Telefono / mascara solida / libro: <12%
-            # Threshold MUY permisivo: solo dispara con casi cero piel.
-            if ratio_lf < 0.12:
-                print(f"[OCL] Capa 8a: ratio_piel={ratio_lf:.3f} < 0.12 (objeto sin piel)")
-                return True, "obstruccion"
-            # Objeto MUY oscuro (V<55) dominando la zona inferior.
-            # Threshold 0.78 (antes 0.65) para no disparar con:
-            # - sombras laterales por luz direccional
-            # - bigote/barba densa
-            # - piel oscura en sombra
-            hsv_lf     = cv2.cvtColor(lower_face, cv2.COLOR_BGR2HSV)
-            dark_ratio = float(np.count_nonzero(hsv_lf[:,:,2] < 55)) / hsv_lf[:,:,2].size
-            if dark_ratio > 0.78:
-                print(f"[OCL] Capa 8b: dark_ratio={dark_ratio:.3f} > 0.78 (zona muy oscura)")
+            m_lf = _metricas_roi(lower_face)
+            ratio_lf = m_lf["skin"]
+            # Solo bloquea objetos casi totalmente sin piel. Barba/sombra pasan
+            # si tienen textura suficiente.
+            th_skin_lf = 0.025 if es_perfil else 0.045
+            if ratio_lf < th_skin_lf and (m_lf["white"] > 0.25 or
+                                          (m_lf["dark"] > 0.86 and m_lf["edge"] < 0.04)):
+                print(f"[OCL] Capa 8a: ratio_piel={ratio_lf:.3f} < {th_skin_lf:.2f} (objeto sin piel)")
                 return True, "obstruccion"
 
-    # Con anti-spoof + manos + Capa 8 ya verificados, parar aqui
-    if anti_spoof_active:
-        return False, ""
+            th_dark_lf = 0.97 if es_perfil else 0.94
+            if (m_lf["dark"] > th_dark_lf and
+                    m_lf["edge"] < 0.035 and m_lf["lap"] < 60.0):
+                print(f"[OCL] Capa 8b: dark_ratio={m_lf['dark']:.3f} > {th_dark_lf:.2f} (zona oscura uniforme)")
+                return True, "obstruccion"
+
+    # IMPORTANTE: no salimos aunque anti-spoof esté activo.
+    # Anti-spoof sirve para bloquear spoof/foto, pero si pasa, todavía debemos
+    # revisar boca/ojos/nariz con las heurísticas de rasgos.
 
     # ════════════════════════════════════════════════════════════════════════
-    # CAPAS 2-7: Heuristicas (solo sin anti-spoof). Con thresholds ajustados:
-    #   - Barba: thresholds de std y ratio mas bajos
-    #   - Lentes transparentes: std ojos de 12 -> 9 (solo lentes MUY oscuros)
-    #   - Cabello/fleco: threshold frente de 0.25 -> 0.12
-    #   - Piel morena: helper _ratio_piel_mt en lugar de rangos fijos
+    # CAPAS 2-4 + 7: heuristicas con MediaPipe FaceLandmarker
+    # NO incluye Capa 5 (frente) ni Capa 6 (boca std) — generaban falsos
+    # positivos con pelo en frente y barba/bigote.
     # ════════════════════════════════════════════════════════════════════════
     try:
         import mediapipe as _mp
@@ -1145,15 +1123,18 @@ def detectar_oclusion(frame, bbox, tipo=None):
     inter_x1 = max(fx1, mp_x1); inter_y1 = max(fy1, mp_y1)
     inter_x2 = min(fx2, mp_x2); inter_y2 = min(fy2, mp_y2)
     inter_area = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
-    if inter_area / yunet_area < 0.55:
+    iou_mp_yunet = inter_area / yunet_area
+    # En perfiles el bbox de MediaPipe se mueve natural hacia un lado; no es oclusion.
+    # Solo usamos este bloqueo en frontal y con margen relajado.
+    if (not es_perfil) and iou_mp_yunet < 0.42:
         return True, "obstruccion"
 
-    # ─── CAPA 3: Skin ratio en boca (obj NO-piel) ───────────────────────────
-    # Threshold 0.08 (antes 0.10): barba moderada da 20-40% con rango ampliado
+    # ─── CAPA 3: Boca sin piel (objeto totalmente NO-piel) ──────────────────
+    # Threshold MUY estricto (0.08) — solo dispara si hay CASI cero piel.
+    # Barba moderada da 20-40% — pasa sin problemas.
     mouth_idx = [13, 14, 17, 0, 61, 291, 78, 308, 82, 312, 84, 314]
     mouth_xs  = [lms[i].x * w_img for i in mouth_idx if i < n]
     mouth_ys  = [lms[i].y * h_img for i in mouth_idx if i < n]
-    pad_x = pad_y = 0
     if len(mouth_xs) >= 6:
         bx1 = int(min(mouth_xs)); bx2 = int(max(mouth_xs))
         by1 = int(min(mouth_ys)); by2 = int(max(mouth_ys))
@@ -1164,11 +1145,24 @@ def detectar_oclusion(frame, bbox, tipo=None):
         if bx2 > bx1 + 10 and by2 > by1 + 10:
             patch = frame[by1:by2, bx1:bx2]
             if patch.size > 100:
-                if _ratio_piel_mt(patch) < 0.08:
+                m_mouth = _metricas_roi(patch)
+                boca_tapada_clara = (m_mouth["white"] > 0.30 and
+                                      m_mouth["skin"] < 0.20)
+                boca_tapada_oscura = (m_mouth["dark"] > 0.82 and
+                                       m_mouth["skin"] < 0.12 and
+                                       m_mouth["edge"] < 0.05 and
+                                       m_mouth["lap"] < 80.0)
+                casi_sin_piel = (m_mouth["skin"] < 0.035 and
+                                  (m_mouth["white"] > 0.18 or boca_tapada_oscura))
+                if (not es_perfil) and (boca_tapada_clara or boca_tapada_oscura or casi_sin_piel):
+                    if _OCLUSION_DEBUG:
+                        print("[OCL] Capa 3 boca: "
+                              f"skin={m_mouth['skin']:.2f} white={m_mouth['white']:.2f} "
+                              f"dark={m_mouth['dark']:.2f} edge={m_mouth['edge']:.3f} "
+                              f"lap={m_mouth['lap']:.1f}")
                     return True, "mascara"
 
-    # ─── CAPA 4: Lentes OSCUROS (solo lentes opacos, no transparentes) ───────
-    # Threshold std: 9 (antes 12). Lentes transparentes tienen std > 9 por el iris.
+    # ─── CAPA 4: Lentes OPACOS (no transparentes) ───────────────────────────
     # Solo dispara si AMBOS ojos son muy uniformes y oscuros (std < 9).
     def _ojo_muy_uniforme(eye_idx):
         xs = [lms[i].x * w_img for i in eye_idx if i < n]
@@ -1185,105 +1179,159 @@ def detectar_oclusion(frame, bbox, tipo=None):
     if _ojo_muy_uniforme([33,133,159,145,158,153,144,163]) and        _ojo_muy_uniforme([362,263,386,374,385,380,373,390]):
         return True, "lentes"
 
-    # ─── CAPA 5: Gorra (frente debe ser piel) ───────────────────────────────
-    # Threshold ratio: 0.08 (antes 0.12). Fleco/cabello en frente NO debe disparar.
-    # Solo dispara si la frente esta MUY cubierta (gorra/visera baja casi a las cejas).
-    if all(i < n for i in (10, 9, 67, 297)):
-        fh_x1 = int(min(lms[67].x * w_img, lms[297].x * w_img))
-        fh_x2 = int(max(lms[67].x * w_img, lms[297].x * w_img))
-        fh_y1 = int(lms[10].y * h_img)
-        fh_y2 = int(lms[9].y  * h_img)
-        if fh_x2 - fh_x1 > 20 and fh_y2 - fh_y1 > 8:
-            forehead = frame[fh_y1:fh_y2, fh_x1:fh_x2]
-            if forehead.size > 100:
-                rf = _ratio_piel_mt(forehead)
-                if rf < 0.08:
-                    print(f"[OCL] Capa 5: forehead skin={rf:.3f} < 0.08 (gorra)")
-                    return True, "gorra"
-
-    # ─── CAPA 6: Varianza en boca (mascarilla uniforme) ─────────────────────
-    # Threshold std: 10 (antes 12). Barba densa con poca luz da std ~10-15.
-    if len(mouth_xs) >= 6:
-        bx1m = max(0, int(min(mouth_xs)) - pad_x)
-        bx2m = min(w_img, int(max(mouth_xs)) + pad_x)
-        by1m = max(0, int(min(mouth_ys)) - pad_y)
-        by2m = min(h_img, int(max(mouth_ys)) + pad_y)
-        if bx2m > bx1m + 10 and by2m > by1m + 10:
-            pm = frame[by1m:by2m, bx1m:bx2m]
-            if pm.size > 100:
-                std_m = float(cv2.cvtColor(pm, cv2.COLOR_BGR2GRAY).std())
-                if std_m < 10.0:
-                    print(f"[OCL] Capa 6: mouth std={std_m:.2f} < 10.0 (mascarilla)")
-                    return True, "mascara"
-
-    # ─── CAPA 7: Verificacion holistica por pose (CON VOTACION) ──────────────
-    # CAMBIO IMPORTANTE: ya no falla con un solo rasgo mal — usa VOTACION.
-    # Cada rasgo (boca, nariz, ojo izq/der, mejilla izq/der) suma un voto.
-    # FRONTAL: necesita 3+ "fallos" sobre 6 rasgos para disparar.
-    # PERFIL:  necesita 2+ "fallos" sobre 4 rasgos esenciales para disparar.
+    # ════════════════════════════════════════════════════════════════════════
+    # CAPA 7 — VERIFICACION POR POSICION + CONTENIDO (REDISEÑADA)
+    # ════════════════════════════════════════════════════════════════════════
+    # Para cada una de las 4 zonas (boca, nariz, ojos, mejillas) se evalua:
     #
-    # Esto tolera situaciones reales como:
-    #   - Bigote denso (puede bajar std de boca)
-    #   - Piel oscura con sombra en una mejilla (mejilla baja ratio)
-    #   - Un solo ojo en sombra natural
-    # Solo dispara cuando VARIOS rasgos coinciden = obstruccion real.
+    #   POSICION: ¿esta el rasgo donde DEBE estar en la cara?
+    #     Tolerancia 0.20 (20% del bbox YuNet). Generoso para rotaciones leves.
     #
-    # Thresholds bajados para tolerar barba/piel oscura/sombras:
-    #   boca std:  > 10   (antes 14)
-    #   nariz:     > 0.18 (antes 0.28) - piel oscura con sombra nasal
-    #   ojos std:  > 7    (antes 9)
-    #   mejillas:  > 0.20 (antes 0.35) - sombras laterales por luz direccional
+    #   CONTENIDO: ¿hay contenido coherente con ese rasgo?
+    #     Thresholds MUY estrictos — solo dispara con obstruccion clara:
+    #       boca:     skin ratio < 0.05  (mascara solida = sin piel)
+    #                                     [barba con 0.15-0.30 PASA]
+    #       nariz:    skin ratio < 0.10  (objeto sin piel)
+    #                                     [piel oscura natural PASA]
+    #       mejillas: skin ratio < 0.10
+    #       ojos:     std < 3.0          (lentes opacos)
+    #                                     [ojos oscuros naturales con std 5+ PASAN]
+    #
+    # Un rasgo FALLA si CUALQUIERA (posicion O contenido) falla.
+    # Se necesitan 2 rasgos fallidos para confirmar obstruccion.
+    #
+    # Casos correctos:
+    #   PELO en frente:    no afecta a los 4 rasgos -> 0 fallos -> NO dispara ✓
+    #   BARBA:             posiciones OK, contenido OK (textura) -> 0 fallos -> NO dispara ✓
+    #   OJOS oscuros:      posiciones OK, std > 5 -> 0 fallos -> NO dispara ✓
+    #   PIEL morena:       ratio sigue > 0.10 con rangos HSV ampliados -> 0 fallos ✓
+    #
+    #   CAMISA en boca:    posiciones se desvian, MP confundido -> 2-4 fallos -> dispara ✓
+    #   MASCARA real:      contenido boca sin piel -> 1-2 fallos -> dispara ✓
+    #   LENTES opacos:     contenido ojos std < 3 -> 2 fallos -> dispara ✓
+    #   MANO en cara:      Capa 1 dispara antes
+    # ════════════════════════════════════════════════════════════════════════
+
+    EXPECTED_POSITIONS = {
+        "boca":     (0.50, 0.78),
+        "nariz":    (0.50, 0.55),
+        "ojo_izq":  (0.32, 0.40),
+        "ojo_der":  (0.68, 0.40),
+        "meji_izq": (0.27, 0.62),
+        "meji_der": (0.73, 0.62),
+    }
+
+    FEATURE_INDICES = {
+        "boca":     [13, 14, 17, 0, 61, 291, 78, 308],
+        "nariz":    [1, 2, 4, 5, 19, 94, 125, 354],
+        "ojo_izq":  [33, 133, 159, 145, 158, 153, 144, 163],
+        "ojo_der":  [362, 263, 386, 374, 385, 380, 373, 390],
+        "meji_izq": [205, 50, 142, 36, 100, 187],
+        "meji_der": [425, 280, 371, 266, 329, 411],
+    }
+
+    # Si la cara esta de perfil, NO se valida posicion frontal.
+    # Ese era el origen del falso "objeto en rostro": boca/nariz se desplazan
+    # a x=0.75-0.90 de forma normal y la capa 7 los marcaba como fallidos.
+    if es_perfil and _OCLUSION_SKIP_POS_EN_PERFIL:
+        return False, ""
+
+    # Tolerancia de posicion. Antes 0.20; era demasiado estricto.
+    TOL_POS = 0.32
+
+    # Threshold de contenido por rasgo: (tipo, valor minimo).
+    # Bajos a proposito para aceptar barba, bigote, fleco, lentes comunes y piel morena.
+    CONTENT_THRESH = {
+        "boca":     ("skin", 0.045),
+        "nariz":    ("skin", 0.05),
+        "meji_izq": ("skin", 0.04),
+        "meji_der": ("skin", 0.04),
+        "ojo_izq":  ("std",  2.0),
+        "ojo_der":  ("std",  2.0),
+    }
+
+    def _feature_center(indices):
+        xs = [lms[i].x * w_img for i in indices if i < n]
+        ys = [lms[i].y * h_img for i in indices if i < n]
+        if len(xs) < 3:
+            return None
+        return (sum(xs)/len(xs), sum(ys)/len(ys))
+
     def _patch(indices, pad=4):
         xs = [lms[i].x * w_img for i in indices if i < n]
         ys = [lms[i].y * h_img for i in indices if i < n]
-        if len(xs) < 3: return None
-        x1 = max(0, int(min(xs)) - pad); x2 = min(w_img, int(max(xs)) + pad)
-        y1 = max(0, int(min(ys)) - pad); y2 = min(h_img, int(max(ys)) + pad)
-        if x2 - x1 < 6 or y2 - y1 < 6: return None
-        p = frame[y1:y2, x1:x2]
+        if len(xs) < 3:
+            return None
+        x1p = max(0, int(min(xs)) - pad); x2p = min(w_img, int(max(xs)) + pad)
+        y1p = max(0, int(min(ys)) - pad); y2p = min(h_img, int(max(ys)) + pad)
+        if x2p - x1p < 6 or y2p - y1p < 6:
+            return None
+        p = frame[y1p:y2p, x1p:x2p]
         return p if p.size > 60 else None
 
-    def _std_v(patch):
-        if patch is None: return 0.0
-        return float(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).std())
+    fallos = []          # fallos reales de CONTENIDO
+    pos_fallos = []      # solo diagnostico; no bloquean por si solos
+    detalles = []
 
-    boca_std    = _std_v(_patch([13,14,17,0,61,291,78,308], 6))
-    nariz_r     = _ratio_piel_mt(_patch([1,2,4,5,19,94,125,354], 3))
-    ojo_izq_std = _std_v(_patch([33,133,159,145,158,153,144,163], 4))
-    ojo_der_std = _std_v(_patch([362,263,386,374,385,380,373,390], 4))
-    meji_izq_r  = _ratio_piel_mt(_patch([205,50,142,36,100,187], 4))
-    meji_der_r  = _ratio_piel_mt(_patch([425,280,371,266,329,411], 4))
+    for nombre, (exp_x, exp_y) in EXPECTED_POSITIONS.items():
+        indices = FEATURE_INDICES[nombre]
 
-    # Cada rasgo da TRUE si esta visible (no obstruido)
-    boca_ok     = boca_std    > 10.0
-    nariz_ok    = nariz_r     > 0.18
-    ojo_izq_ok  = ojo_izq_std > 7.0
-    ojo_der_ok  = ojo_der_std > 7.0
-    meji_izq_ok = meji_izq_r  > 0.20
-    meji_der_ok = meji_der_r  > 0.20
+        # Check 1: POSICION
+        center = _feature_center(indices)
+        pos_fail = False
+        pos_detail = ""
+        if center is not None:
+            cx, cy = center
+            rel_x = (cx - fx1) / fw if fw > 0 else 0.5
+            rel_y = (cy - fy1) / fh if fh > 0 else 0.5
+            if abs(rel_x - exp_x) > TOL_POS or abs(rel_y - exp_y) > TOL_POS:
+                pos_fail = True
+                pos_detail = f"pos=({rel_x:.2f},{rel_y:.2f})"
 
-    # Contar fallos
-    fallos = sum(not v for v in (boca_ok, nariz_ok, ojo_izq_ok, ojo_der_ok,
-                                  meji_izq_ok, meji_der_ok))
+        # Check 2: CONTENIDO
+        patch = _patch(indices, pad=4)
+        cont_fail = False
+        cont_detail = ""
+        if patch is not None:
+            check_type, threshold = CONTENT_THRESH[nombre]
+            if check_type == "std":
+                val = float(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).std())
+                if val < threshold:
+                    cont_fail = True
+                    cont_detail = f"std={val:.1f}"
+            else:  # skin
+                val = _ratio_piel_mt(patch)
+                if val < threshold:
+                    cont_fail = True
+                    cont_detail = f"r={val:.2f}"
 
-    if tipo == TIPO_FRONTAL:
-        # FRONTAL: necesita 3 o mas rasgos fallidos para disparar
-        umbral_fallos = 3
-    else:
-        # PERFIL: solo 4 rasgos visibles, necesita 2 o mas fallos
-        umbral_fallos = 2
+        # La posicion sola ya NO bloquea: en perfil, fleco, barba y mala luz
+        # MediaPipe puede desplazar puntos aunque el rostro este descubierto.
+        if cont_fail:
+            razones = []
+            if cont_fail: razones.append(cont_detail)
+            if pos_fail:  razones.append(pos_detail)
+            fallos.append(nombre)
+            detalles.append(f"{nombre}({','.join(razones)})")
+        elif pos_fail:
+            pos_fallos.append(nombre)
 
-    if fallos >= umbral_fallos:
-        print(f"[OCL] Capa 7: {fallos} rasgos fallidos (>={umbral_fallos}) | "
-              f"boca_std={boca_std:.1f} nariz_r={nariz_r:.2f} "
-              f"ojoI_std={ojo_izq_std:.1f} ojoD_std={ojo_der_std:.1f} "
-              f"mejI_r={meji_izq_r:.2f} mejD_r={meji_der_r:.2f}")
-        # Razon = la mas comun
-        if not boca_ok:
+    # ── Confirmacion conservadora de obstruccion ────────────────────────────
+    # 2 fallos de contenido => bloqueo.
+    # 1 fallo de contenido + 3 posiciones raras => bloqueo suave.
+    # Solo posiciones raras => NO bloquea, solo diagnostico.
+    if len(fallos) >= 2 or (len(fallos) >= 1 and len(pos_fallos) >= 3):
+        if _OCLUSION_DEBUG:
+            extra = f" | pos_solo={pos_fallos}" if pos_fallos else ""
+            print(f"[OCL] Capa 7: contenido={len(fallos)} | {' | '.join(detalles)}{extra}")
+        if "boca" in fallos:
             return True, "mascara"
-        if not (ojo_izq_ok or ojo_der_ok):
+        if "ojo_izq" in fallos and "ojo_der" in fallos:
             return True, "lentes"
         return True, "obstruccion"
+
+    if _OCLUSION_DEBUG and len(pos_fallos) >= 2:
+        print(f"[OCL] Capa 7 ignorada: solo posicion rara {pos_fallos} (barba/fleco/perfil/luz)")
 
     return False, ""
 
@@ -1303,17 +1351,15 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     x, y, w, h = coords
 
     colores_tipo = {
-        TIPO_FRONTAL:  (0, 212, 255),   # cian
-        TIPO_PERFIL_D: (255, 165,   0), # naranja
-        TIPO_PERFIL_I: (0,  165, 255),  # azul
+        TIPO_FRONTAL:  (0, 212, 255),
+        TIPO_PERFIL_D: (255, 165,   0),
+        TIPO_PERFIL_I: (0,  165, 255),
     }
     c = colores_tipo.get(tipo, color)
 
-    # ── Longitud de esquinas y grosor ────────────────────────────────────────
-    L      = max(28, w // 4)   # antes: max(18, w//4) — esquinas más largas
-    grosor = 3                  # antes: 2 — línea más gruesa
+    L      = max(28, w // 4)
+    grosor = 3
 
-    # ── Sombra de las esquinas (desplazada 2 px, color negro) ────────────────
     segmentos = [
         ((x,     y),     (x + L,     y)),       ((x,     y),     (x,     y + L)),
         ((x + w, y),     (x + w - L, y)),       ((x + w, y),     (x + w, y + L)),
@@ -1326,11 +1372,9 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
                  (p2[0] + 2, p2[1] + 2),
                  (0, 0, 0), grosor + 2, cv2.LINE_AA)
 
-    # ── Esquinas del marco ───────────────────────────────────────────────────
     for p1, p2 in segmentos:
         cv2.line(frame, p1, p2, c, grosor, cv2.LINE_AA)
 
-    # ── Etiqueta de tipo de pose (parte inferior del marco) ──────────────────
     etiquetas = {
         TIPO_FRONTAL:  "FRONTAL",
         TIPO_PERFIL_D: "PERFIL DER.",
@@ -1338,14 +1382,13 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
     }
     if tipo in etiquetas:
         etq_txt   = etiquetas[tipo]
-        font      = cv2.FONT_HERSHEY_DUPLEX   # antes SIMPLEX — más legible
-        fscale    = 0.6                        # antes: 0.45
-        fthick    = 2                          # antes: 1
+        font      = cv2.FONT_HERSHEY_DUPLEX
+        fscale    = 0.6
+        fthick    = 2
         (tw, th), bl = cv2.getTextSize(etq_txt, font, fscale, fthick)
         tx = x + w // 2 - tw // 2
         ty = y + h + th + 10
 
-        # Fondo píldora semitransparente
         pad = 5
         overlay = frame.copy()
         cv2.rectangle(overlay,
@@ -1358,16 +1401,14 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
                       (tx + tw + pad, ty + bl + pad - 2),
                       c, 1, cv2.LINE_AA)
 
-        # Sombra + texto
         cv2.putText(frame, etq_txt, (tx + 2, ty + 2),
                     font, fscale, (0, 0, 0), fthick + 2, cv2.LINE_AA)
         cv2.putText(frame, etq_txt, (tx, ty),
                     font, fscale, c, fthick, cv2.LINE_AA)
 
-    # ── Texto principal (sobre el marco, parte superior) ─────────────────────
     if texto:
-        font2   = cv2.FONT_HERSHEY_DUPLEX   # antes SIMPLEX
-        fscale2 = 0.75                       # antes: 0.6
+        font2   = cv2.FONT_HERSHEY_DUPLEX
+        fscale2 = 0.75
         fthick2 = 2
         lines   = texto.split("\n")
         line_h  = 28
@@ -1383,7 +1424,6 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
         by1 = max(0, y - total_h - 12)
         by2 = max(total_h + 4, y - 4)
 
-        # Fondo semitransparente negro con borde coloreado
         bg = frame.copy()
         cv2.rectangle(bg, (bx1, by1), (bx2, by2), (0, 0, 0), -1)
         cv2.addWeighted(bg, 0.65, frame, 0.35, 0, frame)
@@ -1393,10 +1433,8 @@ def dibujar_overlay(frame, coords, color, texto="", tipo=None):
             (tw2, th2), _ = cv2.getTextSize(line, font2, fscale2, fthick2)
             tx2 = cx - tw2 // 2
             ty2 = by1 + (idx + 1) * line_h - 4
-            # Sombra
             cv2.putText(frame, line, (tx2 + 2, ty2 + 2),
                         font2, fscale2, (0, 0, 0), fthick2 + 2, cv2.LINE_AA)
-            # Texto
             cv2.putText(frame, line, (tx2, ty2),
                         font2, fscale2, color, fthick2, cv2.LINE_AA)
 
