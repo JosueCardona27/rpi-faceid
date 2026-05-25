@@ -33,8 +33,8 @@ PIN_BUZZER    = 25
 PIN_BOTON     = 17
 
 # ── Ángulos del servo ─────────────────────────────────────────────────────────
-SERVO_ABIERTO  = 90
-SERVO_CERRADO  =  0
+SERVO_ABIERTO  =  0
+SERVO_CERRADO  = 90
 
 # Conversión de ángulo → ancho de pulso en microsegundos
 # 0°   → 500 µs
