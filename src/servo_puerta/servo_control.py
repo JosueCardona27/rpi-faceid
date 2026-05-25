@@ -33,8 +33,8 @@ PIN_BUZZER    = 25
 PIN_BOTON     = 17
 
 # ── Ángulos del servo ─────────────────────────────────────────────────────────
-SERVO_ABIERTO  = 90
-SERVO_CERRADO  =  0
+SERVO_ABIERTO  =  0
+SERVO_CERRADO  = 90
 
 # Conversión de ángulo → ancho de pulso en microsegundos
 # 0°   → 500 µs
@@ -114,6 +114,21 @@ class _ControladorHW:
                 time.sleep(T_BEEP)
         threading.Thread(target=_run, daemon=True).start()
 
+    def _doble_beep_registro(self):
+        """Dos beeps cortos (0.1 s ON / 0.08 s OFF / 0.1 s ON).
+        Indica fin de un paso de registro — sin LEDs, distinto al de acceso
+        (0.2 s único) y al de denegado (3 × 0.3 s)."""
+        def _run():
+            for i in range(2):
+                if not self._running:
+                    break
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 1)
+                time.sleep(0.10)
+                lgpio.gpio_write(self._handle, PIN_BUZZER, 0)
+                if i == 0:
+                    time.sleep(0.08)   # pausa solo entre los dos beeps
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── Parpadeo LED rojo ─────────────────────────────────────────────────────
     def _parpadeo_rojo(self):
         def _run():
@@ -143,7 +158,18 @@ class _ControladorHW:
     # ── Botón manual ──────────────────────────────────────────────────────────
     def _iniciar_monitor_boton(self):
         def _monitor():
-            estado_anterior = 1
+            # Esperar a que el pull-up interno se estabilice antes de leer.
+            # Sin este retardo, el pin flota al arrancar y se detecta como
+            # pulsación falsa, disparando abrir() al inicio del programa.
+            time.sleep(1.5)
+
+            # Leer el estado REAL del pin después de estabilizarse
+            # para que estado_anterior refleje la realidad, no un flote.
+            try:
+                estado_anterior = lgpio.gpio_read(self._handle, PIN_BOTON)
+            except Exception:
+                estado_anterior = 1
+
             while self._running:
                 try:
                     lectura = lgpio.gpio_read(self._handle, PIN_BOTON)
@@ -161,6 +187,11 @@ class _ControladorHW:
     # ══════════════════════════════════════════════════════════════════════════
     #  API PÚBLICA
     # ══════════════════════════════════════════════════════════════════════════
+
+    def beep_registro(self):
+        """Señal sonora de fin de paso de registro (sin LEDs)."""
+        print("[HW] beep_registro()")
+        self._doble_beep_registro()
 
     def abrir(self, nombre: str = ""):
         print(f"[HW] ACCESO PERMITIDO — {nombre}")
@@ -207,6 +238,8 @@ class _ControladorHW:
 
 # ══════════════════════════════════════════════════════════════════════════════
 class _ServoStub:
+    def beep_registro(self):
+        print("[STUB] beep_registro()")
     def abrir(self, nombre: str = ""):
         print(f"[STUB] abrir() — {nombre}")
     def denegar(self):
