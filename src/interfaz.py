@@ -368,8 +368,7 @@ class App(tk.Tk):
 
         self._analisis = {"vector": None, "coords": None,
                           "frame_id": -1, "tipo": None,
-                          "ocluido": False, "razon_oclusion": "",
-                          "multi_face": False}
+                          "ocluido": False, "razon_oclusion": ""}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
         self._tipo_esperado  = None
@@ -565,7 +564,6 @@ class App(tk.Tk):
                 tipo           = self._analisis["tipo"]
                 ocluido        = self._analisis.get("ocluido", False)
                 razon_oclusion = self._analisis.get("razon_oclusion", "")
-                multi_face     = self._analisis.get("multi_face", False)
 
             with self._ov_lock:
                 ov_color = self._ov_color
@@ -582,14 +580,9 @@ class App(tk.Tk):
             vis = frame.copy()
 
             # Caso especial: varios rostros similares en camara.
-            # Se usa el estado PEGAJOSO de _analisis (no el flag crudo del
-            # engine) para que el banner se mantenga 1 segundo despues de
-            # que la segunda persona se haya ido — eso evita el parpadeo
-            # entre banner / "Descubre tu rostro" / bbox cuando los rostros
-            # se solapan momentaneamente. _loop_analisis ya pone coords=None
-            # mientras multi_face esta activo, asi que no hace falta el
-            # "and coords is None" de antes.
-            if multi_face:
+            # No se dibuja ningun bbox para evitar oscilaciones.
+            # Solo se muestra un banner grande en el centro.
+            if _fe._multiple_faces and coords is None:
                 vis = _draw_multiface_banner(vis)
             elif coords:
                 # La oclusión tiene prioridad tanto en registro como en acceso.
@@ -638,18 +631,6 @@ class App(tk.Tk):
         _oc_contador    = 0   # frames consecutivos con oclusion detectada
         _oc_razon_buf   = ""  # razon del ultimo frame con oclusion
 
-        # ── Estado pegajoso de multi-rostro ─────────────────────────────────
-        # Cuando face_engine reporta 2+ rostros cercanos, encendemos el
-        # banner y lo MANTENEMOS hasta que pase 1 segundo limpio (sin
-        # multi-rostro). Eso impide el rebote que pasaba cuando una de las
-        # dos caras quedaba parcialmente ocluida un frame y la siguiente
-        # rama de codigo disparaba avisos absurdos como "Descubre tu rostro"
-        # sobre la otra cara. Mientras este estado este activo se suprime
-        # cualquier otro aviso (oclusion, "buscando", bbox).
-        _MULTI_DELAY_S = 1.0      # delay para apagar despues de que se va
-        _multi_active  = False    # banner visible actualmente?
-        _multi_clear_t = None     # timestamp para apagar (None = no programado)
-
         while self.cam_running:
             try:
                 with self._frame_lock:
@@ -665,49 +646,6 @@ class App(tk.Tk):
                     frame, HAAR_PATH,
                     modo=self._modo_deteccion,
                     tipo_esperado=self._tipo_esperado)
-
-                # ── Maquina de estados de multi-rostro ──────────────────────
-                # face_engine pone _multiple_faces=True cuando ve 2 rostros
-                # similares en tamaño y cercanos. Cuando esta True devuelve
-                # (None, None, None), pero el bool sigue marcado un instante.
-                ahora = time.time()
-                raw_multi = bool(getattr(_fe, "_multiple_faces", False))
-
-                if raw_multi:
-                    # Multi-rostro detectado AHORA mismo. Encender y cancelar
-                    # cualquier apagado programado.
-                    _multi_active  = True
-                    _multi_clear_t = None
-                elif _multi_active:
-                    # Antes habia multi-rostro, ahora ya no. Programar el
-                    # apagado a +1 segundo si no esta ya programado.
-                    if _multi_clear_t is None:
-                        _multi_clear_t = ahora + _MULTI_DELAY_S
-                    elif ahora >= _multi_clear_t:
-                        _multi_active  = False
-                        _multi_clear_t = None
-
-                # Mientras el banner este activo, SUPRIMIR todo lo demas
-                # para que no se cuelen warnings raros entre frames.
-                if _multi_active:
-                    vector         = None
-                    coords         = None
-                    ocluido        = False
-                    razon_oclusion = ""
-                    # Reset del suavizador de oclusion para que no quede
-                    # acumulado cuando salgamos del multi-rostro.
-                    _oc_contador   = 0
-                    _oc_razon_buf  = ""
-
-                    with self._analisis_lock:
-                        self._analisis["vector"]         = vector
-                        self._analisis["coords"]         = coords
-                        self._analisis["frame_id"]       = frame_id
-                        self._analisis["tipo"]           = tipo
-                        self._analisis["ocluido"]        = ocluido
-                        self._analisis["razon_oclusion"] = razon_oclusion
-                        self._analisis["multi_face"]     = True
-                    continue
 
                 ocluido_raw, razon_raw = False, ""
                 if coords is not None:
@@ -741,7 +679,6 @@ class App(tk.Tk):
                     self._analisis["tipo"]           = tipo
                     self._analisis["ocluido"]        = ocluido
                     self._analisis["razon_oclusion"] = razon_oclusion
-                    self._analisis["multi_face"]     = False
 
             except Exception:
                 import traceback
@@ -2435,14 +2372,16 @@ class App(tk.Tk):
         BEIGE = "#F5E6C8"
         GREEN = "#1A7A4A"
         GREEN_HOV = "#23A062"
+        KB_BG = "#EAF0F7"
 
         overlay = tk.Frame(self, bg="#0A0E1A")
         overlay.place(x=0, y=0, width=W, height=self.winfo_height())
         overlay.lift()
 
-        CARD_W = 340
+        # Más ancho para que el teclado táctil quepa cómodo en pantalla vertical.
+        CARD_W = min(W - 28, 520)
         CARD_X = (W - CARD_W) // 2
-        CARD_Y = max(40, (self.winfo_height() - 360) // 2)
+        CARD_Y = max(12, (self.winfo_height() - 650) // 2)
 
         card = tk.Frame(overlay, bg="#FFFFFF",
                         highlightthickness=2,
@@ -2451,21 +2390,21 @@ class App(tk.Tk):
 
         tk.Frame(card, bg=BEIGE, height=6).pack(fill="x")
 
-        ico_cv = tk.Canvas(card, width=52, height=52,
+        ico_cv = tk.Canvas(card, width=46, height=46,
                            bg="#FFFFFF", highlightthickness=0)
-        ico_cv.pack(pady=(20, 0))
-        ico_cv.create_rectangle(10, 24, 42, 46, fill=NAVY_LN, outline="", width=0)
-        ico_cv.create_arc(14, 6, 38, 34, start=0, extent=180,
+        ico_cv.pack(pady=(14, 0))
+        ico_cv.create_rectangle(9, 22, 37, 41, fill=NAVY_LN, outline="", width=0)
+        ico_cv.create_arc(13, 6, 33, 30, start=0, extent=180,
                           outline=NAVY_LN, style="arc", width=4)
-        ico_cv.create_oval(23, 30, 29, 36, fill="#FFFFFF", outline="")
-        ico_cv.create_rectangle(25, 33, 27, 40, fill="#FFFFFF", outline="")
+        ico_cv.create_oval(20, 28, 26, 34, fill="#FFFFFF", outline="")
+        ico_cv.create_rectangle(22, 31, 24, 38, fill="#FFFFFF", outline="")
 
         tk.Label(card, text="Acceso Restringido",
-                 font=(FONT, 14, "bold"), fg=NAVY_LN,
-                 bg="#FFFFFF").pack(pady=(10, 2))
+                 font=(FONT, 13, "bold"), fg=NAVY_LN,
+                 bg="#FFFFFF").pack(pady=(8, 2))
         tk.Label(card, text="Solo administradores y maestros",
-                 font=(FONT, 9), fg="#777777",
-                 bg="#FFFFFF").pack(pady=(0, 16))
+                 font=(FONT, 8), fg="#777777",
+                 bg="#FFFFFF").pack(pady=(0, 10))
 
         tk.Frame(card, bg=BEIGE, height=1).pack(fill="x")
 
@@ -2473,11 +2412,16 @@ class App(tk.Tk):
         fields = tk.Frame(card, bg=fields_bg)
         fields.pack(fill="x")
 
+        auth_cuenta_var = tk.StringVar()
+        auth_pwd_var    = tk.StringVar()
+        self._auth_vk_target = None
+        self._auth_vk_shift  = False
+
         def _mk_field(parent, label_text, var, show=None):
             tk.Label(parent, text=label_text,
                      font=(FONT, 8), fg="#555555",
                      bg=fields_bg, anchor="w").pack(
-                         fill="x", padx=24, pady=(14, 2))
+                         fill="x", padx=24, pady=(10, 2))
             ent = tk.Entry(parent, textvariable=var,
                            font=(FONT, 11), fg=NAVY_LN, bg="#FFFFFF",
                            insertbackground=GREEN, relief="flat",
@@ -2487,20 +2431,145 @@ class App(tk.Tk):
             if show:
                 ent.config(show=show)
             ent.pack(fill="x", padx=24, ipady=6)
+
+            def _set_target(_ev=None, ee=ent):
+                self._auth_vk_target = ee
+                try:
+                    ee.focus_set()
+                except Exception:
+                    pass
+            ent.bind("<FocusIn>", _set_target)
+            ent.bind("<Button-1>", _set_target)
             return ent
 
-        auth_cuenta_var = tk.StringVar()
-        auth_pwd_var    = tk.StringVar()
         ent_cuenta = _mk_field(fields, "Número de cuenta", auth_cuenta_var)
         ent_pwd    = _mk_field(fields, "Contraseña",       auth_pwd_var, show="●")
-        ent_cuenta.focus_set()
 
         error_var = tk.StringVar(value="")
         tk.Label(fields, textvariable=error_var,
                  font=(FONT, 8), fg="#CC2222",
                  bg=fields_bg).pack(pady=(6, 0))
 
-        tk.Frame(card, bg=fields_bg, height=14).pack(fill="x")
+        # ── Teclado táctil para matrícula/cuenta y contraseña ────────────────
+        # Se dibuja dentro del propio diálogo para evitar depender del teclado
+        # del sistema operativo de Raspberry Pi OS.
+        kb = tk.Frame(fields, bg=KB_BG, height=226)
+        kb.pack(fill="x", padx=14, pady=(8, 8))
+        kb.pack_propagate(False)
+
+        kb_head = tk.Frame(kb, bg=KB_BG, height=24)
+        kb_head.pack(fill="x")
+        tk.Label(kb_head, text="⌨  Teclado táctil",
+                 font=(FONT, 8, "bold"), fg=NAVY_LN,
+                 bg=KB_BG, anchor="w").pack(side="left", padx=8)
+        tk.Label(kb_head, text="Toca un campo y escribe aquí",
+                 font=(FONT, 7), fg=SUBTEXT,
+                 bg=KB_BG, anchor="e").pack(side="right", padx=8)
+
+        kb_rows = tk.Frame(kb, bg=KB_BG)
+        kb_rows.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        def _auth_target():
+            ent = getattr(self, "_auth_vk_target", None)
+            try:
+                if ent is not None and ent.winfo_exists():
+                    ent.focus_set()
+                    return ent
+            except Exception:
+                pass
+            return None
+
+        def _auth_insert(txt):
+            ent = _auth_target()
+            if ent is None:
+                return
+            try:
+                ent.insert(ent.index(tk.INSERT), txt)
+            except Exception:
+                pass
+
+        def _auth_backspace():
+            ent = _auth_target()
+            if ent is None:
+                return
+            try:
+                pos = ent.index(tk.INSERT)
+                if pos > 0:
+                    ent.delete(pos - 1, pos)
+            except Exception:
+                pass
+
+        def _auth_clear():
+            ent = _auth_target()
+            if ent is None:
+                return
+            try:
+                ent.delete(0, tk.END)
+            except Exception:
+                pass
+
+        def _auth_press(key):
+            if key == "⌫":
+                _auth_backspace()
+            elif key == "Limpiar":
+                _auth_clear()
+            elif key == "Espacio":
+                _auth_insert(" ")
+            elif key == "⇧":
+                self._auth_vk_shift = not getattr(self, "_auth_vk_shift", False)
+                _draw_auth_keys()
+            else:
+                if len(key) == 1 and key.isalpha():
+                    _auth_insert(key.upper() if getattr(self, "_auth_vk_shift", False) else key.lower())
+                else:
+                    _auth_insert(key)
+
+        def _mk_key(row, text, bg="#FFFFFF", fg=TEXT):
+            b = tk.Button(row, text=text,
+                          font=(FONT, 8, "bold"), fg=fg, bg=bg,
+                          activebackground="#DCEFE7",
+                          activeforeground=TEXT,
+                          relief="flat", bd=0,
+                          highlightthickness=1,
+                          highlightbackground="#CFD8E6",
+                          cursor="hand2",
+                          command=lambda k=text: _auth_press(k))
+            b.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+            return b
+
+        def _draw_auth_keys():
+            for child in kb_rows.winfo_children():
+                child.destroy()
+            layouts = [
+                list("1234567890"),
+                list("qwertyuiop"),
+                list("asdfghjklñ"),
+                ["⇧"] + list("zxcvbnm") + ["⌫"],
+                ["@", "_", "-", ".", "/", "Espacio", ".com", "Limpiar"],
+            ]
+            for layout in layouts:
+                row = tk.Frame(kb_rows, bg=KB_BG)
+                row.pack(fill="x", expand=True)
+                for key in layout:
+                    show = key
+                    if len(key) == 1 and key.isalpha():
+                        show = key.upper() if getattr(self, "_auth_vk_shift", False) else key.lower()
+                    if key == "⇧":
+                        active = getattr(self, "_auth_vk_shift", False)
+                        _mk_key(row, show,
+                                bg=GREEN if active else "#FFFFFF",
+                                fg="#FFFFFF" if active else TEXT)
+                    elif key in ("⌫", "Limpiar"):
+                        _mk_key(row, show, bg="#FFECEC", fg=DANGER)
+                    elif key in ("Espacio", ".com"):
+                        _mk_key(row, show, bg="#EAF7F0", fg=GREEN)
+                    else:
+                        _mk_key(row, show)
+
+        _draw_auth_keys()
+        self._auth_vk_target = ent_cuenta
+        ent_cuenta.focus_set()
+
         tk.Frame(card, bg=BEIGE, height=1).pack(fill="x")
 
         btn_row = tk.Frame(card, bg="#FFFFFF")
