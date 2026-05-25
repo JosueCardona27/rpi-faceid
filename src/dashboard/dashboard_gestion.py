@@ -21,6 +21,300 @@ from dash_theme import (
 )
 from lang_dict import t, toggle_lang, fecha_local
 
+# ═══════════════════════════════════════════════════════════════════
+#  TECLADO VIRTUAL / AVISOS TÁCTILES 7"
+# ═══════════════════════════════════════════════════════════════════
+
+def _center_on_parent(win, parent, width: int, height: int):
+    """Centra una ventana Tk sobre el parent sin depender del gestor de ventanas."""
+    try:
+        parent.update_idletasks()
+        px = parent.winfo_rootx() + parent.winfo_width()  // 2 - width  // 2
+        py = parent.winfo_rooty() + parent.winfo_height() // 2 - height // 2
+        sw = parent.winfo_screenwidth()
+        sh = parent.winfo_screenheight()
+        px = max(0, min(px, max(0, sw - width)))
+        py = max(0, min(py, max(0, sh - height)))
+    except Exception:
+        px, py = 20, 20
+    win.geometry(f"{width}x{height}+{px}+{py}")
+
+
+def _touch_mode_from_dashboard(dashboard) -> bool:
+    return bool(
+        getattr(dashboard, "rpi_mode", False)
+        or getattr(dashboard, "portrait_mode", False)
+        or getattr(dashboard, "compact_mode", False)
+    )
+
+
+class TouchKeyboardDialog(tk.Toplevel):
+    """
+    Teclado virtual dibujado 100% en Tkinter.
+    No usa diálogos nativos del sistema operativo, para evitar bloqueos en Raspberry.
+    """
+
+    def __init__(self, parent, title: str, initial: str = "", on_accept=None,
+                 show: str = "", accept_text: str = "Aceptar"):
+        super().__init__(parent)
+        self.parent = parent
+        self.on_accept = on_accept
+        self.show_char = show or ""
+        try:
+            self._previous_grab = parent.grab_current()
+        except Exception:
+            self._previous_grab = None
+        self._shift = False
+        self._value = tk.StringVar(value=initial or "")
+
+        self.configure(bg="#0F172A")
+        self.resizable(False, False)
+        self.transient(parent)
+        try:
+            self.overrideredirect(True)
+        except Exception:
+            pass
+
+        sw = max(480, parent.winfo_screenwidth())
+        sh = max(480, parent.winfo_screenheight())
+
+        # Responsive para Raspberry Pi OS / Raspbian:
+        # - 600x1024 vertical: ocupa casi todo el ancho y no tapa botones inferiores.
+        # - 1024x600 horizontal: se hace más ancho y menos alto para no salirse.
+        # - Escritorio: mantiene un tamaño cómodo sin depender del teclado del SO.
+        self._small_touch = (sw <= 640 or sh <= 650)
+        if sw <= 640 and sh > sw:
+            width  = min(sw - 16, 584)
+            height = min(450, sh - 72)
+        elif sh <= 650:
+            width  = min(760, sw - 20)
+            height = min(380, sh - 44)
+        else:
+            width  = min(640, sw - 24)
+            height = min(450, sh - 80)
+        _center_on_parent(self, parent, width, height)
+
+        outer = tk.Frame(self, bg="#0F172A", padx=2, pady=2)
+        outer.pack(fill="both", expand=True)
+        box = tk.Frame(outer, bg="#F8FAFC")
+        box.pack(fill="both", expand=True)
+
+        header = tk.Frame(box, bg=BLUE, height=46)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+        tk.Label(header, text=f"⌨  {title}", bg=BLUE, fg="#FFFFFF",
+                 font=("Segoe UI", 11 if self._small_touch else 12, "bold"), anchor="w").pack(
+                     side="left", fill="both", expand=True, padx=14)
+        tk.Button(header, text="✕", command=self._cancel,
+                  bg=BLUE, fg="#FFFFFF", activebackground=RED,
+                  activeforeground="#FFFFFF", relief="flat", bd=0,
+                  font=("Segoe UI", 12, "bold"), cursor="hand2").pack(
+                      side="right", padx=6, ipadx=8, ipady=6)
+
+        input_frame = tk.Frame(box, bg="#F8FAFC")
+        input_frame.pack(fill="x", padx=12, pady=(10, 6))
+        self.entry = tk.Entry(input_frame, textvariable=self._value,
+                              show=self.show_char,
+                              bg="#FFFFFF", fg=T1, insertbackground=ACCENT,
+                              relief="flat", font=("Segoe UI", 14 if self._small_touch else 16))
+        self.entry.pack(fill="x", ipady=8)
+        self.entry.focus_set()
+        try:
+            self.entry.icursor(tk.END)
+        except Exception:
+            pass
+
+        self.keys_holder = tk.Frame(box, bg="#F8FAFC")
+        self.keys_holder.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self._draw_keys()
+
+        footer = tk.Frame(box, bg="#F8FAFC")
+        footer.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(footer, text="Cancelar", command=self._cancel,
+                  bg=CARD2, fg=T2, activebackground="#D7D1C4",
+                  relief="flat", bd=0,
+                  font=("Segoe UI", 9 if self._small_touch else 10, "bold"),
+                  cursor="hand2", padx=14 if self._small_touch else 18,
+                  pady=7 if self._small_touch else 8).pack(side="left")
+        tk.Button(footer, text=accept_text, command=self._accept,
+                  bg=ACCENT, fg="#FFFFFF", activebackground=ACCENT2,
+                  activeforeground="#FFFFFF", relief="flat", bd=0,
+                  font=("Segoe UI", 9 if self._small_touch else 10, "bold"), cursor="hand2",
+                  padx=18 if self._small_touch else 24, pady=7 if self._small_touch else 8).pack(side="right")
+
+        try:
+            self.grab_set()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _restore_parent_grab(self):
+        try:
+            if self._previous_grab is not None and self._previous_grab.winfo_exists():
+                self._previous_grab.grab_set()
+                self._previous_grab.focus_force()
+            elif self.parent is not None and self.parent.winfo_exists():
+                self.parent.focus_force()
+        except Exception:
+            pass
+
+    def _cancel(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        finally:
+            self._restore_parent_grab()
+
+    def _accept(self):
+        value = self._value.get()
+        try:
+            if self.on_accept:
+                self.on_accept(value)
+        finally:
+            self._cancel()
+
+    def _insert(self, txt: str):
+        try:
+            pos = self.entry.index(tk.INSERT)
+            self.entry.insert(pos, txt)
+            self.entry.icursor(pos + len(txt))
+        except Exception:
+            self._value.set(self._value.get() + txt)
+
+    def _backspace(self):
+        try:
+            pos = self.entry.index(tk.INSERT)
+            if pos > 0:
+                self.entry.delete(pos - 1, pos)
+        except Exception:
+            self._value.set(self._value.get()[:-1])
+
+    def _clear(self):
+        self._value.set("")
+
+    def _press(self, key: str):
+        if key == "⌫":
+            self._backspace()
+        elif key == "Limpiar":
+            self._clear()
+        elif key == "Espacio":
+            self._insert(" ")
+        elif key == "⇧":
+            self._shift = not self._shift
+            self._draw_keys()
+        else:
+            if len(key) == 1 and key.isalpha():
+                self._insert(key.upper() if self._shift else key.lower())
+            else:
+                self._insert(key)
+
+    def _button(self, parent, text, bg="#FFFFFF", fg=T1, wide=False):
+        if len(text) == 1 and text.isalpha():
+            label = text.upper() if self._shift else text.lower()
+        else:
+            label = text
+        b = tk.Button(parent, text=label, command=lambda k=text: self._press(k),
+                      bg=bg, fg=fg, activebackground="#DDF2EA",
+                      activeforeground=T1, relief="flat", bd=0,
+                      highlightthickness=1, highlightbackground="#D8DEE9",
+                      font=("Segoe UI", 9 if getattr(self, "_small_touch", False) else 10, "bold"), cursor="hand2")
+        b.pack(side="left", fill="both", expand=True, padx=2, pady=2,
+               ipadx=8 if wide else 2)
+        return b
+
+    def _draw_keys(self):
+        for child in self.keys_holder.winfo_children():
+            child.destroy()
+        layouts = [
+            list("1234567890"),
+            list("qwertyuiop"),
+            list("asdfghjklñ"),
+            ["⇧"] + list("zxcvbnm") + ["⌫"],
+            ["@", "_", "-", ".", "/", "Espacio", ".com", "Limpiar"],
+        ]
+        for row_keys in layouts:
+            row = tk.Frame(self.keys_holder, bg="#F8FAFC")
+            row.pack(fill="both", expand=True)
+            for key in row_keys:
+                if key == "⇧":
+                    self._button(row, key,
+                                 bg=ACCENT if self._shift else "#FFFFFF",
+                                 fg="#FFFFFF" if self._shift else T1)
+                elif key in ("⌫", "Limpiar"):
+                    self._button(row, key, bg="#FFECEC", fg=RED,
+                                 wide=(key == "Limpiar"))
+                elif key in ("Espacio", ".com"):
+                    self._button(row, key, bg="#EAF7F0", fg=ACCENT,
+                                 wide=True)
+                else:
+                    self._button(row, key)
+
+
+def _abrir_teclado(parent, title: str, var: tk.StringVar, show: str = "",
+                   accept_text: str = "Aceptar", on_accept=None):
+    """Abre teclado táctil y escribe el resultado en el StringVar indicado."""
+    def _ok(value):
+        var.set(value)
+        if on_accept:
+            on_accept(value)
+    TouchKeyboardDialog(parent, title=title, initial=var.get(),
+                        on_accept=_ok, show=show, accept_text=accept_text)
+
+
+def _attach_virtual_keyboard(entry: tk.Entry, parent, label: str,
+                             var: tk.StringVar, show: str = ""):
+    """Hace que un Entry abra teclado virtual al tocarlo."""
+    def _open(_event=None):
+        _abrir_teclado(parent, label, var, show=show)
+        return "break"
+    entry.bind("<Button-1>", _open)
+    entry.bind("<Double-Button-1>", _open)
+    return entry
+
+
+def _touch_notice(parent, title: str, message: str, kind: str = "info",
+                  auto_close_ms: int | None = 1400):
+    """Aviso no nativo para Raspberry; reemplaza messagebox en gestión."""
+    try:
+        dlg = tk.Toplevel(parent)
+        dlg.configure(bg="#0F172A")
+        dlg.resizable(False, False)
+        dlg.transient(parent)
+        try:
+            dlg.overrideredirect(True)
+        except Exception:
+            pass
+        color = {"ok": ACCENT, "success": ACCENT,
+                 "error": RED, "warning": "#E07A00"}.get(kind, BLUE)
+        sw = max(480, parent.winfo_screenwidth())
+        sh = max(480, parent.winfo_screenheight())
+        W_DLG = min(380, sw - 24)
+        H_DLG = min(160, sh - 40)
+        _center_on_parent(dlg, parent, W_DLG, H_DLG)
+        outer = tk.Frame(dlg, bg="#0F172A", padx=2, pady=2)
+        outer.pack(fill="both", expand=True)
+        box = tk.Frame(outer, bg="#FFFFFF")
+        box.pack(fill="both", expand=True)
+        tk.Frame(box, bg=color, height=5).pack(fill="x")
+        tk.Label(box, text=title, bg="#FFFFFF", fg=color,
+                 font=("Segoe UI", 12, "bold")).pack(pady=(14, 4))
+        tk.Label(box, text=message, bg="#FFFFFF", fg=T2,
+                 font=("Segoe UI", 10), justify="center",
+                 wraplength=W_DLG - 36).pack(padx=18, expand=True)
+        tk.Button(box, text="Aceptar", command=dlg.destroy,
+                  bg=color, fg="#FFFFFF", relief="flat", bd=0,
+                  font=("Segoe UI", 9, "bold"), cursor="hand2",
+                  padx=16, pady=5).pack(pady=(4, 12))
+        dlg.lift()
+        if auto_close_ms:
+            dlg.after(auto_close_ms, lambda: dlg.winfo_exists() and dlg.destroy())
+    except Exception:
+        print(f"[{title}] {message}")
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  CAPA DE DATOS
@@ -245,12 +539,19 @@ class GestionView(tk.Frame):
         tk.Label(srow, text=t("buscar_lbl"), bg="#FFFFFF", fg=T2,
                  font=("Arial", 8 if cp else 9)).pack(side="left")
         self._sq = tk.StringVar()
+        # La búsqueda en pantalla táctil se aplica al aceptar el teclado virtual.
+        # Si se usa teclado físico, el filtro sigue funcionando en vivo.
         self._sq.trace_add("write", lambda *_: self._filtrar())
-        tk.Entry(srow, textvariable=self._sq,
-                 width=20 if cp else 30,
-                 bg="#F5F0E8", fg=T1, insertbackground=T1,
-                 relief="flat", font=("Arial", 8 if cp else 9)
-                 ).pack(side="left", padx=5, ipady=3)
+        self._search_entry = tk.Entry(
+            srow, textvariable=self._sq,
+            width=28 if cp else 34,
+            bg="#F5F0E8", fg=T1, insertbackground=T1,
+            relief="flat", font=("Arial", 9 if cp else 10))
+        # En modo táctil/responsivo se expande para que sea fácil presionarla.
+        self._search_entry.pack(side="left", padx=5, ipady=5 if cp else 4,
+                                fill="x", expand=True)
+        self._search_entry.bind("<Button-1>", self._abrir_busqueda_tactil)
+        self._search_entry.bind("<Double-Button-1>", self._abrir_busqueda_tactil)
         self._lbl_n = tk.Label(srow, text="", bg="#FFFFFF", fg=T3,
                                 font=("Arial", 7 if cp else 8))
         self._lbl_n.pack(side="right")
@@ -289,6 +590,17 @@ class GestionView(tk.Frame):
         self._datos = _listar(self.rol_tipo)
         self._filtrar()
 
+    def _abrir_busqueda_tactil(self, _event=None):
+        """Abre una búsqueda grande con teclado virtual y filtra al aceptar."""
+        _abrir_teclado(
+            self.dash.root,
+            "Buscar usuarios",
+            self._sq,
+            accept_text="Buscar",
+            on_accept=lambda _value: self._filtrar(),
+        )
+        return "break"
+
     def _filtrar(self):
         q = self._sq.get().strip().lower()
         filt = ([d for d in self._datos
@@ -319,8 +631,8 @@ class GestionView(tk.Frame):
     def _selected(self) -> dict | None:
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo(t("seleccion"), t("selecciona_reg"),
-                                parent=self.dash.root)
+            _touch_notice(self.dash.root, t("seleccion"), t("selecciona_reg"),
+                          kind="warning")
             return None
         return next(
             (d for d in self._datos if d["id"] == int(sel[0])), None)
@@ -346,8 +658,8 @@ class GestionView(tk.Frame):
         if not d:
             return
         if d["id"] == self.dash.usuario.get("id"):
-            messagebox.showerror(t("error"), t("no_autoeliminar"),
-                                 parent=self.dash.root)
+            _touch_notice(self.dash.root, t("error"), t("no_autoeliminar"),
+                          kind="error")
             return
         DeleteDialog(
             self.dash.root,
@@ -394,11 +706,19 @@ class PersonFormDialog(tk.Toplevel):
 
     def _finalize(self, parent):
         self.update_idletasks()
-        W_DLG = 480
-        H_DLG = max(self.winfo_reqheight(), 300)
-        px = parent.winfo_rootx() + parent.winfo_width()  // 2 - W_DLG // 2
-        py = parent.winfo_rooty() + parent.winfo_height() // 2 - H_DLG // 2
-        self.geometry(f"{W_DLG}x{H_DLG}+{px}+{py}")
+        if _touch_mode_from_dashboard(self.dashboard):
+            try:
+                self.overrideredirect(True)
+            except Exception:
+                pass
+        sw = max(500, parent.winfo_screenwidth())
+        sh = max(500, parent.winfo_screenheight())
+        W_DLG = min(520, sw - 16 if sw <= 640 else sw - 24)
+        # En Raspbian/Raspberry Pi OS no dependemos del gestor de ventanas:
+        # si la pantalla es baja, el diálogo queda dentro del área visible.
+        margen_h = 34 if sh <= 650 else 24
+        H_DLG = min(max(self.winfo_reqheight(), 340), sh - margen_h)
+        _center_on_parent(self, parent, W_DLG, H_DLG)
         self.grab_set()
         self.lift()
         self.focus_force()
@@ -414,6 +734,8 @@ class PersonFormDialog(tk.Toplevel):
         self._v_cuenta  = tk.StringVar()
         self._v_correo  = tk.StringVar()
         self._v_pwd     = tk.StringVar()
+        self._v_grado   = tk.StringVar()
+        self._v_grupo   = tk.StringVar()
         self._v_err     = tk.StringVar()
 
         form = tk.Frame(self, bg=CARD)
@@ -436,6 +758,16 @@ class PersonFormDialog(tk.Toplevel):
             self._lf(form, t("correo_campo"), self._v_correo)
             pwd_lbl = t("pwd_nuevo") if not self._edit else t("pwd_editar")
             self._lf(form, pwd_lbl, self._v_pwd, show="*")
+        elif self.rol_tipo == "estudiante":
+            # En edición de alumnos también se permiten grado y grupo.
+            row_gg = tk.Frame(form, bg=CARD)
+            row_gg.pack(fill="x", pady=3)
+            g1 = tk.Frame(row_gg, bg=CARD)
+            g1.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            g2 = tk.Frame(row_gg, bg=CARD)
+            g2.pack(side="left", fill="x", expand=True)
+            self._lf(g1, t("grado_campo"), self._v_grado)
+            self._lf(g2, t("grupo_campo"), self._v_grupo)
 
         # Aviso de captura facial solo al crear
         if not self._edit:
@@ -474,6 +806,7 @@ class PersonFormDialog(tk.Toplevel):
             kw["show"] = show
         e = tk.Entry(parent, **kw)
         e.pack(fill="x", ipady=5, pady=(0, 4))
+        _attach_virtual_keyboard(e, self, label, var, show=show)
         return e
 
     def _prefill(self):
@@ -483,6 +816,8 @@ class PersonFormDialog(tk.Toplevel):
         self._v_am.set(d.get("am", ""))
         self._v_cuenta.set(d.get("cuenta", ""))
         self._v_correo.set(d.get("correo", ""))
+        self._v_grado.set(str(d.get("grado") or ""))
+        self._v_grupo.set(str(d.get("grupo") or ""))
 
     def _save(self):
         self._v_err.set("")
@@ -492,6 +827,8 @@ class PersonFormDialog(tk.Toplevel):
         cuenta = self._v_cuenta.get().strip()
         correo = self._v_correo.get().strip()
         pwd    = self._v_pwd.get()
+        grado  = self._v_grado.get().strip()
+        grupo  = self._v_grupo.get().strip().upper()
 
         if not nombre or not ap:
             self._v_err.set(t("err_nombre")); return
@@ -501,6 +838,11 @@ class PersonFormDialog(tk.Toplevel):
             self._v_err.set(t("err_correo")); return
         if self.rol_tipo in ("maestro", "admin") and not self._edit and not pwd:
             self._v_err.set(t("err_pwd")); return
+        if self.rol_tipo == "estudiante":
+            if not grado or not grado.isdigit():
+                self._v_err.set(t("err_grado")); return
+            if not grupo or len(grupo) != 1 or not grupo.isalpha():
+                self._v_err.set(t("err_grupo")); return
 
         datos = {
             "id":         self.datos_ex["id"] if self._edit else None,
@@ -512,16 +854,20 @@ class PersonFormDialog(tk.Toplevel):
             "contrasena": pwd or None,
             "rol":        self.rol_tipo,
         }
+        if self.rol_tipo == "estudiante":
+            datos["grado"] = int(grado)
+            datos["grupo"] = grupo
         editor = self.dashboard.usuario.get("id", 0)
         ok, msg = (_editar(datos, editor) if self._edit
                    else _crear(datos, editor))
 
         if ok:
             if self._edit:
-                messagebox.showinfo(t("exito"), msg, parent=self)
                 if self.on_save:
                     self.on_save()
                 self.destroy()
+                _touch_notice(self.dashboard.root, t("exito"), msg,
+                              kind="success")
             else:
                 # ── Captura biométrica OBLIGATORIA ──────────────────
                 self.destroy()
@@ -546,10 +892,9 @@ class PersonFormDialog(tk.Toplevel):
             uid = None
 
         if uid is None:
-            messagebox.showerror(
-                t("error"),
-                "No se encontró el registro recién creado.",
-                parent=self.dashboard.root)
+            _touch_notice(self.dashboard.root, t("error"),
+                          "No se encontró el registro recién creado.",
+                          kind="error")
             return
 
         from registro_facial_dash import CapturaBiometricaDialog
@@ -590,11 +935,18 @@ class EstudianteFormDialog(tk.Toplevel):
 
     def _finalize(self, parent):
         self.update_idletasks()
-        W_DLG = 480
-        H_DLG = max(self.winfo_reqheight(), 420)
-        px = parent.winfo_rootx() + parent.winfo_width()  // 2 - W_DLG // 2
-        py = parent.winfo_rooty() + parent.winfo_height() // 2 - H_DLG // 2
-        self.geometry(f"{W_DLG}x{H_DLG}+{px}+{py}")
+        if _touch_mode_from_dashboard(self.dashboard):
+            try:
+                self.overrideredirect(True)
+            except Exception:
+                pass
+        sw = max(500, parent.winfo_screenwidth())
+        sh = max(500, parent.winfo_screenheight())
+        W_DLG = min(520, sw - 16 if sw <= 640 else sw - 24)
+        # En horizontal 1024x600 dejamos más margen para que no choque con la barra superior/inferior.
+        margen_h = 34 if sh <= 650 else 24
+        H_DLG = min(max(self.winfo_reqheight(), 420), sh - margen_h)
+        _center_on_parent(self, parent, W_DLG, H_DLG)
         self.grab_set()
         self.lift()
         self.focus_force()
@@ -674,6 +1026,7 @@ class EstudianteFormDialog(tk.Toplevel):
                      insertbackground=T1, relief="flat",
                      font=("Arial", 10))
         e.pack(fill="x", ipady=5, pady=(0, 4))
+        _attach_virtual_keyboard(e, self, label, var)
         return e
 
     def _continuar(self):
@@ -724,10 +1077,9 @@ class EstudianteFormDialog(tk.Toplevel):
             uid = None
 
         if uid is None:
-            messagebox.showerror(
-                t("error"),
-                "No se encontró el registro recién creado.",
-                parent=self.dashboard.root)
+            _touch_notice(self.dashboard.root, t("error"),
+                          "No se encontró el registro recién creado.",
+                          kind="error")
             return
 
         self.destroy()
@@ -754,6 +1106,7 @@ class EstudianteFormDialog(tk.Toplevel):
 class DeleteDialog(tk.Toplevel):
     def __init__(self, parent, nombre: str, uid: int, on_confirm=None):
         super().__init__(parent)
+        self.parent     = parent
         self.uid        = uid
         self.on_confirm = on_confirm
         self.title(t("eliminar_titulo"))
@@ -781,10 +1134,12 @@ class DeleteDialog(tk.Toplevel):
                   font=("Arial", 9, "bold"),
                   padx=16, pady=6, cursor="hand2").pack(side="left", padx=6)
 
+        try:
+            self.overrideredirect(True)
+        except Exception:
+            pass
         W_DLG, H_DLG = 380, 220
-        px = parent.winfo_rootx() + parent.winfo_width()  // 2 - W_DLG // 2
-        py = parent.winfo_rooty() + parent.winfo_height() // 2 - H_DLG // 2
-        self.geometry(f"{W_DLG}x{H_DLG}+{px}+{py}")
+        _center_on_parent(self, parent, W_DLG, H_DLG)
         self.grab_set()
         self.lift()
         self.focus_force()
@@ -792,9 +1147,9 @@ class DeleteDialog(tk.Toplevel):
     def _confirm(self):
         ok, msg = _eliminar(self.uid)
         if ok:
-            messagebox.showinfo(t("exito"), msg, parent=self)
             if self.on_confirm:
                 self.on_confirm()
             self.destroy()
+            _touch_notice(self.parent, t("exito"), msg, kind="success")
         else:
-            messagebox.showerror(t("error"), msg, parent=self)
+            _touch_notice(self, t("error"), msg, kind="error")
