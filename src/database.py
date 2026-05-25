@@ -459,7 +459,7 @@ def reconocer_persona(
     mejor["similitud_pct"] = round(sim_raw * 100, 1)
     mejor["acceso"]        = mejor["distancia"] <= umbral
 
-    print(f"[RECONO] → {mejor['nombre']} acceso={'SI' if mejor['acceso'] else 'NO'}")
+    print(f"[RECONO] -> {mejor['nombre']} acceso={'SI' if mejor['acceso'] else 'NO'}")
     return mejor
 
 
@@ -524,8 +524,20 @@ def registrar_acceso(usuario_id: int, tipo_evento: str,
         """, (usuario_id,))
         row = cursor.fetchone()
         if not row:
+            conn.close()
             return False
         nombre, ap_pat, ap_mat, cuenta, rol = row
+ 
+        if tipo_evento == "entrada":
+            cursor.execute("""
+                SELECT COUNT(*) FROM registro_acceso
+                WHERE usuario_id = ? AND tipo_evento = 'entrada'
+            """, (usuario_id,))
+            visitas_previas = cursor.fetchone()[0]
+            visita_num      = visitas_previas + 1
+            detalle_auto    = f"Visita #{visita_num}"
+            detalle = f"{detalle_auto} | {detalle}" if detalle else detalle_auto
+ 
         cursor.execute("""
             INSERT INTO registro_acceso
                 (usuario_id, nombre, apellido_paterno, apellido_materno,
@@ -534,12 +546,36 @@ def registrar_acceso(usuario_id: int, tipo_evento: str,
         """, (usuario_id, nombre, ap_pat, ap_mat,
               cuenta, rol, tipo_evento, detalle))
         conn.commit()
+        print(f"[DB] Acceso registrado: {nombre} — {tipo_evento} ({detalle})")
         return True
-    except sqlite3.Error:
+ 
+    except sqlite3.Error as e:
+        print(f"[DB] Error en registrar_acceso: {e}")
         return False
     finally:
         conn.close()
 
+def registrar_salida_anonima(detalle: str = "Botón de salida") -> bool:
+    """
+    Registra una salida sin usuario_id conocido (apertura por botón físico).
+    Se usa para mantener el contador personas_dentro correcto.
+    """
+    try:
+        conn = conectar()
+        conn.execute("""
+            INSERT INTO registro_acceso
+                (usuario_id, nombre, apellido_paterno, apellido_materno,
+                 numero_cuenta, rol, tipo_evento, detalle)
+            VALUES (NULL, 'Salida', 'Manual', '', NULL,
+                    'estudiante', 'salida', ?)
+        """, (detalle,))
+        conn.commit()
+        conn.close()
+        print(f"[DB] Salida anónima registrada: {detalle}")
+        return True
+    except sqlite3.Error as e:
+        print(f"[DB] Error en registrar_salida_anonima: {e}")
+        return False
 
 # =============================================================================
 #  CONSULTAS AUXILIARES
