@@ -368,6 +368,7 @@ class App(tk.Tk):
 
         self._analisis = {"vector": None, "coords": None,
                           "frame_id": -1, "tipo": None,
+                          "ts": 0.0,
                           "ocluido": False, "razon_oclusion": ""}
         self._analisis_lock  = threading.Lock()
         self._modo_deteccion = "auto"
@@ -391,7 +392,27 @@ class App(tk.Tk):
         self._ov_color = None
         self._ov_texto = ""
         self._modo_acceso = False
-        self._t_acceso_ok = 0 
+        self._t_acceso_ok = 0
+
+        # ── Estado de sesión en ACCESO ───────────────────────────────
+        # Evita que la misma persona active servo/buzzer/LEDs cada vez
+        # que el reconocimiento se repite mientras sigue frente a cámara.
+        self._cooldown_uid             = None
+        self._cooldown_started         = 0.0
+        self._no_face_frames           = 0
+        self._COOLDOWN_LEAVE_FRAMES    = 25   # ~1 s sin rostro visible
+        self._COOLDOWN_LEAVE_SECONDS   = 1.0
+        self._ultimo_uid_ok            = None
+        self._face_missing_since       = None
+        self._face_absent_confirmed    = True
+        self._presence_epoch           = 0
+        self._verification_token       = 0
+        self._access_ready_at          = 0.0
+        # Flag dedicado: _confirmar_salida_rostro lo activa para que
+        # _monitor_cara sepa con certeza que debe resetear cara_presente,
+        # incluso si el rostro regresa antes de que _monitor_cara itere.
+        self._debe_resetear_cara_presente = False
+
         self._ov_lock  = threading.Lock()
 
         # Pantalla inicial automática: al abrir el programa entra directo a ACCESO.
@@ -456,6 +477,7 @@ class App(tk.Tk):
         self._stop_cam()
         self._usuario_login = None
         self._modo_acceso   = False
+        self._reset_access_session_state()
         self._build_main()
 
     # ── Callbacks del sensor ultrasónico ─────────────────────────────────────
@@ -478,6 +500,8 @@ class App(tk.Tk):
         try:
             self.cam_running = True
             self._start_cam()
+            self._reset_access_session_state()
+            self._access_ready_at = time.time() + 2.0
             self._resetear_pantalla_acceso()
             threading.Thread(target=self._loop_camara,
                              args=(CAM_W, CAM_H_V), daemon=True).start()
@@ -496,6 +520,7 @@ class App(tk.Tk):
         if not self.cam_running:
             return
         self._stop_cam()
+        self._reset_access_session_state()
         self.after(300, lambda: self.cam_label.configure(image=""))
         servo.espera()
         try:
@@ -516,6 +541,70 @@ class App(tk.Tk):
         with self._ov_lock:
             self._ov_color = color
             self._ov_texto = texto
+
+    def _reset_access_session_state(self):
+        """
+        Reinicia la sesión de presencia del acceso.
+        """
+        self._cooldown_uid = None
+        self._cooldown_started = 0.0
+        self._no_face_frames = 0
+        self._face_missing_since = None
+        self._face_absent_confirmed = True
+        self._presence_epoch += 1
+        self._verification_token += 1
+        self.verificando = False
+
+    def _confirmar_salida_rostro(self):
+        """
+        Rearma el acceso cuando el rostro desaparecio de camara el tiempo
+        suficiente. Tambien cancela verificaciones que quedaron corriendo.
+        """
+        if self._face_absent_confirmed:
+            return
+
+        if self._cooldown_uid is not None:
+            print(f"[COOLDOWN] Sujeto uid={self._cooldown_uid} salio; acceso rearmado")
+
+        self._cooldown_uid = None
+        self._cooldown_started = 0.0
+        self._no_face_frames = 0
+        self._face_missing_since = None
+        self._face_absent_confirmed = True
+        self._presence_epoch += 1
+        self._verification_token += 1
+        self.verificando = False
+        # Avisar a _monitor_cara que DEBE resetear cara_presente.
+        # Esto evita la condición de carrera donde el rostro regresa tan
+        # rápido que _face_absent_confirmed ya pasó a False antes de que
+        # _monitor_cara pudiera leerlo como True.
+        self._debe_resetear_cara_presente = True
+
+        try:
+            self.after(0, self._resetear_pantalla_acceso)
+        except Exception:
+            pass
+
+    def _actualizar_presencia_acceso(self, coords):
+        """
+        Se ejecuta desde el hilo de análisis. Rearma el acceso cuando
+        el rostro desaparece el tiempo suficiente.
+        """
+        if not getattr(self, "_modo_acceso", False):
+            return
+
+        now = time.time()
+        if coords is None:
+            self._no_face_frames += 1
+            if self._face_missing_since is None:
+                self._face_missing_since = now
+
+            if (now - self._face_missing_since) >= self._COOLDOWN_LEAVE_SECONDS:
+                self._confirmar_salida_rostro()
+        else:
+            self._face_missing_since = None
+            self._face_absent_confirmed = False
+            self._no_face_frames = 0
 
     def _start_cam(self):
         if USAR_PICAM:
@@ -590,15 +679,17 @@ class App(tk.Tk):
                 # aunque la boca estuviera cubierta.
                 if ocluido:
                     msg = _msgs_oc.get(razon_oclusion, "Descubre tu rostro")
-                    vis = dibujar_overlay(vis, coords, (255, 130, 0),
-                                          msg, tipo=tipo)
+                    if self._modo_acceso:
+                        vis = dibujar_overlay(vis, coords, (255, 130, 0),
+                                              msg, tipo=None)
+                    else:
+                        vis = dibujar_overlay(vis, coords, (255, 130, 0),
+                                              msg, tipo=tipo)
                 elif self._modo_acceso:
                     if ov_color:
                         c = ov_color
-                    elif vector is not None and tipo == TIPO_FRONTAL:
-                        c = (0, 212, 255)
                     elif vector is not None:
-                        c = (255, 184, 48)
+                        c = (0, 212, 255)
                     else:
                         c = (80, 80, 80)
                     t = ov_texto if ov_texto else ""
@@ -630,6 +721,11 @@ class App(tk.Tk):
         _FRAMES_CONFIRM = 4   # frames seguidos necesarios para confirmar
         _oc_contador    = 0   # frames consecutivos con oclusion detectada
         _oc_razon_buf   = ""  # razon del ultimo frame con oclusion
+        # Warm-up: no correr oclusión durante los primeros segundos tras
+        # que la cara aparece por primera vez — evita el falso "Descubre tu
+        # rostro" mientras MediaPipe/ONNX calientan sus modelos.
+        _t_cara_inicio  = None   # timestamp cuando la cara apareció por 1ª vez
+        _WARM_UP_S      = 2.0    # segundos de gracia sin detección de oclusión
 
         while self.cam_running:
             try:
@@ -647,8 +743,17 @@ class App(tk.Tk):
                     modo=self._modo_deteccion,
                     tipo_esperado=self._tipo_esperado)
 
-                ocluido_raw, razon_raw = False, ""
+                # Rastrear cuándo apareció la cara por primera vez en esta sesión
                 if coords is not None:
+                    if _t_cara_inicio is None:
+                        _t_cara_inicio = time.time()
+                else:
+                    _t_cara_inicio = None   # resetear cuando desaparece la cara
+
+                ocluido_raw, razon_raw = False, ""
+                _warm_up_ok = (_t_cara_inicio is not None and
+                               time.time() - _t_cara_inicio >= _WARM_UP_S)
+                if coords is not None and _warm_up_ok:
                     try:
                         ocluido_raw, razon_raw = detectar_oclusion(frame, coords, tipo=tipo)
                     except Exception:
@@ -672,11 +777,14 @@ class App(tk.Tk):
                 if ocluido:
                     vector = None
 
+                self._actualizar_presencia_acceso(coords)
+
                 with self._analisis_lock:
                     self._analisis["vector"]         = vector
                     self._analisis["coords"]         = coords
                     self._analisis["frame_id"]       = frame_id
                     self._analisis["tipo"]           = tipo
+                    self._analisis["ts"]             = time.time()
                     self._analisis["ocluido"]        = ocluido
                     self._analisis["razon_oclusion"] = razon_oclusion
 
@@ -781,21 +889,21 @@ class App(tk.Tk):
                        font=("Segoe UI", 9), fill="#AABBCC", anchor="e")
 
         # ── Zona central: título selección ────────────────────────────────────
-        CONTENT_Y = SUB_Y + SUB_H + 28
+        CONTENT_Y = SUB_Y + SUB_H + 8
         cv.create_text(W // 2, CONTENT_Y,
-                       text="Selecciona una opción",
-                       font=("Segoe UI", 17, "bold"), fill=TEXT)
+                       text="",
+                       font=("Segoe UI", 17, "bold"), fill=BG)
         cv.create_text(W // 2, CONTENT_Y + 24,
-                       text="Sistema de identificación biométrica — Universidad de Colima",
-                       font=("Segoe UI", 8), fill=SUBTEXT)
+                       text="",
+                       font=("Segoe UI", 8), fill=BG)
         # Separador
         cv.create_line(20, CONTENT_Y + 40, W - 20, CONTENT_Y + 40,
-                       fill=BORDER, width=1)
+                       fill=BG, width=1)
 
         # ── Tarjetas horizontales ─────────────────────────────────────────────
         BW, BH = W - 40, 148
         BX = 20
-        BY1 = CONTENT_Y + 58
+        BY1 = CONTENT_Y + 20
         BY2 = BY1 + BH + 22
         BY3 = BY2 + BH + 22
 
@@ -2673,6 +2781,8 @@ class App(tk.Tk):
         self.geometry(f"{W}x{WIN_H}+0+0")
         self.verificando = False
         self._modo_acceso = True
+        self._reset_access_session_state()
+        self._access_ready_at = time.time() + 2.2
         self._set_overlay(None, "")
 
         FONT   = "Segoe UI"
@@ -2707,7 +2817,7 @@ class App(tk.Tk):
             self, textvariable=self.hdr_status_var,
             font=(FONT, 9, "bold"), fg="#AAFFAA", bg=ACCENT,
             anchor="center", justify="center")
-        self.hdr_status_lbl.place(x=90, y=HDR_H // 2 - 10, width=W - 190, height=20)
+        # Estado interno: no se coloca en pantalla para no duplicar la indicacion.
 
         self.hdr_nombre_var = tk.StringVar(value="")  # se mantiene por compatibilidad
 
@@ -2720,7 +2830,7 @@ class App(tk.Tk):
                                  bg=BG, highlightthickness=0)
         self.pill_cv.place(x=W // 2 - PILL_W // 2, y=PILL_Y)
 
-        self.posicion_var = tk.StringVar(value="Esperando...")
+        self.posicion_var = tk.StringVar(value="Cargando camara...")
 
         def _draw_pill(color):
             r = PILL_H // 2
@@ -2840,7 +2950,7 @@ class App(tk.Tk):
         threading.Thread(target=self._loop_analisis, daemon=True).start()
         threading.Thread(target=self._monitor_cara,   daemon=True).start()
         threading.Thread(target=self._guia_posicion,  daemon=True).start()
-        self.after(1800, self._lanzar_verificacion)
+        self.after(2600, self._lanzar_verificacion)
 
     def _set_sim_bar(self, pct, color):
         bar_total = W - 28
@@ -2880,26 +2990,79 @@ class App(tk.Tk):
             pass
 
     def _lanzar_verificacion(self):
-        if not self.cam_running: return
+        if not self.cam_running:
+            return
         # ── Defensa: solo verificar si REALMENTE estamos en modo acceso ──
         # Un after() programado en acceso podia dispararse despues de que
         # el usuario navego a registro/otro modo. Bloqueamos eso aqui.
         if not getattr(self, "_modo_acceso", False):
             return
+        now = time.time()
+        if now < getattr(self, "_access_ready_at", 0.0):
+            self.after(300, self._lanzar_verificacion)
+            return
         if self.verificando:
-            self.after(300, self._lanzar_verificacion); return
+            self.after(300, self._lanzar_verificacion)
+            return
+
+        mismo_sujeto_presente = (
+            self._cooldown_uid is not None and
+            not self._face_absent_confirmed and
+            self._face_missing_since is None
+        )
+        if mismo_sujeto_presente:
+            self.after(700, self._lanzar_verificacion)
+            return
+
+        with self._analisis_lock:
+            v = self._analisis.get("vector")
+            coords = self._analisis.get("coords")
+            tipo = self._analisis.get("tipo")
+            ocluido = self._analisis.get("ocluido", False)
+            ts = self._analisis.get("ts", 0.0)
+
+        analisis_reciente = ts > 0 and (now - ts) <= 1.2
+        hay_base_para_verificar = (
+            analisis_reciente and
+            (ocluido or (coords is not None and v is not None and tipo == TIPO_FRONTAL))
+        )
+        if not hay_base_para_verificar:
+            self._set_overlay(None, "")
+            self.after(0, lambda: self._set_sim_bar(0, BORDER))
+            self.after(0, lambda: self.candidato_var.set(""))
+            self.after(0, lambda: self.detalle_var.set(""))
+            self.after(450, self._lanzar_verificacion)
+            return
+
+        epoch = self._presence_epoch
+        self._verification_token += 1
+        token = self._verification_token
         self.verificando = True
+
+        # Si el mismo sujeto sigue frente a la cámara, no ensuciamos la UI con
+        # "Analizando..." ni limpiamos el nombre. Se escanea internamente.
         self.after(0, lambda: self.resultado_var.set("Escaneando..."))
         self.after(0, lambda: self.resultado_label.config(fg=ACCENT))
         self.after(0, lambda: self.candidato_var.set(""))
         self.after(0, lambda: self.detalle_var.set(""))
         self._set_overlay((255, 184, 48), "Analizando...")
-        threading.Thread(target=self._verificar, daemon=True).start()
 
-    def _verificar(self):
+        threading.Thread(
+            target=self._verificar,
+            kwargs={"epoch": epoch, "token": token},
+            daemon=True
+        ).start()
+
+    def _verificar(self, epoch=None, token=None):
+        if epoch is None:
+            epoch = self._presence_epoch
+        if token is None:
+            token = self._verification_token
         vectores = []; intentos = 0; ultimo = -1; hay_cara = False
         hay_oclusion = False; razon_oclusion = ""
         while len(vectores) < 8 and intentos < 120 and self.cam_running:
+            if epoch != self._presence_epoch or token != self._verification_token:
+                return
             intentos += 1
             with self._analisis_lock:
                 frame_id = self._analisis["frame_id"]
@@ -2920,8 +3083,12 @@ class App(tk.Tk):
                     vectores.append(v)
             time.sleep(0.04)
 
+        if epoch != self._presence_epoch or token != self._verification_token:
+            return
+
         self._set_overlay(None, "")
-        self.verificando = False
+        if token == self._verification_token:
+            self.verificando = False
         if not self.cam_running: return
 
         if not vectores:
@@ -2930,7 +3097,7 @@ class App(tk.Tk):
                 self.after(0, lambda: self.posicion_var.set("Descubre tu rostro."))
                 self.after(0, lambda: self._draw_pill(WARNING))
                 self.after(0, lambda: self._set_sim_bar(0, BORDER))
-                self._set_overlay((255, 130, 0), "Descubre tu rostro")
+                self._set_overlay(None, "")
                 self.after(2500, self._lanzar_verificacion); return
 
             self.after(0, lambda: self.resultado_var.set(
@@ -2942,8 +3109,13 @@ class App(tk.Tk):
             self.after(0, lambda: self._set_sim_bar(0, BORDER))
             self.after(3000, self._lanzar_verificacion); return
 
-        v_final   = np.mean(vectores, axis=0).astype(np.float32)
+        v_final = np.mean(vectores, axis=0).astype(np.float32)
+        if epoch != self._presence_epoch or token != self._verification_token:
+            return
+
         resultado = reconocer_persona(v_final, angulo_nuevo="frontal")
+        if epoch != self._presence_epoch or token != self._verification_token:
+            return
 
         if resultado is None:
             from database import cargar_vectores_por_angulo as _cvpa
@@ -2973,12 +3145,50 @@ class App(tk.Tk):
             f"Angulo match: {r['angulo']}"))
 
         if resultado["acceso"] and sim >= 80:
+            uid_match = resultado.get("usuario_id")
+
+            # Mismo UID ya aceptado y no ha salido: escaneo silencioso.
+            # No abre puerta, no prende buzzer/LEDs y no registra acceso.
+            if uid_match is not None and self._cooldown_uid == uid_match:
+                self.after(0, lambda r=resultado: self._resultado_ok_silencioso(r))
+                return
+
+            self._cooldown_uid = uid_match
+            self._cooldown_started = time.time()
             self.after(0, lambda r=resultado: self._resultado_ok(r))
         else:
             self.after(0, lambda r=resultado: self._resultado_negado(r))
 
+    def _resultado_ok_silencioso(self, r):
+        """
+        Mismo usuario ya aceptado y todavía presente.
+        Mantiene el nombre en pantalla, pero NO acciona servo/buzzer/LEDs.
+        """
+        try:
+            self._set_overlay((0, 180, 110), r.get("nombre", ""))
+            self.resultado_var.set("ACCESO PERMITIDO")
+            self.resultado_label.config(fg=SUCCESS)
+            self.hdr_status_var.set("PERMITIDO ✓")
+            self.hdr_status_lbl.config(fg="#AAFFAA")
+            self.hdr_nombre_var.set("")
+            self._draw_pill(SUCCESS)
+            self.posicion_var.set("✓  Listo · mira a la camara")
+            self.candidato_var.set(r.get("nombre", ""))
+            rol_txt = r.get("rol", "").capitalize()
+            self.detalle_var.set(
+                f"Cuenta: {r.get('numero_cuenta','---')} · {rol_txt}")
+            self.detalle_lbl.config(fg="#AAFFAA")
+        except Exception:
+            pass
+        self.after(4000, self._lanzar_verificacion)
+
     def _resultado_ok(self, r):
         self._t_acceso_ok = time.time()
+        uid = r.get("usuario_id")
+        self._ultimo_uid_ok = uid
+        if uid is not None:
+            self._cooldown_uid = uid
+            self._cooldown_started = time.time()
         self._set_overlay((0, 255, 136), r["nombre"])
         self.resultado_var.set("ACCESO PERMITIDO")
         self.resultado_label.config(fg=SUCCESS)
@@ -3031,6 +3241,14 @@ class App(tk.Tk):
 
         while self.cam_running:
             time.sleep(INTERVALO)
+            if time.time() < getattr(self, "_access_ready_at", 0.0):
+                try:
+                    self.after(0, lambda: (
+                        self.posicion_var.set("Cargando camara..."),
+                        self._draw_pill(ACCENT2)))
+                except Exception:
+                    pass
+                continue
             if self.verificando:
                 ultimo_msg = ""; t_sin_cara = None; continue
             with self._analisis_lock:
@@ -3065,39 +3283,37 @@ class App(tk.Tk):
         Re-escanea SOLO cuando la cara desaparece y vuelve a aparecer.
         Movimientos normales mientras la cara sigue detectada no disparan nada.
         """
-        TIMEOUT_SIN_CARA  = 1.5
-        FRAMES_REAPARECE  = 5
-        COOLDOWN          = 4.0
+        FRAMES_REAPARECE = 3
 
-        cara_presente      = False
+        cara_presente = False
         contador_reaparece = 0
-        t_ultimo_scan      = 0.0
 
         while self.cam_running:
+            # ── Comprobar flag de reset (puesto por _confirmar_salida_rostro) ──
+            # Esto resuelve la condición de carrera: si el rostro regresó tan
+            # rápido que _face_absent_confirmed ya pasó a False antes de que
+            # este hilo iterara, el flag garantiza el reset de cara_presente.
+            if getattr(self, "_debe_resetear_cara_presente", False):
+                self._debe_resetear_cara_presente = False
+                cara_presente = False
+                contador_reaparece = 0
+
             with self._analisis_lock:
-                v = self._analisis["vector"]
+                coords = self._analisis["coords"]
 
-            cooldown_ok = (time.time() - t_ultimo_scan) >= COOLDOWN
-
-            if v is not None:
-                self._ultima_cara_t = time.time()
-
+            if coords is not None:
                 if not cara_presente:
                     contador_reaparece += 1
                     if contador_reaparece >= FRAMES_REAPARECE:
-                        cara_presente      = True
+                        cara_presente = True
                         contador_reaparece = 0
-                        if not self.verificando and cooldown_ok:
-                            t_ultimo_scan = time.time()
+                        if self._cooldown_uid is None and not self.verificando:
                             self.after(0, self._resetear_pantalla_acceso)
                             self.after(150, self._lanzar_verificacion)
             else:
                 contador_reaparece = 0
-                sin_cara = time.time() - self._ultima_cara_t
-
-                if sin_cara >= TIMEOUT_SIN_CARA:
-                    if cara_presente:
-                        cara_presente = False
+                if self._face_absent_confirmed:
+                    cara_presente = False
                     if not self.verificando:
                         self.after(0, self._resetear_pantalla_acceso)
 
@@ -3114,7 +3330,10 @@ class App(tk.Tk):
             self.hdr_status_var.set("")
             self.hdr_nombre_var.set("")
             self._draw_pill(ACCENT2)
-            self.posicion_var.set("Esperando...")
+            if time.time() < getattr(self, "_access_ready_at", 0.0):
+                self.posicion_var.set("Cargando camara...")
+            else:
+                self.posicion_var.set("Esperando...")
             self.detalle_lbl.config(fg="#AABBCC")
         except:
             pass
